@@ -1,0 +1,9 @@
+.scrollbar() {
+  & {
+    transform: translateZ(0); /* 触发 GPU 加速 */
+    perspective: 1000px; /* 启用 3D 渲染管线 */
+    backface-visibility: hidden; /* 修复边缘闪烁 */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(var(--v-theme-perfect-scrollbar-thumb), 1) transparent;
+  }
+}
