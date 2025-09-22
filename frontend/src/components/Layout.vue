@@ -1,119 +1,74 @@
 <template>
-  <n-config-provider :theme="null">
-    <n-layout has-sider class="layout-container">
-      <!-- 侧边菜单 (大屏幕) -->
-      <n-layout-sider v-if="isLargeScreen" :width="240" :collapsed-width="0" collapse-mode="width" bordered
-        show-trigger="bar" class="layout-sider">
-        <div class="sider-content">
-          <!-- 标题 -->
-          <div class="sider-header">
-            <n-space align="center">
-              <img src="/logo.svg" alt="Logo" class="logo" />
-              <n-h3 style="margin: 0;">Watch Docker</n-h3>
-            </n-space>
+  <n-layout has-sider class="layout-container">
+    <!-- 侧边菜单 (大屏幕) -->
+    <n-layout-sider v-if="isLargeScreen" :width="240" :collapsed-width="0" collapse-mode="width" bordered
+      show-trigger="bar" class="layout-sider">
+      <SiderContent />
+    </n-layout-sider>
+
+    <!-- 主内容区域 -->
+    <n-layout class="main-layout">
+      <!-- 顶部栏 (小屏幕) -->
+      <n-layout-header bordered class="mobile-header">
+        <n-space align="center" justify="space-between" style="height: 100%;">
+          <div class="flex items-center justify-center gap-1">
+            <n-button text @click="appStore.toggleDrawer" v-if="isSmallScreen">
+              <template #icon>
+                <n-icon size="20">
+                  <MenuOutline />
+                </n-icon>
+              </template>
+            </n-button>
+            <n-h3 style="margin: 0;">{{ currentPageTitle }}</n-h3>
           </div>
 
-          <!-- 菜单 -->
-          <n-menu :value="activeKey" :options="menuOptions" @update:value="handleMenuSelect" class="sider-menu" />
+          <!-- 切换主题 -->
+          <n-button quaternary circle size="small" @click="onToggleTheme" class="flex items-center justify-center">
+            <template #icon>
+              <n-icon :component="isDark ? MoonIcon : SunIcon" />
+            </template>
+          </n-button>
+        </n-space>
+      </n-layout-header>
 
-          <!-- 底部状态 -->
-          <div class="sider-footer">
-            <n-space vertical>
-              <n-space align="center" justify="space-between">
-                <n-text depth="3" style="font-size: 12px;">
-                  v{{ version }}
-                </n-text>
-                <n-tag :type="healthStatus === 'healthy' ? 'success' : 'error'" size="small">
-                  {{ healthText }}
-                </n-tag>
-              </n-space>
-              <n-button text type="primary" size="small" @click="handleRefresh" :loading="appStore.globalLoading">
-                <template #icon>
-                  <n-icon>
-                    <RefreshOutline />
-                  </n-icon>
-                </template>
-                刷新数据
-              </n-button>
-            </n-space>
-          </div>
-        </div>
-      </n-layout-sider>
-
-      <!-- 主内容区域 -->
-      <n-layout class="main-layout">
-        <!-- 顶部栏 (小屏幕) -->
-        <n-layout-header v-if="isSmallScreen" bordered class="mobile-header" style="height: 64px; padding: 0 16px;">
-          <n-space align="center" justify="space-between" style="height: 100%;">
-            <n-space align="center">
-              <n-button text @click="appStore.toggleDrawer">
-                <template #icon>
-                  <n-icon size="20">
-                    <MenuOutline />
-                  </n-icon>
-                </template>
-              </n-button>
-              <n-h3 style="margin: 0;">{{ currentPageTitle }}</n-h3>
-            </n-space>
-
-            <n-tag :type="healthStatus === 'healthy' ? 'success' : 'error'" size="small">
-              {{ healthText }}
-            </n-tag>
-          </n-space>
-        </n-layout-header>
-
-        <!-- 内容区域 -->
-        <n-layout-content class="layout-content">
-          <div class="content-wrapper">
-            <router-view />
-          </div>
-        </n-layout-content>
-      </n-layout>
+      <!-- 内容区域 -->
+      <n-layout-content class="layout-content" position="static">
+        <router-view />
+      </n-layout-content>
+      <n-el id="footer"></n-el>
     </n-layout>
+  </n-layout>
 
-    <!-- 移动端抽屉菜单 (仅小屏幕显示) -->
-    <MobileDrawer v-if="isSmallScreen" />
+  <!-- 移动端抽屉菜单 (仅小屏幕显示) -->
+  <MobileDrawer v-if="isSmallScreen" />
 
-    <!-- 全局消息容器 -->
-    <n-message-provider>
-      <n-dialog-provider>
-        <n-notification-provider>
-          <!-- 空的，用于提供全局组件 -->
-        </n-notification-provider>
-      </n-dialog-provider>
-    </n-message-provider>
-  </n-config-provider>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
 import { useResponsive } from '@/hooks/useResponsive'
 import { healthApi } from '@/common/api'
+import SiderContent from './SiderContent.vue'
 import MobileDrawer from './MobileDrawer.vue'
-import type { MenuOption } from 'naive-ui'
-import {
-  HomeOutline,
-  LayersOutline,
-  ArchiveOutline,
-  SettingsOutline,
-  MenuOutline,
-  RefreshOutline,
-} from '@vicons/ionicons5'
+import { MenuOutline } from '@vicons/ionicons5'
+import { useSettingStore } from '@/store/setting'
+import { Moon as MoonIcon, Sunny as SunIcon } from '@vicons/ionicons5'
+import { useThemeVars } from 'naive-ui'
 
 const route = useRoute()
-const router = useRouter()
 const appStore = useAppStore()
 const containerStore = useContainerStore()
 const imageStore = useImageStore()
 const { isLargeScreen, isSmallScreen } = useResponsive()
-
-// 版本信息
-const version = '0.0.1'
-
+const settingStore = useSettingStore()
+const isDark = computed(() => settingStore.setting.theme === 'dark')
+function onToggleTheme() {
+  settingStore.setTheme(isDark.value ? 'light' : 'dark')
+}
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
@@ -140,85 +95,6 @@ const currentPageTitle = computed(() => {
   }
 })
 
-// 系统健康状态
-const healthStatus = computed(() => appStore.systemHealth)
-
-const healthText = computed(() => {
-  switch (healthStatus.value) {
-    case 'healthy':
-      return '正常'
-    case 'unhealthy':
-      return '异常'
-    default:
-      return '未知'
-  }
-})
-
-// 菜单配置
-const menuOptions = computed<MenuOption[]>(() => [
-  {
-    label: '首页',
-    key: 'home',
-    icon: () => h(HomeOutline),
-  },
-  {
-    label: '容器管理',
-    key: 'containers',
-    icon: () => h(LayersOutline),
-  },
-  {
-    label: '镜像管理',
-    key: 'images',
-    icon: () => h(ArchiveOutline),
-  },
-  {
-    label: '系统设置',
-    key: 'settings',
-    icon: () => h(SettingsOutline),
-  },
-])
-
-// 处理菜单选择
-const handleMenuSelect = (key: string) => {
-  switch (key) {
-    case 'home':
-      router.push('/')
-      break
-    case 'containers':
-      router.push('/containers')
-      break
-    case 'images':
-      router.push('/images')
-      break
-    case 'settings':
-      router.push('/settings')
-      break
-  }
-}
-
-// 刷新数据
-const handleRefresh = async () => {
-  appStore.setGlobalLoading(true)
-  try {
-    // 根据当前页面刷新相应数据
-    if (activeKey.value === 'containers') {
-      await containerStore.fetchContainers()
-    } else if (activeKey.value === 'images') {
-      await imageStore.fetchImages()
-    } else {
-      // 首页刷新所有数据
-      await Promise.all([
-        containerStore.fetchContainers(),
-        imageStore.fetchImages(),
-      ])
-    }
-    appStore.updateRefreshTime()
-  } catch (error) {
-    console.error('刷新数据失败:', error)
-  } finally {
-    appStore.setGlobalLoading(false)
-  }
-}
 
 // 检查系统健康状态
 const checkHealth = async () => {
@@ -254,59 +130,35 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="less">
+@import '@/styles/mix.less';
+
 .layout-container {
   height: 100vh;
-}
 
-.layout-sider {
-  background: #fff;
-}
 
-.sider-content {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  padding: 16px 0;
-}
-
-.sider-header {
-  padding: 0 16px 24px 16px;
-  border-bottom: 1px solid #f0f0f0;
-
-  .logo {
-    width: 32px;
-    height: 32px;
+  :deep(.n-layout-scroll-container) {
+    .scrollbar();
   }
-}
-
-.sider-menu {
-  flex: 1;
-  margin-top: 16px;
-  padding: 0 8px;
-}
-
-.sider-footer {
-  margin-top: auto;
-  padding: 16px;
-  border-top: 1px solid #f0f0f0;
-}
-
-.main-layout {
-  background: #f5f5f5;
-}
-
-.mobile-header {
-  background: #fff;
-  border-bottom: 1px solid #f0f0f0;
 }
 
 .layout-content {
   padding: 16px;
 }
 
-.content-wrapper {
-  max-width: 1200px;
-  margin: 0 auto;
+#footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 100;
+}
+
+
+.mobile-header {
+  height: 56px;
+  box-sizing: border-box;
+  padding: 0 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
 // 响应式调整

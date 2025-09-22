@@ -1,5 +1,5 @@
 import axios from './axiosConfig'
-import type { ContainerStatus, ImageInfo, BatchUpdateResult } from './types'
+import type { ContainerStatus, ImageInfo, BatchUpdateResult, Config } from './types'
 import { API_ENDPOINTS } from '@/constants/api'
 
 // 健康检查相关
@@ -46,11 +46,21 @@ export const imageApi = {
     }),
 }
 
+// 配置相关API
+export const configApi = {
+  // 获取配置
+  getConfig: () => axios.get<{ config: Config }>(API_ENDPOINTS.CONFIG),
+
+  // 保存配置
+  saveConfig: (config: Config) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONFIG, config),
+}
+
 // 导出所有API
 export const api = {
   health: healthApi,
   container: containerApi,
   image: imageApi,
+  config: configApi,
 }
 
 export default api

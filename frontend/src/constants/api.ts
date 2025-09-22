@@ -16,6 +16,9 @@ export const API_ENDPOINTS = {
 
   // 镜像相关
   IMAGES: '/images',
+
+  // 配置相关
+  CONFIG: '/config',
 } as const
 
 // 错误码常量

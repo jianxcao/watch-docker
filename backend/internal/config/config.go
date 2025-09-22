@@ -2,12 +2,16 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // ServerConfig HTTP 服务端口等配置
@@ -107,6 +111,7 @@ func SetGlobal(c *Config) {
 	globalMu.Lock()
 	globalCfg = c
 	globalMu.Unlock()
+	Save()
 }
 
 // Get 返回当前全局配置的快照；若未设置则返回默认值，避免空指针。
@@ -180,6 +185,7 @@ func Load(path string) (*Config, error) {
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
+
 	SetGlobal(cfg)
 	return cfg, nil
 }
@@ -197,5 +203,29 @@ func validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("update.recreateStrategy must be one of: recreate, rolling")
 	}
+	return nil
+}
+
+// Save 将指定配置保存到指定路径的 YAML 文件
+func Save() error {
+	configPath := path.Join(conf.EnvCfg.CONFIG_PATH, conf.EnvCfg.CONFIG_FILE)
+	cfg := Get()
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+
+	if err := validate(cfg); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+
+	yamlData, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config to yaml: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, yamlData, 0644); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+
 	return nil
 }

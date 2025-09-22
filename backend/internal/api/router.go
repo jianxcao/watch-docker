@@ -10,6 +10,7 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	"github.com/jianxcao/watch-docker/backend/internal/registry"
 	"github.com/jianxcao/watch-docker/backend/internal/scanner"
+	"github.com/jianxcao/watch-docker/backend/internal/scheduler"
 	"github.com/jianxcao/watch-docker/backend/internal/updater"
 
 	"github.com/gin-gonic/gin"
@@ -17,19 +18,20 @@ import (
 )
 
 type Server struct {
-	logger   *zap.Logger
-	docker   *dockercli.Client
-	registry *registry.Client
-	scanner  *scanner.Scanner
-	updater  *updater.Updater
+	logger    *zap.Logger
+	docker    *dockercli.Client
+	registry  *registry.Client
+	scanner   *scanner.Scanner
+	updater   *updater.Updater
+	scheduler *scheduler.Scheduler
 }
 
-func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner) *gin.Engine {
+func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(ginzap(logger))
 
-	s := &Server{logger: logger, docker: docker, registry: reg, scanner: sc, updater: updater.New(docker)}
+	s := &Server{logger: logger, docker: docker, registry: reg, scanner: sc, updater: updater.New(docker), scheduler: sch}
 
 	api := r.Group("/api/v1")
 	{
@@ -43,6 +45,8 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		api.DELETE("/containers/:id", s.handleDeleteContainer())
 		api.GET("/images", s.handleListImages())
 		api.DELETE("/images", s.handleDeleteImage())
+		api.GET("/config", s.handleGetConfig())
+		api.POST("/config", s.handleSaveConfig())
 	}
 	return r
 }
@@ -96,7 +100,7 @@ func (s *Server) handleBatchUpdate() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 		defer cancel()
 
-		statuses, err := s.scanner.ScanOnce(ctx, cfg.Docker.IncludeStopped, cfg.Scan.Concurrency)
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency)
 		if err != nil {
 			s.logger.Error("batch scan failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeScanFailed, "scan failed"))
@@ -108,6 +112,9 @@ func (s *Server) handleBatchUpdate() gin.HandlerFunc {
 		failedCodes := make(map[string]int)
 		for _, st := range statuses {
 			if st.Skipped || st.Status != "UpdateAvailable" {
+				continue
+			}
+			if !st.Running && !cfg.Docker.IncludeStopped {
 				continue
 			}
 			uctx, cancelOne := context.WithTimeout(ctx, 5*time.Minute)
@@ -149,7 +156,7 @@ func (s *Server) handleListContainers() gin.HandlerFunc {
 		cfg := config.Get()
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 		defer cancel()
-		statuses, err := s.scanner.ScanOnce(ctx, cfg.Docker.IncludeStopped, cfg.Scan.Concurrency)
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency)
 		if err != nil {
 			s.logger.Error("scan failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeScanFailed, "scan failed"))
@@ -191,7 +198,20 @@ func (s *Server) handleDeleteContainer() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return
 		}
-		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+
+		// 删除成功后，立即获取更新后的容器列表返回给前端
+		cfg := config.Get()
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+		defer cancel()
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency)
+		if err != nil {
+			s.logger.Error("scan after delete failed", zap.Error(err))
+			// 即使扫描失败，也返回删除成功的响应
+			c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true, "containers": statuses}))
 	}
 }
 
@@ -225,6 +245,39 @@ func (s *Server) handleDeleteImage() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return
 		}
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+	}
+}
+
+// handleGetConfig 获取当前配置
+func (s *Server) handleGetConfig() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cfg := config.Get()
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"config": cfg}))
+	}
+}
+
+// handleSaveConfig 保存配置并使其生效
+func (s *Server) handleSaveConfig() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var cfg config.Config
+		if err := c.ShouldBindJSON(&cfg); err != nil {
+			s.logger.Error("invalid config format", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid config format"))
+			return
+		}
+
+		// 设置为全局配置（这会触发保存到文件）
+		config.SetGlobal(&cfg)
+
+		// 重启调度器以应用新的配置
+		if s.scheduler != nil {
+			s.logger.Info("restarting scheduler to apply new configuration")
+			s.scheduler.Stop()
+			s.scheduler.Start()
+		}
+
+		s.logger.Info("config updated successfully")
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
 	}
 }

@@ -6,9 +6,11 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}/cmd/watch-docker/main.go",
-            "env": {},
-            "cwd": "${workspaceFolder}"
+            "program": "${workspaceFolder}/backend/cmd/watch-docker/main.go",
+            "env": {
+                "CONFIG_PATH": "./.config"
+            },
+            "cwd": "${workspaceFolder}/backend"
         }
     ]
 }

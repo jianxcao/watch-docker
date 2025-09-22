@@ -17,7 +17,7 @@ watchEffect(() => {
       <n-modal-provider>
         <n-dialog-provider>
           <n-message-provider placement="bottom-right">
-            <router-view />
+            <config-view> <router-view /></config-view>
           </n-message-provider>
         </n-dialog-provider>
       </n-modal-provider>

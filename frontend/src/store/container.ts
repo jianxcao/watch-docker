@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { containerApi } from '@/common/api'
 import type { ContainerStatus, BatchUpdateResult } from '@/common/types'
-import { useMessage } from 'naive-ui'
 
 export const useContainerStore = defineStore('container', () => {
   // 状态
@@ -122,6 +121,7 @@ export const useContainerStore = defineStore('container', () => {
       }
     } catch (error) {
       console.error('停止容器失败:', error)
+
       throw error
     }
   }

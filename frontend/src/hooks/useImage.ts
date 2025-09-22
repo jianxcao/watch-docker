@@ -1,9 +1,11 @@
 import { useImageStore } from '@/store/image'
+import { useContainerStore } from '@/store/container'
 import { useMessage, useDialog } from 'naive-ui'
-import type { ImageInfo } from '@/common/types'
+import type { ImageInfo, ContainerStatus } from '@/common/types'
 
 export function useImage() {
   const store = useImageStore()
+  const containerStore = useContainerStore()
   const message = useMessage()
   const dialog = useDialog()
 
@@ -11,32 +13,56 @@ export function useImage() {
   const handleDelete = (image: ImageInfo, force: boolean = false) => {
     const displayTag = store.getImageDisplayTag(image)
     const isDangling = store.isDanglingImage(image)
+    const isInUse = isImageInUse(image)
+    const usingContainers = getContainersUsingImage(image)
 
-    const title = isDangling ? '确认删除悬空镜像' : '确认删除镜像'
-    const content = isDangling
-      ? `确定要删除悬空镜像 "${displayTag}" 吗？`
-      : `确定要删除镜像 "${displayTag}" 吗？${
-          force ? '这将强制删除镜像，即使有容器正在使用。' : ''
-        }`
+    let title: string
+    let content: string
 
-    dialog.warning({
+    if (isDangling) {
+      title = '确认删除悬空镜像'
+      content = `确定要删除悬空镜像 "${displayTag}" 吗？`
+    } else if (isInUse && !force) {
+      title = '镜像正在被使用'
+      const containerList = usingContainers.map((c) => `• ${c.name}`).join('\n')
+      content = `镜像 "${displayTag}" 正在被以下容器使用：\n\n${containerList}\n\n删除此镜像可能会影响这些容器的运行。是否强制删除？`
+    } else {
+      title = force ? '强制删除镜像' : '确认删除镜像'
+      if (force && isInUse) {
+        const containerList = usingContainers.map((c) => `• ${c.name}`).join('\n')
+        content = `确定要强制删除镜像 "${displayTag}" 吗？\n\n此镜像正在被以下容器使用：\n${containerList}\n\n这将强制删除镜像，可能会影响这些容器的运行。`
+      } else {
+        content = `确定要删除镜像 "${displayTag}" 吗？${force ? '这将强制删除镜像。' : ''}`
+      }
+    }
+
+    const d = dialog.warning({
       title,
       content,
-      positiveText: '确认删除',
+      positiveText: isInUse && !force ? '强制删除' : '确认删除',
       negativeText: '取消',
       onPositiveClick: async () => {
         try {
-          await store.deleteImage(image.id, force)
+          d.loading = true
+          // 如果镜像被使用且不是强制删除，则设为强制删除
+          const shouldForce = force || isInUse
+          await store.deleteImage(image.id, shouldForce)
           message.success(`镜像 ${displayTag} 删除成功`)
+          d.loading = false
         } catch (error: any) {
+          d.loading = false
           // 如果删除失败且不是强制删除，询问是否强制删除
           if (!force && error.message.includes('conflict')) {
-            dialog.warning({
+            const d1 = dialog.warning({
               title: '删除失败',
               content: `镜像 "${displayTag}" 正在被容器使用，是否强制删除？`,
               positiveText: '强制删除',
               negativeText: '取消',
-              onPositiveClick: () => handleDelete(image, true),
+              onPositiveClick: () => {
+                d1.loading = true
+                handleDelete(image, true)
+                d1.loading = false
+              },
             })
           } else {
             message.error(`删除镜像失败: ${error.message}`)
@@ -161,6 +187,70 @@ export function useImage() {
     return image.id.slice(0, 12)
   }
 
+  // 检查镜像是否被容器使用
+  const isImageInUse = (image: ImageInfo): boolean => {
+    return getContainersUsingImage(image).length > 0
+  }
+
+  // 获取使用指定镜像的容器列表
+  const getContainersUsingImage = (image: ImageInfo): ContainerStatus[] => {
+    const containers = containerStore.containers
+    const imageTags = image.repoTags || []
+
+    return containers.filter((container) => {
+      // 检查容器的 image 字段是否匹配镜像的标签
+      const containerImage = container.image
+
+      // 如果容器镜像与镜像标签完全匹配
+      if (imageTags.includes(containerImage)) {
+        return true
+      }
+
+      // 检查容器镜像是否与镜像ID相关（通过标签部分匹配）
+      if (
+        imageTags.some((tag) => {
+          // 处理带有digest的情况（例如: nginx@sha256:xxx）
+          const tagWithoutDigest = tag.split('@')[0]
+          const containerImageWithoutDigest = containerImage.split('@')[0]
+
+          // 处理带有tag的情况（例如: nginx:latest）
+          const tagWithoutTag = tagWithoutDigest.split(':')[0]
+          const containerImageWithoutTag = containerImageWithoutDigest.split(':')[0]
+
+          return (
+            tagWithoutDigest === containerImageWithoutDigest ||
+            tagWithoutTag === containerImageWithoutTag
+          )
+        })
+      ) {
+        return true
+      }
+
+      return false
+    })
+  }
+
+  // 获取镜像使用情况的显示文本
+  const getImageUsageText = (image: ImageInfo): string => {
+    const usingContainers = getContainersUsingImage(image)
+
+    if (usingContainers.length === 0) {
+      return '未使用'
+    }
+
+    if (usingContainers.length === 1) {
+      return `被 ${usingContainers[0].name} 使用`
+    }
+
+    return `被 ${usingContainers.length} 个容器使用`
+  }
+
+  // 获取使用镜像的容器名称列表
+  const getImageUsageContainers = (image: ImageInfo): string[] => {
+    const usingContainers = getContainersUsingImage(image)
+    return usingContainers.map((container) => container.name)
+  }
+
   return {
     // 操作方法
     handleDelete,
@@ -172,5 +262,11 @@ export function useImage() {
     getImageAge,
     getTagsDisplayText,
     getDigestDisplayText,
+
+    // 镜像使用情况相关方法
+    isImageInUse,
+    getContainersUsingImage,
+    getImageUsageText,
+    getImageUsageContainers,
   }
 }

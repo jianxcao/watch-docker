@@ -39,17 +39,20 @@ export function useContainer() {
 
   // 删除容器（带确认）
   const handleDelete = (container: ContainerStatus) => {
-    dialog.warning({
+    const d = dialog.warning({
       title: '确认删除',
       content: `确定要删除容器 "${container.name}" 吗？此操作不可撤销。`,
       positiveText: '确认删除',
       negativeText: '取消',
       onPositiveClick: async () => {
         try {
+          d.loading = true
           await store.deleteContainer(container.id)
           message.success(`容器 ${container.name} 删除成功`)
         } catch (error: any) {
           message.error(`删除容器失败: ${error.message}`)
+        } finally {
+          d.loading = false
         }
       },
     })
@@ -64,13 +67,14 @@ export function useContainer() {
       return
     }
 
-    dialog.info({
+    const d = dialog.info({
       title: '批量更新确认',
       content: `发现 ${updateableCount} 个可更新的容器，确定要批量更新吗？`,
       positiveText: '确认更新',
       negativeText: '取消',
       onPositiveClick: async () => {
         try {
+          d.loading = true
           const result = await store.batchUpdate()
 
           if (result.updated.length > 0) {
@@ -83,6 +87,8 @@ export function useContainer() {
           }
         } catch (error: any) {
           message.error(`批量更新失败: ${error.message}`)
+        } finally {
+          d.loading = false
         }
       },
     })

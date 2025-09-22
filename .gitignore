@@ -14,7 +14,6 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-watch-docker
 
 node_modules
 
@@ -23,3 +22,4 @@ node_modules
 frontend/dev-dist/*
 
 .vite
+__debug*

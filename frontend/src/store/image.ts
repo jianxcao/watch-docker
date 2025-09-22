@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { imageApi } from '@/common/api'
 import type { ImageInfo } from '@/common/types'
-
 export const useImageStore = defineStore('image', () => {
   // 状态
   const images = ref<ImageInfo[]>([])
@@ -111,6 +110,26 @@ export const useImageStore = defineStore('image', () => {
   // 计算悬空镜像
   const danglingImages = computed(() => images.value.filter((img) => isDanglingImage(img)))
 
+  // 方法：获取镜像的摘要显示文本（用于显示）
+  const getDigestDisplayText = (image: ImageInfo): string => {
+    // 优先显示 repoDigests 中的第一个摘要
+    if (image.repoDigests && image.repoDigests.length > 0) {
+      const digest = image.repoDigests[0]
+      if (digest.includes('@sha256:')) {
+        // 提取 sha256 部分并截断显示
+        const sha256Part = digest.split('@sha256:')[1]
+        return sha256Part.slice(0, 12) + '...'
+      }
+      return digest.slice(0, 12) + '...'
+    }
+
+    // 如果没有摘要，显示镜像 ID
+    if (image.id.startsWith('sha256:')) {
+      return image.id.slice(7, 19) + '...'
+    }
+    return image.id.slice(0, 12) + '...'
+  }
+
   return {
     // 状态
     images,
@@ -131,6 +150,7 @@ export const useImageStore = defineStore('image', () => {
     findImagesByTag,
     isImageDeleting,
     getImageDisplayTag,
+    getDigestDisplayText,
     isDanglingImage,
     formatSize,
   }
