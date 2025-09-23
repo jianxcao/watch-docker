@@ -10,6 +10,8 @@ type EnvConfig struct {
 	CONFIG_PATH          string `default:"/config"`
 	CONFIG_FILE          string `default:"config.yaml"`
 	VERSION_WATCH_DOCKER string `default:"v0.0.1"`
+	USER_NAME            string `default:"admin"`
+	USER_PASSWORD        string `default:"admin"`
 }
 
 func NewEnvConfig() *EnvConfig {

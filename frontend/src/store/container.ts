@@ -37,10 +37,10 @@ export const useContainerStore = defineStore('container', () => {
   }))
 
   // 方法：获取容器列表
-  const fetchContainers = async () => {
+  const fetchContainers = async (isUserCache = true) => {
     loading.value = true
     try {
-      const data = await containerApi.getContainers()
+      const data = await containerApi.getContainers(isUserCache)
       if (data.code === 0) {
         containers.value = data.data.containers
       } else {

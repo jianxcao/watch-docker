@@ -1,6 +1,18 @@
 import { defineStore } from 'pinia'
+import { ref, reactive } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { useThemeVars, type CustomThemeCommonVars, type ThemeCommonVars } from 'naive-ui'
+import { authApi } from '@/common/api'
+
+interface SystemInfo {
+  dockerVersion: string
+  dockerAPIVersion: string
+  dockerPlatform: string
+  dockerGitCommit: string
+  dockerGoVersion: string
+  dockerBuildTime: string
+  version: string
+}
 
 export const useSettingStore = defineStore('setting', () => {
   const setting = useStorage(
@@ -8,9 +20,14 @@ export const useSettingStore = defineStore('setting', () => {
     {
       theme: 'light',
       language: 'zh-CN',
+      rememberedUsername: '', // 重命名为记住的用户名
+      rememberUsername: false, // 改为只记住用户名
+      token: '',
     },
     localStorage
   )
+
+  const currentUsername = ref(setting.value.rememberedUsername || '')
 
   const headerHeight = ref(56)
 
@@ -27,12 +44,76 @@ export const useSettingStore = defineStore('setting', () => {
 
   const themeVars = ref<ThemeCommonVars & CustomThemeCommonVars>(themeDefault.value)
 
+  // 系统信息相关状态
+  const systemInfo = ref<SystemInfo | null>(null)
+  const systemInfoLoading = ref(false)
+
   function setTheme(val: string) {
     setting.value.theme = val
   }
 
   function setThemeVars(val: ThemeCommonVars & CustomThemeCommonVars) {
     themeVars.value = val
+  }
+
+  // 获取系统信息
+  async function fetchSystemInfo() {
+    if (systemInfoLoading.value) return
+
+    systemInfoLoading.value = true
+    try {
+      const res = await authApi.getInfo()
+
+      systemInfo.value = res.data.info
+    } catch (error) {
+      console.log('Failed to fetch system info:', error)
+    } finally {
+      systemInfoLoading.value = false
+    }
+  }
+
+  // 保存记住的用户名（安全优化：不再保存密码）
+  function saveRememberedUsername(username: string, remember: boolean) {
+    if (remember) {
+      setting.value.rememberedUsername = username
+      setting.value.rememberUsername = true
+    } else {
+      clearRememberedUsername()
+    }
+  }
+
+  // 清除记住的用户名
+  function clearRememberedUsername() {
+    setting.value.rememberedUsername = ''
+    setting.value.rememberUsername = false
+  }
+
+  // 设置当前登录用户名
+  function setCurrentUsername(username: string) {
+    currentUsername.value = username
+  }
+
+  // 清除当前登录用户名
+  function clearCurrentUsername() {
+    currentUsername.value = ''
+  }
+
+  // 获取记住的用户名
+  function getRememberedUsername() {
+    return setting.value.rememberUsername ? setting.value.rememberedUsername : ''
+  }
+
+  // Token 管理
+  function setToken(token: string) {
+    setting.value.token = token
+  }
+
+  function getToken() {
+    return setting.value.token
+  }
+
+  function clearToken() {
+    setting.value.token = ''
   }
 
   return {
@@ -42,5 +123,17 @@ export const useSettingStore = defineStore('setting', () => {
     setThemeVars,
     safeArea,
     headerHeight,
+    systemInfo,
+    systemInfoLoading,
+    fetchSystemInfo,
+    currentUsername,
+    saveRememberedUsername,
+    clearRememberedUsername,
+    setCurrentUsername,
+    clearCurrentUsername,
+    getRememberedUsername,
+    setToken,
+    getToken,
+    clearToken,
   }
 })

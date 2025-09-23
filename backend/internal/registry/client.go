@@ -54,16 +54,18 @@ func New() *Client {
 // It supports manifest lists by selecting the child manifest matching runtime platform.
 // GetRemoteDigests 返回镜像的索引(manifest list)层 digest 与子镜像(平台专属 manifest)层 digest。
 // 对于非多架构镜像，两者相同。
-func (c *Client) GetRemoteDigests(ctx context.Context, imageRef string) (indexDigest string, childDigest string, err error) {
+func (c *Client) GetRemoteDigests(ctx context.Context, imageRef string, isUserCache bool) (indexDigest string, childDigest string, err error) {
 	normalized, host, repo, referenceTag, err := normalizeImageRef(imageRef)
 	if err != nil {
 		return "", "", err
 	}
 
 	// cache key uses normalized ref (host/repo:tag)
-	if d, ok := c.getCache(normalized); ok {
-		// 缓存中仅存 indexDigest，为了兼容旧缓存此处 childDigest 置空
-		return d, "", nil
+	if isUserCache {
+		if d, ok := c.getCache(normalized); ok {
+			// 缓存中仅存 indexDigest，为了兼容旧缓存此处 childDigest 置空
+			return d, "", nil
+		}
 	}
 
 	type res struct {
@@ -150,12 +152,6 @@ func (c *Client) GetRemoteDigests(ctx context.Context, imageRef string) (indexDi
 	}
 	rr := v.(res)
 	return rr.idx, rr.child, nil
-}
-
-// 兼容旧调用：仅返回 index 层 digest
-func (c *Client) GetRemoteDigest(ctx context.Context, imageRef string) (string, error) {
-	idx, _, err := c.GetRemoteDigests(ctx, imageRef)
-	return idx, err
 }
 
 func (c *Client) fetchBearerToken(ctx context.Context, host, repo, wwwAuth string) (string, error) {
@@ -250,7 +246,7 @@ func normalizeImageRef(ref string) (normalized, host, repo, tag string, err erro
 		return "", "", "", "", err
 	}
 	named = reference.TagNameOnly(named)
-	tag = reference.FamiliarString(named)
+	// tag = reference.FamiliarString(named)
 	// FamiliarString returns repo:tag but not host, so rebuild
 	name := named.Name() // includes host
 	// split host from path

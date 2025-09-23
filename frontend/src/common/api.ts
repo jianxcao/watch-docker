@@ -11,10 +11,32 @@ export const healthApi = {
   ready: () => axios.get<any>(API_ENDPOINTS.READY),
 }
 
+// 身份验证相关API
+export const authApi = {
+  // 登录
+  login: (username: string, password: string) =>
+    axios.post<{ token: string; username: string }>(API_ENDPOINTS.LOGIN, {
+      username,
+      password,
+    }),
+
+  // 登出
+  logout: () => axios.post<{ message: string }>(API_ENDPOINTS.LOGOUT),
+
+  // 检查身份验证状态
+  checkAuthStatus: () => axios.get<{ authEnabled: boolean }>(API_ENDPOINTS.AUTH_STATUS),
+
+  // 获取系统信息
+  getInfo: () => axios.get<any>(API_ENDPOINTS.INFO),
+}
+
 // 容器相关API
 export const containerApi = {
   // 获取容器列表
-  getContainers: () => axios.get<{ containers: ContainerStatus[] }>(API_ENDPOINTS.CONTAINERS),
+  getContainers: (isUserCache = true) =>
+    axios.get<{ containers: ContainerStatus[] }>(API_ENDPOINTS.CONTAINERS, {
+      params: { isUserCache },
+    }),
 
   // 更新单个容器
   updateContainer: (id: string, image?: string) =>
@@ -58,6 +80,7 @@ export const configApi = {
 // 导出所有API
 export const api = {
   health: healthApi,
+  auth: authApi,
   container: containerApi,
   image: imageApi,
   config: configApi,

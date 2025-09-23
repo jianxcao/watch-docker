@@ -57,7 +57,6 @@ import MobileDrawer from './MobileDrawer.vue'
 import { MenuOutline } from '@vicons/ionicons5'
 import { useSettingStore } from '@/store/setting'
 import { Moon as MoonIcon, Sunny as SunIcon } from '@vicons/ionicons5'
-import { useThemeVars } from 'naive-ui'
 
 const route = useRoute()
 const appStore = useAppStore()

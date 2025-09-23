@@ -67,7 +67,7 @@ func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
 	cfg := config.Get()
 	includeStopped := cfg.Docker.IncludeStopped
 	conc := cfg.Scan.Concurrency
-	statuses, err := s.scanner.ScanOnce(ctx, includeStopped, conc)
+	statuses, err := s.scanner.ScanOnce(ctx, includeStopped, conc, true)
 	if err != nil {
 		s.logger.Error("scan failed", zap.Error(err))
 		return

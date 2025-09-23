@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
@@ -37,18 +39,29 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 
 	api := r.Group("/api/v1")
 	{
+		// 公开接口（不需要身份验证）
 		api.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, NewSuccessRes(nil)) })
+		api.POST("/login", s.handleLogin())
+		api.POST("/logout", s.handleLogout())
+		api.GET("/auth/status", s.handleAuthStatus())
 		api.GET("/info", s.handleGetInfo())
-		api.GET("/containers", s.handleListContainers())
-		api.POST("/containers/:id/update", s.handleUpdateContainer())
-		api.POST("/updates/run", s.handleBatchUpdate())
-		api.POST("/containers/:id/stop", s.handleStopContainer())
-		api.POST("/containers/:id/start", s.handleStartContainer())
-		api.DELETE("/containers/:id", s.handleDeleteContainer())
-		api.GET("/images", s.handleListImages())
-		api.DELETE("/images", s.handleDeleteImage())
-		api.GET("/config", s.handleGetConfig())
-		api.POST("/config", s.handleSaveConfig())
+	}
+
+	// 需要身份验证的接口
+	protected := api.Group("")
+	protected.Use(auth.AuthMiddleware())
+	{
+
+		protected.GET("/containers", s.handleListContainers())
+		protected.POST("/containers/:id/update", s.handleUpdateContainer())
+		protected.POST("/updates/run", s.handleBatchUpdate())
+		protected.POST("/containers/:id/stop", s.handleStopContainer())
+		protected.POST("/containers/:id/start", s.handleStartContainer())
+		protected.DELETE("/containers/:id", s.handleDeleteContainer())
+		protected.GET("/images", s.handleListImages())
+		protected.DELETE("/images", s.handleDeleteImage())
+		protected.GET("/config", s.handleGetConfig())
+		protected.POST("/config", s.handleSaveConfig())
 	}
 	return r
 }
@@ -102,7 +115,7 @@ func (s *Server) handleBatchUpdate() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 		defer cancel()
 
-		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency)
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true)
 		if err != nil {
 			s.logger.Error("batch scan failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeScanFailed, "scan failed"))
@@ -156,9 +169,11 @@ func codeForUpdateErr(err error) int {
 func (s *Server) handleListContainers() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+		isUserCache := c.Query("isUserCache") == "true"
+		fmt.Println("isUserCache", isUserCache, c.Query("isUserCache"))
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Minute)
 		defer cancel()
-		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency)
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, isUserCache)
 		if err != nil {
 			s.logger.Error("scan failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeScanFailed, "scan failed"))
@@ -205,7 +220,7 @@ func (s *Server) handleDeleteContainer() gin.HandlerFunc {
 		cfg := config.Get()
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 		defer cancel()
-		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency)
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true)
 		if err != nil {
 			s.logger.Error("scan after delete failed", zap.Error(err))
 			// 即使扫描失败，也返回删除成功的响应
@@ -317,5 +332,59 @@ func (s *Server) handleSaveConfig() gin.HandlerFunc {
 
 		s.logger.Info("config updated successfully")
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+	}
+}
+
+// handleLogin 登录接口
+func (s *Server) handleLogin() gin.HandlerFunc {
+	type LoginRequest struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
+
+	return func(c *gin.Context) {
+		var req LoginRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "用户名和密码不能为空"))
+			return
+		}
+
+		// 验证用户凭据
+		if !auth.ValidateCredentials(req.Username, req.Password) {
+			s.logger.Warn("login failed", zap.String("username", req.Username))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "用户名或密码错误"))
+			return
+		}
+
+		// 生成 JWT token
+		token, err := auth.GenerateToken(req.Username)
+		if err != nil {
+			s.logger.Error("generate token failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorRes("生成token失败"))
+			return
+		}
+
+		s.logger.Info("user logged in", zap.String("username", req.Username))
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"token":    token,
+			"username": req.Username,
+		}))
+	}
+}
+
+// handleLogout 登出接口
+func (s *Server) handleLogout() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 简单的登出响应，客户端需要删除本地存储的token
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"message": "登出成功"}))
+	}
+}
+
+// handleAuthStatus 检查身份验证状态
+func (s *Server) handleAuthStatus() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"authEnabled": auth.IsAuthEnabled(),
+		}))
 	}
 }

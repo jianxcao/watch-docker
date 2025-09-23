@@ -1,6 +1,5 @@
 import { systemErrCode } from '@/constants/code'
 import { systemErrInfo } from '@/constants/msg'
-import { navigateTo } from '@/router'
 import axios from 'axios'
 import type { AxiosRequestConfig, CancelTokenSource } from 'axios'
 // format全局只有在应用初始化后才可以使用
@@ -17,7 +16,7 @@ type IAxiosRequestConfig = AxiosRequestConfig & {
   source: CancelTokenSource
 }
 const CancelToken = axios.CancelToken
-axios.defaults.timeout = 300000
+axios.defaults.timeout = 60 * 60 * 1000
 window.axios = axios
 
 const lockUrl: Record<string, any> = {}
@@ -62,24 +61,26 @@ const detailLockKey = (config: IAxiosRequestConfig, promise: Promise<any>) => {
   return promise
 }
 
-let token = localStorage.getItem('token') || ''
+// 动态获取 token 的函数，避免循环依赖
+let getTokenFromStore: (() => string) | null = null
 
-export const setToken = (t: string) => {
-  token = t
+export const initTokenStore = (getTokenFn: () => string) => {
+  getTokenFromStore = getTokenFn
 }
+
 export const getToken = () => {
-  return token
+  // 优先从 store 获取，如果没有初始化则返回空字符串
+  return getTokenFromStore ? getTokenFromStore() : ''
 }
 
-axios.interceptors.request.clear()
-axios.interceptors.response.clear()
 // 添加时间戳
 axios.interceptors.request.use(
   async function (config) {
     const params = config.params || {}
     const headers = Object.assign(config.headers || {})
-    if (token) {
-      headers.Authorization = token
+    const currentToken = getToken()
+    if (currentToken) {
+      headers.Authorization = `Bearer ${currentToken}`
     }
     params._t = +new Date()
     config.headers = headers
@@ -100,7 +101,10 @@ axios.interceptors.response.use(
     // const config = err?.config || res?.config
     const status = res?.status
     if (status === 401 || status === 403) {
-      navigateTo('/login')
+      // 导入并调用强制登出
+      const { useAuthStore } = await import('@/store/auth')
+      const authStore = useAuthStore()
+      authStore.forceLogout()
     }
     return Promise.reject(err)
   }

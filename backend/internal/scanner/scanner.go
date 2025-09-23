@@ -42,7 +42,7 @@ func New(d *dockercli.Client, r *registry.Client) *Scanner {
 // 2) 对每个容器先做策略评估（policy.Evaluate），尽早跳过无需查询 registry 的容器
 // 3) 对需要检查的容器，并发获取远端 digest（受 concurrency 限制）
 // 4) 与本地 RepoDigest 对比，生成 UpToDate/UpdateAvailable/Skipped/Error 状态
-func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency int) ([]ContainerStatus, error) {
+func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency int, isUserCache bool) ([]ContainerStatus, error) {
 	containers, err := s.docker.ListContainers(ctx, includeStopped)
 	if err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 			st.CurrentDigest = firstDigest(ct.RepoDigests)
 
 			// 获取远端 digest：indexDigest 为清单索引，多架构镜像；childDigest 为匹配当前平台的子 manifest
-			indexDigest, childDigest, err := s.registry.GetRemoteDigests(ctx, ct.Image)
+			indexDigest, childDigest, err := s.registry.GetRemoteDigests(ctx, ct.Image, isUserCache)
 			if err != nil {
 				logger.Logger.Error("get remote digest", logger.ZapErr(err))
 				st.Status = "Error"

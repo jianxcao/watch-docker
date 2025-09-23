@@ -11,6 +11,25 @@
     <!-- 菜单 -->
     <n-menu :value="activeKey" :options="menuOptions" @update:value="handleMenuSelect" class="sider-menu" />
 
+    <!-- 用户信息（如果启用了身份验证） -->
+    <div v-if="authStore.authEnabled && authStore.isLoggedIn" class="user-info">
+      <n-space align="center" justify="space-between">
+        <n-space align="center" size="small">
+          <n-avatar size="small" :style="{ backgroundColor: '#18a058' }">
+            {{ authStore.username.charAt(0).toUpperCase() }}
+          </n-avatar>
+          <n-text>{{ authStore.username }}</n-text>
+        </n-space>
+        <n-button text size="small" @click="handleLogout" title="登出">
+          <template #icon>
+            <n-icon>
+              <LogOutOutline />
+            </n-icon>
+          </template>
+        </n-button>
+      </n-space>
+    </div>
+
     <!-- 底部状态 -->
     <div class="sider-footer">
       <div class="flex items-center justify-center gap-2">
@@ -21,14 +40,19 @@
           v{{ version }}
         </n-text>
       </div>
-      <n-icon @click="handleRefresh" :loading="appStore.globalLoading" class="cursor-pointer">
-        <template v-if="appStore.globalLoading">
-          <RefreshOutline class="rotating" />
-        </template>
-        <template v-else>
-          <RefreshOutline />
-        </template>
-      </n-icon>
+      <div class="footer-actions">
+        <n-icon @click="handleGithubClick" class="cursor-pointer" title="访问 GitHub 仓库">
+          <LogoGithub />
+        </n-icon>
+        <n-icon @click="handleRefresh" :loading="appStore.globalLoading" class="cursor-pointer" title="刷新数据">
+          <template v-if="appStore.globalLoading">
+            <RefreshOutline class="rotating" />
+          </template>
+          <template v-else>
+            <RefreshOutline />
+          </template>
+        </n-icon>
+      </div>
     </div>
   </n-el>
 </template>
@@ -37,15 +61,19 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
+import { useAuthStore } from '@/store/auth'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
 import type { MenuOption } from 'naive-ui'
+import { useMessage } from 'naive-ui'
 import {
   HomeOutline,
   LayersOutline,
   ArchiveOutline,
   SettingsOutline,
   RefreshOutline,
+  LogOutOutline,
+  LogoGithub,
 } from '@vicons/ionicons5'
 
 interface Props {
@@ -58,13 +86,14 @@ const props = withDefaults(defineProps<Props>(), {
 
 const route = useRoute()
 const router = useRouter()
+const message = useMessage()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 const containerStore = useContainerStore()
 const imageStore = useImageStore()
 
 // 版本信息
 const version = '0.0.1'
-
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
@@ -142,13 +171,13 @@ const handleRefresh = async () => {
   try {
     // 根据当前页面刷新相应数据
     if (activeKey.value === 'containers') {
-      await containerStore.fetchContainers()
+      await containerStore.fetchContainers(false)
     } else if (activeKey.value === 'images') {
       await imageStore.fetchImages()
     } else {
       // 首页刷新所有数据
       await Promise.all([
-        containerStore.fetchContainers(),
+        containerStore.fetchContainers(false),
         imageStore.fetchImages(),
       ])
     }
@@ -158,6 +187,22 @@ const handleRefresh = async () => {
   } finally {
     appStore.setGlobalLoading(false)
   }
+}
+
+// 登出处理
+const handleLogout = async () => {
+  try {
+    await authStore.logout()
+    message.success('已登出')
+  } catch (error) {
+    console.error('登出失败:', error)
+    message.error('登出失败')
+  }
+}
+
+// GitHub 跳转处理
+const handleGithubClick = () => {
+  window.open('https://github.com/jianxcao/watch-docker', '_blank')
 }
 </script>
 
@@ -190,15 +235,26 @@ const handleRefresh = async () => {
   padding: 0 8px;
 }
 
-.sider-footer {
+.user-info {
   margin-top: auto;
+  padding: 12px;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sider-footer {
   padding: 8px;
   height: 56px;
   box-sizing: border-box;
-  border-top: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .rotating {

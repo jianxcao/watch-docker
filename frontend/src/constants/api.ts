@@ -4,6 +4,12 @@ export const API_ENDPOINTS = {
   HEALTH: '/healthz',
   READY: '/readyz',
 
+  // 身份验证
+  LOGIN: '/login',
+  LOGOUT: '/logout',
+  AUTH_STATUS: '/auth/status',
+  INFO: '/info',
+
   // 容器相关
   CONTAINERS: '/containers',
   CONTAINER_UPDATE: (id: string) => `/containers/${id}/update`,
