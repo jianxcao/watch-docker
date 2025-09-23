@@ -142,12 +142,12 @@ func (c *Client) CreateContainer(ctx context.Context, name string, cfg *containe
 
 // StartContainer 启动容器
 func (c *Client) StartContainer(ctx context.Context, id string) error {
-	return c.docker.ContainerStart(ctx, id, types.ContainerStartOptions{})
+	return c.docker.ContainerStart(ctx, id, container.StartOptions{})
 }
 
 // RemoveContainer 删除容器
 func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) error {
-	return c.docker.ContainerRemove(ctx, id, types.ContainerRemoveOptions{Force: force, RemoveVolumes: false})
+	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: force, RemoveVolumes: false})
 }
 
 // ImagePull 拉取镜像（丢弃输出以避免阻塞）

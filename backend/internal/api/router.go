@@ -8,6 +8,7 @@ import (
 
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/jianxcao/watch-docker/backend/internal/registry"
 	"github.com/jianxcao/watch-docker/backend/internal/scanner"
 	"github.com/jianxcao/watch-docker/backend/internal/scheduler"
@@ -261,10 +262,18 @@ func (s *Server) handleGetConfig() gin.HandlerFunc {
 func (s *Server) handleSaveConfig() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var cfg config.Config
+		oldCfg := config.Get()
 		if err := c.ShouldBindJSON(&cfg); err != nil {
 			s.logger.Error("invalid config format", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid config format"))
 			return
+		}
+
+		if oldCfg.Logging.Level != cfg.Logging.Level {
+			s.logger.Info("log level changed", zap.String("old_level", oldCfg.Logging.Level), zap.String("new_level", cfg.Logging.Level))
+			if err := logger.SetLogLevel(cfg.Logging.Level); err != nil {
+				s.logger.Error("设置日志出错， 请重启容器", zap.String("level", cfg.Logging.Level), zap.Error(err))
+			}
 		}
 
 		// 设置为全局配置（这会触发保存到文件）

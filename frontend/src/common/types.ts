@@ -46,18 +46,11 @@ export interface Config {
     includeStopped: boolean
   }
   scan: {
-    interval: string
     cron: string
-    initialScanOnStart: boolean
     concurrency: number
-    cacheTTL: string
-  }
-  update: {
-    enabled: boolean
-    autoUpdateCron: string
+    cacheTTL: number // 分钟数
+    isUpdate: boolean
     allowComposeUpdate: boolean
-    recreateStrategy: string
-    removeOldContainer: boolean
   }
   policy: {
     skipLabels: string[]

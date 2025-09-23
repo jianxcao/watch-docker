@@ -7,9 +7,9 @@ import (
 )
 
 type EnvConfig struct {
-	CONFIG_PATH       string `default:"/config"`
-	CONFIG_FILE       string `default:"config.yaml"`
-	VERSION_MEDIA_302 string `default:"v2.1.6"`
+	CONFIG_PATH          string `default:"/config"`
+	CONFIG_FILE          string `default:"config.yaml"`
+	VERSION_WATCH_DOCKER string `default:"v0.0.1"`
 }
 
 func NewEnvConfig() *EnvConfig {

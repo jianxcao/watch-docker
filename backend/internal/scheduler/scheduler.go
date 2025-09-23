@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/config"
@@ -36,9 +37,10 @@ func (s *Scheduler) Start() {
 	// 单一路径：若配置了 cron 则使用 cron；否则使用 interval 定时器
 	go func() {
 		cfg := config.Get()
-		if cfg.Update.AutoUpdateCron != "" {
+		if cfg.Scan.Cron != "" {
 			c := cron.New(cron.WithSeconds())
-			_, err := c.AddFunc(cfg.Update.AutoUpdateCron, func() { s.runScanAndUpdate(ctx) })
+			s.logger.Info("开始添加 cron 任务", zap.String("cron", cfg.Scan.Cron))
+			_, err := c.AddFunc(cfg.Scan.Cron, func() { s.runScanAndUpdate(ctx) })
 			if err != nil {
 				s.logger.Error("cron add failed", zap.Error(err))
 				return
@@ -48,21 +50,6 @@ func (s *Scheduler) Start() {
 			ctx2 := c.Stop()
 			<-ctx2.Done()
 			return
-		}
-
-		// 无 cron：仅按 interval 扫描状态，不执行自动更新
-		for {
-			cfg := config.Get()
-			interval := cfg.Scan.Interval
-			if interval <= 0 {
-				interval = 10 * time.Minute
-			}
-			s.runScanOnly(ctx)
-			select {
-			case <-time.After(interval):
-			case <-ctx.Done():
-				return
-			}
 		}
 	}()
 }
@@ -75,20 +62,8 @@ func (s *Scheduler) Stop() {
 	}
 }
 
-// runScanAndMaybeUpdate 执行扫描；是否自动更新由配置决定（Update.Enabled）。
-func (s *Scheduler) runScanOnly(ctx context.Context) {
-	cfg := config.Get()
-	includeStopped := cfg.Docker.IncludeStopped
-	conc := cfg.Scan.Concurrency
-	statuses, err := s.scanner.ScanOnce(ctx, includeStopped, conc)
-	if err != nil {
-		s.logger.Error("scan failed", zap.Error(err))
-		return
-	}
-	_ = statuses
-}
-
 func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
+	s.logger.Info("开始执行扫描更新任务")
 	cfg := config.Get()
 	includeStopped := cfg.Docker.IncludeStopped
 	conc := cfg.Scan.Concurrency
@@ -97,17 +72,31 @@ func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
 		s.logger.Error("scan failed", zap.Error(err))
 		return
 	}
-	if !cfg.Update.Enabled {
+	s.logger.Info("扫描更新任务完成", zap.Any("statuses", statuses))
+	if !cfg.Scan.IsUpdate {
 		return
 	}
+
+	var updateStatuses []scanner.ContainerStatus = make([]scanner.ContainerStatus, 0)
 	for _, st := range statuses {
 		if st.Skipped || st.Status != "UpdateAvailable" {
 			continue
 		}
+		updateStatuses = append(updateStatuses, st)
+	}
+	if len(updateStatuses) == 0 {
+		s.logger.Info("没有需要更新的容器")
+		return
+	}
+	s.logger.Info("开始执行更新任务")
+	for _, st := range updateStatuses {
 		uctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		s.logger.Info(fmt.Sprintf("开始执行更新任务: %s", st.Name))
 		if err := s.updater.UpdateContainer(uctx, st.ID, st.Image); err != nil {
-			s.logger.Error("auto update failed", zap.String("container", st.Name), zap.Error(err))
+			s.logger.Error(fmt.Sprintf("更新任务失败: %s", st.Name), zap.Error(err))
 		}
+		s.logger.Info(fmt.Sprintf("更新任务完成: %s", st.Name))
 		cancel()
 	}
+	s.logger.Info("更新任务完成")
 }

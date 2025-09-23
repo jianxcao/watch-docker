@@ -88,7 +88,7 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				SkipSemver:         cfg.Policy.SkipSemverPinned,
 				OnlyLabels:         cfg.Policy.OnlyLabels,
 				ExcludeLabels:      cfg.Policy.ExcludeLabels,
-				AllowComposeUpdate: cfg.Update.AllowComposeUpdate,
+				AllowComposeUpdate: cfg.Scan.AllowComposeUpdate,
 			})
 			if dec.Skipped && !dec.Force {
 				st.Skipped = true

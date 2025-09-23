@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -9,23 +10,51 @@ import (
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
-	"github.com/kelseyhightower/envconfig"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
 
+// DurationMinutes 表示以分钟为单位的时间间隔，JSON序列化时以分钟数表示
+type DurationMinutes time.Duration
+
+// MarshalJSON 将时间间隔序列化为分钟数
+func (d DurationMinutes) MarshalJSON() ([]byte, error) {
+	minutes := time.Duration(d).Minutes()
+	return json.Marshal(minutes)
+}
+
+// UnmarshalJSON 从分钟数反序列化时间间隔
+func (d *DurationMinutes) UnmarshalJSON(data []byte) error {
+	var minutes float64
+	if err := json.Unmarshal(data, &minutes); err != nil {
+		return err
+	}
+	*d = DurationMinutes(time.Duration(minutes * float64(time.Minute)))
+	return nil
+}
+
+// Duration 返回标准 time.Duration
+func (d DurationMinutes) Duration() time.Duration {
+	return time.Duration(d)
+}
+
+// String 返回可读的字符串表示
+func (d DurationMinutes) String() string {
+	return time.Duration(d).String()
+}
+
 // ServerConfig HTTP 服务端口等配置
 // addr: 监听地址，例如 ":8080"
 type ServerConfig struct {
-	Addr string `mapstructure:"addr" envconfig:"SERVER_ADDR"`
+	Addr string `mapstructure:"addr" json:"addr"`
 }
 
 // DockerConfig Docker 连接与容器发现相关配置
 // host: Docker API 访问地址（空则走环境变量 DOCKER_HOST / 默认本地）
 // includeStopped: 是否包含已停止容器
 type DockerConfig struct {
-	Host           string `mapstructure:"host" envconfig:"DOCKER_HOST"`
-	IncludeStopped bool   `mapstructure:"includeStopped" envconfig:"DOCKER_INCLUDE_STOPPED"`
+	Host           string `mapstructure:"host" json:"host"`
+	IncludeStopped bool   `mapstructure:"includeStopped" json:"includeStopped"`
 }
 
 // ScanConfig 扫描相关配置
@@ -35,70 +64,66 @@ type DockerConfig struct {
 // concurrency: 并发获取远端 digest 的 worker 数
 // cacheTTL: registry 远端 digest 的缓存 TTL
 type ScanConfig struct {
-	Interval           time.Duration `mapstructure:"interval" envconfig:"SCAN_INTERVAL"`
-	Cron               string        `mapstructure:"cron" envconfig:"SCAN_CRON"`
-	InitialScanOnStart bool          `mapstructure:"initialScanOnStart" envconfig:"SCAN_INITIAL_ON_START"`
-	Concurrency        int           `mapstructure:"concurrency" envconfig:"SCAN_CONCURRENCY"`
-	CacheTTL           time.Duration `mapstructure:"cacheTTL" envconfig:"SCAN_CACHE_TTL"`
-}
-
-// UpdateConfig 自动更新相关配置
-// enabled: 是否允许自动更新
-// autoUpdateCron: 自动更新任务的 cron 表达式
-// allowComposeUpdate: 是否允许更新由 Compose 管理的容器
-// recreateStrategy: 更新策略（recreate/rolling）
-// removeOldContainer: 更新成功后是否删除旧容器
-type UpdateConfig struct {
-	Enabled            bool   `mapstructure:"enabled" envconfig:"UPDATE_ENABLED"`
-	AutoUpdateCron     string `mapstructure:"autoUpdateCron" envconfig:"UPDATE_CRON"`
-	AllowComposeUpdate bool   `mapstructure:"allowComposeUpdate" envconfig:"UPDATE_ALLOW_COMPOSE"`
-	RecreateStrategy   string `mapstructure:"recreateStrategy" envconfig:"UPDATE_STRATEGY"`
-	RemoveOldContainer bool   `mapstructure:"removeOldContainer" envconfig:"UPDATE_REMOVE_OLD"`
+	Cron               string          `mapstructure:"cron" json:"cron"`
+	Concurrency        int             `mapstructure:"concurrency" json:"concurrency"`
+	CacheTTL           DurationMinutes `mapstructure:"cacheTTL" json:"cacheTTL"`
+	IsUpdate           bool            `mapstructure:"isUpdate" json:"isUpdate"`
+	AllowComposeUpdate bool            `mapstructure:"allowComposeUpdate" json:"allowComposeUpdate"`
 }
 
 // PolicyConfig 策略配置
 // skip* 相关开关用于定义默认跳过规则
 // onlyLabels/excludeLabels 为包含/排除的 label 过滤
-// floatingTags 指定哪些 tag 被视为“浮动”，仅这些会被检查更新
+// floatingTags 指定哪些 tag 被视为"浮动"，仅这些会被检查更新
 type PolicyConfig struct {
-	SkipLabels       []string `mapstructure:"skipLabels"`
-	OnlyLabels       []string `mapstructure:"onlyLabels"`
-	ExcludeLabels    []string `mapstructure:"excludeLabels"`
-	SkipLocalBuild   bool     `mapstructure:"skipLocalBuild"`
-	SkipPinnedDigest bool     `mapstructure:"skipPinnedDigest"`
-	SkipSemverPinned bool     `mapstructure:"skipSemverPinned"`
-	FloatingTags     []string `mapstructure:"floatingTags"`
+	SkipLabels       []string `mapstructure:"skipLabels" json:"skipLabels"`
+	OnlyLabels       []string `mapstructure:"onlyLabels" json:"onlyLabels"`
+	ExcludeLabels    []string `mapstructure:"excludeLabels" json:"excludeLabels"`
+	SkipLocalBuild   bool     `mapstructure:"skipLocalBuild" json:"skipLocalBuild"`
+	SkipPinnedDigest bool     `mapstructure:"skipPinnedDigest" json:"skipPinnedDigest"`
+	SkipSemverPinned bool     `mapstructure:"skipSemverPinned" json:"skipSemverPinned"`
+	FloatingTags     []string `mapstructure:"floatingTags" json:"floatingTags"`
 }
 
 // RegistryAuth per-registry 凭据配置
 // host/username/password: 访问私有仓库需要的账号密码（如 ghcr.io）
 type RegistryAuth struct {
-	Host     string `mapstructure:"host" envconfig:"HOST"`
-	Username string `mapstructure:"username" envconfig:"USERNAME"`
-	Password string `mapstructure:"password" envconfig:"PASSWORD"`
+	Host     string `mapstructure:"host" json:"host"`
+	Username string `mapstructure:"username" json:"username"`
+	Password string `mapstructure:"password" json:"password"`
 }
 
 // RegistryConfig registry 相关配置容器
 // auth: 支持配置多个 registry 的凭据
 type RegistryConfig struct {
-	Auth []RegistryAuth `mapstructure:"auth"`
+	Auth []RegistryAuth `mapstructure:"auth" json:"auth"`
+}
+
+// ProxyConfig 代理相关配置
+// url: 代理服务器完整地址，支持以下格式：
+//   - HTTP 代理: http://proxy.example.com:8080
+//   - 带认证的 HTTP 代理: http://user:pass@proxy.example.com:8080
+//   - SOCKS5 代理: socks5://127.0.0.1:1080
+//   - 带认证的 SOCKS5 代理: socks5://user:pass@127.0.0.1:1080
+type ProxyConfig struct {
+	URL string `mapstructure:"url" json:"url"`
 }
 
 // LoggingConfig 日志相关配置
 // level: 日志级别（debug/info/warn/error）
 type LoggingConfig struct {
-	Level string `mapstructure:"level" envconfig:"LOG_LEVEL"`
+	Level string `mapstructure:"level" json:"level"`
 }
 
 // Config 顶层配置聚合
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Docker   DockerConfig   `mapstructure:"docker"`
-	Scan     ScanConfig     `mapstructure:"scan"`
-	Update   UpdateConfig   `mapstructure:"update"`
-	Policy   PolicyConfig   `mapstructure:"policy"`
-	Registry RegistryConfig `mapstructure:"registry"`
-	Logging  LoggingConfig  `mapstructure:"logging"`
+	Server   ServerConfig   `mapstructure:"server" json:"server"`
+	Docker   DockerConfig   `mapstructure:"docker" json:"docker"`
+	Scan     ScanConfig     `mapstructure:"scan" json:"scan"`
+	Policy   PolicyConfig   `mapstructure:"policy" json:"policy"`
+	Registry RegistryConfig `mapstructure:"registry" json:"registry"`
+	Proxy    ProxyConfig    `mapstructure:"proxy" json:"proxy"`
+	Logging  LoggingConfig  `mapstructure:"logging" json:"logging"`
 }
 
 var (
@@ -133,18 +158,11 @@ func defaults() *Config {
 	return &Config{
 		Server: ServerConfig{Addr: ":8080"},
 		Scan: ScanConfig{
-			Interval:           10 * time.Minute,
 			Cron:               "",
-			InitialScanOnStart: true,
 			Concurrency:        3,
-			CacheTTL:           5 * time.Minute,
-		},
-		Update: UpdateConfig{
-			Enabled:            true,
-			AutoUpdateCron:     "",
+			CacheTTL:           DurationMinutes(10 * time.Minute),
+			IsUpdate:           true,
 			AllowComposeUpdate: false,
-			RecreateStrategy:   "recreate",
-			RemoveOldContainer: true,
 		},
 		Policy: PolicyConfig{
 			SkipLabels:       []string{"watchdocker.skip=true"},
@@ -155,6 +173,7 @@ func defaults() *Config {
 			SkipSemverPinned: true,
 			FloatingTags:     []string{"latest", "main", "stable"},
 		},
+		Proxy:   ProxyConfig{}, // 默认不使用代理
 		Logging: LoggingConfig{Level: "info"},
 	}
 }
@@ -177,11 +196,6 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
-	// ENV 覆盖（结构体嵌套使用前缀 WATCH_）
-	if err := envconfig.Process("WATCH", cfg); err != nil {
-		return nil, fmt.Errorf("envconfig: %w", err)
-	}
-
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
@@ -197,11 +211,6 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Scan.Concurrency <= 0 {
 		return fmt.Errorf("scan.concurrency must be > 0")
-	}
-	switch cfg.Update.RecreateStrategy {
-	case "recreate", "rolling":
-	default:
-		return fmt.Errorf("update.recreateStrategy must be one of: recreate, rolling")
 	}
 	return nil
 }

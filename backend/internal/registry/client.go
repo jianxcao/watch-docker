@@ -40,7 +40,12 @@ func New() *Client {
 		SetRetryCount(2).
 		SetRetryWaitTime(500 * time.Millisecond).
 		SetRetryMaxWaitTime(2 * time.Second).
-		SetTimeout(10000 * time.Second)
+		SetTimeout(20 * time.Minute)
+
+	// 应用代理配置
+	if cfg := config.Get(); cfg != nil && cfg.Proxy.URL != "" {
+		httpClient.SetProxy(cfg.Proxy.URL)
+	}
 
 	return &Client{http: httpClient, cache: make(map[string]CacheEntry)}
 }
@@ -122,7 +127,7 @@ func (c *Client) GetRemoteDigests(ctx context.Context, imageRef string) (indexDi
 			}
 			ttl := time.Minute * 5
 			if cfg := config.Get(); cfg != nil && cfg.Scan.CacheTTL > 0 {
-				ttl = cfg.Scan.CacheTTL
+				ttl = cfg.Scan.CacheTTL.Duration()
 			}
 			c.setCache(normalized, indexHeader, ttl)
 			return res{idx: indexHeader, child: digest}, nil
@@ -134,7 +139,7 @@ func (c *Client) GetRemoteDigests(ctx context.Context, imageRef string) (indexDi
 			}
 			ttl := time.Minute * 5
 			if cfg := config.Get(); cfg != nil && cfg.Scan.CacheTTL > 0 {
-				ttl = cfg.Scan.CacheTTL
+				ttl = cfg.Scan.CacheTTL.Duration()
 			}
 			c.setCache(normalized, d, ttl)
 			return res{idx: d, child: d}, nil

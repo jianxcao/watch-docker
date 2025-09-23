@@ -12,13 +12,13 @@
     <div class="settings-content">
       <n-space vertical size="large">
         <!-- 服务器设置 -->
-        <n-card title="服务器设置" embedded>
+        <!-- <n-card title="服务器设置" embedded>
           <n-form :model="configForm" label-placement="left" label-width="120px">
             <n-form-item label="监听地址" disabled>
               <n-input v-model:value="configForm.server.addr" placeholder=":8080" />
             </n-form-item>
           </n-form>
-        </n-card>
+        </n-card> -->
 
         <!-- Docker 设置 -->
         <n-card title="Docker 设置" embedded>
@@ -35,52 +35,28 @@
         <!-- 扫描设置 -->
         <n-card title="扫描设置" embedded>
           <n-form :model="configForm" label-placement="left" label-width="120px">
-            <n-form-item label="扫描间隔">
-              <n-input v-model:value="configForm.scan.interval" placeholder="10m">
-                <template #suffix>
-                  <n-text depth="3">分钟</n-text>
-                </template>
-              </n-input>
-            </n-form-item>
             <n-form-item label="Cron 表达式">
               <n-input v-model:value="configForm.scan.cron" placeholder="0 */10 * * * *" />
-            </n-form-item>
-            <n-form-item label="启动时扫描">
-              <n-switch v-model:value="configForm.scan.initialScanOnStart" />
             </n-form-item>
             <n-form-item label="并发数">
               <n-input-number v-model:value="configForm.scan.concurrency" :min="1" :max="20" />
             </n-form-item>
             <n-form-item label="缓存TTL">
-              <n-input v-model:value="configForm.scan.cacheTTL" placeholder="5m">
+              <n-input-number v-model:value="configForm.scan.cacheTTL" :min="1" placeholder="5">
                 <template #suffix>
                   <n-text depth="3">分钟</n-text>
                 </template>
-              </n-input>
+              </n-input-number>
+            </n-form-item>
+            <n-form-item label="启用自动更新">
+              <n-switch v-model:value="configForm.scan.isUpdate" />
+            </n-form-item>
+            <n-form-item label="允许更新 Compose 容器">
+              <n-switch v-model:value="configForm.scan.allowComposeUpdate" />
             </n-form-item>
           </n-form>
         </n-card>
 
-        <!-- 更新设置 -->
-        <n-card title="更新设置" embedded>
-          <n-form :model="configForm" label-placement="left" label-width="120px">
-            <n-form-item label="启用自动更新">
-              <n-switch v-model:value="configForm.update.enabled" />
-            </n-form-item>
-            <n-form-item label="自动更新 Cron">
-              <n-input v-model:value="configForm.update.autoUpdateCron" placeholder="0 0 2 * * *" />
-            </n-form-item>
-            <n-form-item label="允许更新 Compose 容器">
-              <n-switch v-model:value="configForm.update.allowComposeUpdate" />
-            </n-form-item>
-            <n-form-item label="重建策略">
-              <n-select v-model:value="configForm.update.recreateStrategy" :options="recreateStrategyOptions" />
-            </n-form-item>
-            <n-form-item label="删除旧容器">
-              <n-switch v-model:value="configForm.update.removeOldContainer" />
-            </n-form-item>
-          </n-form>
-        </n-card>
 
         <!-- 策略设置 -->
         <n-card title="策略设置" embedded>
@@ -145,6 +121,10 @@
                 添加仓库认证
               </n-button>
             </n-space>
+
+            <n-alert title="仓库说明" type="info" class="mt-4">
+              私有仓库需要认证才需要配置
+            </n-alert>
           </div>
         </n-card>
 
@@ -200,18 +180,11 @@ const configForm = reactive<Config>({
     includeStopped: false
   },
   scan: {
-    interval: '10m',
     cron: '',
-    initialScanOnStart: true,
     concurrency: 3,
-    cacheTTL: '5m'
-  },
-  update: {
-    enabled: true,
-    autoUpdateCron: '',
-    allowComposeUpdate: false,
-    recreateStrategy: 'recreate',
-    removeOldContainer: true
+    cacheTTL: 10,
+    isUpdate: true,
+    allowComposeUpdate: false
   },
   policy: {
     skipLabels: ['watchdocker.skip=true'],
@@ -231,11 +204,6 @@ const configForm = reactive<Config>({
 })
 
 // 选项配置
-const recreateStrategyOptions = [
-  { label: '重建容器', value: 'recreate' },
-  { label: '滚动更新', value: 'rolling' }
-]
-
 const logLevelOptions = [
   { label: 'Debug', value: 'debug' },
   { label: 'Info', value: 'info' },
