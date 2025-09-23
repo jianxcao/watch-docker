@@ -185,3 +185,8 @@ func (c *Client) RemoveImage(ctx context.Context, ref string, force bool, pruneC
 	_, err := c.docker.ImageRemove(ctx, ref, types.ImageRemoveOptions{Force: force, PruneChildren: pruneChildren})
 	return err
 }
+
+// GetVersion 获取Docker版本信息
+func (c *Client) GetVersion(ctx context.Context) (types.Version, error) {
+	return c.docker.ServerVersion(ctx)
+}

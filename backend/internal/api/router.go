@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -37,7 +38,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	api := r.Group("/api/v1")
 	{
 		api.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, NewSuccessRes(nil)) })
-		api.GET("/readyz", func(c *gin.Context) { c.JSON(http.StatusOK, NewSuccessRes(nil)) })
+		api.GET("/info", s.handleGetInfo())
 		api.GET("/containers", s.handleListContainers())
 		api.POST("/containers/:id/update", s.handleUpdateContainer())
 		api.POST("/updates/run", s.handleBatchUpdate())
@@ -247,6 +248,34 @@ func (s *Server) handleDeleteImage() gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+	}
+}
+
+// handleGetInfo 获取系统信息
+func (s *Server) handleGetInfo() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 获取 Docker 版本信息
+		dockerVersion, err := s.docker.GetVersion(c.Request.Context())
+		if err != nil {
+			s.logger.Error("get docker version", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "无法获取Docker版本信息"))
+			return
+		}
+
+		// 获取当前应用版本
+		envCfg := conf.EnvCfg
+
+		info := gin.H{
+			"dockerVersion":    dockerVersion.Version,
+			"dockerAPIVersion": dockerVersion.APIVersion,
+			"dockerPlatform":   dockerVersion.Platform,
+			"dockerGitCommit":  dockerVersion.GitCommit,
+			"dockerGoVersion":  dockerVersion.GoVersion,
+			"dockerBuildTime":  dockerVersion.BuildTime,
+			"version":          envCfg.VERSION_WATCH_DOCKER,
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"info": info}))
 	}
 }
 
