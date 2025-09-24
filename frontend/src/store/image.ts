@@ -2,25 +2,28 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { imageApi } from '@/common/api'
 import type { ImageInfo } from '@/common/types'
+import { formatSize } from '@/common/utils'
 export const useImageStore = defineStore('image', () => {
   // 状态
   const images = ref<ImageInfo[]>([])
   const loading = ref(false)
   const deleting = ref(new Set<string>())
 
-  // 计算属性
-  const totalImages = computed(() => images.value.length)
-
-  const totalSize = computed(() => images.value.reduce((sum, img) => sum + img.size, 0))
-
-  // 格式化大小的工具函数
-  const formatSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes'
-    const k = 1024
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  // 方法：检查镜像是否为悬空镜像（dangling image）
+  const isDanglingImage = (image: ImageInfo): boolean => {
+    return (
+      !image.repoTags ||
+      image.repoTags.length === 0 ||
+      image.repoTags.every((tag) => tag === '<none>:<none>')
+    )
   }
+
+  const normalImages = computed(() => images.value.filter((image) => !isDanglingImage(image)))
+
+  // 计算属性
+  const totalImages = computed(() => normalImages.value.length)
+
+  const totalSize = computed(() => normalImages.value.reduce((sum, img) => sum + img.size, 0))
 
   // 格式化的总大小
   const formattedTotalSize = computed(() => formatSize(totalSize.value))
@@ -98,15 +101,6 @@ export const useImageStore = defineStore('image', () => {
     return image.id.startsWith('sha256:') ? image.id.slice(7, 19) : image.id.slice(0, 12)
   }
 
-  // 方法：检查镜像是否为悬空镜像（dangling image）
-  const isDanglingImage = (image: ImageInfo): boolean => {
-    return (
-      !image.repoTags ||
-      image.repoTags.length === 0 ||
-      image.repoTags.every((tag) => tag === '<none>:<none>')
-    )
-  }
-
   // 计算悬空镜像
   const danglingImages = computed(() => images.value.filter((img) => isDanglingImage(img)))
 
@@ -133,6 +127,7 @@ export const useImageStore = defineStore('image', () => {
   return {
     // 状态
     images,
+    normalImages,
     loading,
     deleting,
 

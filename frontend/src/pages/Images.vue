@@ -8,7 +8,7 @@
           <n-text depth="3">
             共 {{ imageStore.stats.total }} 个镜像，
             总大小 {{ imageStore.stats.formattedTotalSize }}，
-            {{ imageStore.danglingImages.length }} 个悬空镜像
+            <!-- {{ imageStore.danglingImages.length }} 个悬空镜像 -->
           </n-text>
         </div>
 
@@ -23,14 +23,14 @@
           </n-input>
 
           <!-- 批量删除悬空镜像 -->
-          <n-button v-if="imageStore.danglingImages.length > 0" @click="handleDeleteDangling" type="warning" ghost>
+          <!-- <n-button v-if="imageStore.danglingImages.length > 0" @click="handleDeleteDangling" type="warning" ghost>
             <template #icon>
               <n-icon>
                 <TrashOutline />
               </n-icon>
             </template>
             清理悬空镜像
-          </n-button>
+          </n-button> -->
 
           <!-- 刷新按钮 -->
           <n-button @click="handleRefresh" :loading="imageStore.loading" circle>
@@ -182,7 +182,7 @@ const searchKeyword = ref('')
 
 // 过滤后的镜像列表
 const filteredImages = computed(() => {
-  let images = imageStore.images
+  let images = imageStore.normalImages
 
   // 搜索过滤
   if (searchKeyword.value) {
@@ -223,9 +223,9 @@ const handleDelete = async (image: ImageInfo, force: boolean = false) => {
   await imageHooks.handleDelete(image, force)
 }
 
-const handleDeleteDangling = async () => {
-  await imageHooks.handleDeleteDangling()
-}
+// const handleDeleteDangling = async () => {
+//   await imageHooks.handleDeleteDangling()
+// }
 
 const handleRefresh = async () => {
   await imageHooks.handleRefresh()

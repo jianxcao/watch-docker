@@ -69,9 +69,9 @@
             <n-descriptions-item label="总大小">
               <n-text>{{ imageStore.stats.formattedTotalSize }}</n-text>
             </n-descriptions-item>
-            <n-descriptions-item label="悬空镜像">
+            <!-- <n-descriptions-item label="悬空镜像">
               <n-text type="warning">{{ imageStore.danglingImages.length }}</n-text>
-            </n-descriptions-item>
+            </n-descriptions-item> -->
           </n-descriptions>
         </n-space>
 
@@ -121,7 +121,7 @@
           批量更新容器 ({{ containerStore.updateableContainers.length }})
         </n-button>
 
-        <n-button v-if="imageStore.danglingImages.length > 0" type="warning" size="large"
+        <!-- <n-button v-if="imageStore.danglingImages.length > 0" type="warning" size="large"
           @click="handleCleanDanglingImages">
           <template #icon>
             <n-icon>
@@ -129,7 +129,7 @@
             </n-icon>
           </template>
           清理悬空镜像 ({{ imageStore.danglingImages.length }})
-        </n-button>
+        </n-button> -->
 
         <n-button type="primary" size="large" @click="handleRefreshAll" :loading="appStore.globalLoading">
           <template #icon>
@@ -183,7 +183,7 @@ import {
   LayersOutline,
   ArchiveOutline,
   CloudDownloadOutline,
-  TrashOutline,
+  // TrashOutline,
   RefreshOutline,
   CheckmarkCircleOutline,
   CloseCircleOutline,
@@ -252,9 +252,9 @@ const handleBatchUpdate = async () => {
   await containerHooks.handleBatchUpdate()
 }
 
-const handleCleanDanglingImages = async () => {
-  await imageHooks.handleDeleteDangling()
-}
+// const handleCleanDanglingImages = async () => {
+//   await imageHooks.handleDeleteDangling()
+// }
 
 const handleRefreshAll = async () => {
   appStore.setGlobalLoading(true)
