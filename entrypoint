@@ -1,0 +1,52 @@
+#!/bin/sh
+
+# 设置默认配置路径和文件名
+: ${CONFIG_PATH:=/config}
+: ${CONFIG_FILE:=config.yaml}
+
+# 拼接完整的配置文件路径
+FULL_CONFIG_PATH="${CONFIG_PATH}/${CONFIG_FILE}"
+
+echo "Using config path: $CONFIG_PATH"
+echo "Using config file: $CONFIG_FILE"
+echo "Full config file path: $FULL_CONFIG_PATH"
+
+# 配置目录就是CONFIG_PATH
+CONFIG_DIR="$CONFIG_PATH"
+
+# 确保配置目录存在
+if [ ! -d "$CONFIG_DIR" ]; then
+    echo "Creating config directory: $CONFIG_DIR"
+    mkdir -p "$CONFIG_DIR"
+fi
+
+# 检查并设置PGID和PUID的默认值
+: ${PGID:=1000}
+: ${PUID:=1000}
+
+echo "Setting PGID to $PGID and PUID to $PUID"
+
+# 修改组ID
+if [ "$PGID" != "1000" ]; then
+    groupmod -o -g "${PGID}" watch-docker
+fi
+
+# 修改用户ID
+if [ "$PUID" != "1000" ]; then
+    usermod -o -u "${PUID}" watch-docker
+fi
+
+chown -R watch-docker:watch-docker \
+    "${HOME}" \
+    /app \
+    "$CONFIG_DIR" 
+
+# 设置默认umask
+: ${UMASK:=022}
+umask "${UMASK}"
+
+echo "Starting notification service as watch-docker user (${PUID}:${PGID})"
+
+
+# 启动后端服务
+exec gosu watch-docker:watch-docker /app/watch-docker
