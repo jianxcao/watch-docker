@@ -43,6 +43,11 @@ const router = createRouter({
           component: () => import('@/pages/Settings.vue'),
           meta: { title: '系统设置', requiresAuth: true },
         },
+        {
+          path: '/logs',
+          component: () => import('@/pages/LogsPage.vue'),
+          meta: { title: '日志', requiresAuth: true },
+        },
       ],
     },
 

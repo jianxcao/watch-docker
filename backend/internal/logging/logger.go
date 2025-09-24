@@ -30,20 +30,43 @@ func NewLogger(level string, format string, file string) (*zap.Logger, error) {
 		logLevel = zapcore.ErrorLevel
 	}
 
+	// 配置 Encoder
+	encoderConfig := zapcore.EncoderConfig{
+		TimeKey:        "time",                           // 时间字段的键
+		LevelKey:       "level",                          // 日志级别字段的键
+		NameKey:        "logger",                         // 日志名称字段的键
+		CallerKey:      "caller",                         // 调用者字段的键
+		MessageKey:     "msg",                            // 消息字段的键
+		StacktraceKey:  "stacktrace",                     // 堆栈字段的键
+		LineEnding:     zapcore.DefaultLineEnding,        // 行结尾
+		EncodeLevel:    zapcore.CapitalColorLevelEncoder, // 日志级别格式化
+		EncodeTime:     zapcore.ISO8601TimeEncoder,       // 时间格式化
+		EncodeDuration: zapcore.StringDurationEncoder,    // 时长格式化
+		EncodeCaller:   zapcore.ShortCallerEncoder,       // 调用者格式化
+	}
+	jsonEncoderConfig := zapcore.EncoderConfig{
+		TimeKey:        "time",                         // 时间字段的键
+		LevelKey:       "level",                        // 日志级别字段的键
+		NameKey:        "logger",                       // 日志名称字段的键
+		CallerKey:      "caller",                       // 调用者字段的键
+		MessageKey:     "msg",                          // 消息字段的键
+		LineEnding:     zapcore.DefaultLineEnding,      // 行结尾
+		EncodeLevel:    zapcore.CapitalLevelEncoder,    // 日志级别格式化
+		EncodeTime:     zapcore.EpochMillisTimeEncoder, // 时间格式化
+		EncodeDuration: zapcore.StringDurationEncoder,  // 时长格式化
+		EncodeCaller:   zapcore.ShortCallerEncoder,     // 调用者格式化
+	}
+
 	// Create atomic level with initial value
 	atomicLevel = zap.NewAtomicLevelAt(logLevel)
 
-	// Create encoder config
-	encoderConfig := zap.NewProductionEncoderConfig()
-	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
-
+	jsonEncoder := zapcore.NewJSONEncoder(jsonEncoderConfig)
 	// Choose encoder based on format
 	var encoder zapcore.Encoder
 	if format == "console" {
 		encoder = zapcore.NewConsoleEncoder(encoderConfig)
 	} else {
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
+		encoder = jsonEncoder
 	}
 
 	// Create write syncer
@@ -65,9 +88,10 @@ func NewLogger(level string, format string, file string) (*zap.Logger, error) {
 
 	// Create core with atomic level
 	core := zapcore.NewCore(encoder, writeSyncer, atomicLevel)
-
+	channelCore := zapcore.NewCore(jsonEncoder, zapcore.AddSync(&ChannelWriter{}), atomicLevel)
+	teeCore := zapcore.NewTee(core, channelCore)
 	// Create logger
-	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
+	logger := zap.New(teeCore, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
 	Logger = logger
 	return logger, nil
 }

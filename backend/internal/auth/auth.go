@@ -67,25 +67,32 @@ func AuthMiddleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		token := c.Query("token")
+		if token == "" {
+			// 获取 Authorization header
+			authHeader := c.GetHeader("Authorization")
+			if authHeader == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "需要登录"})
+				c.Abort()
+				return
+			}
 
-		// 获取 Authorization header
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+			// 检查 Bearer token 格式
+			tokenParts := strings.SplitN(authHeader, " ", 2)
+			if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token格式"})
+				c.Abort()
+				return
+			}
+			token = tokenParts[1]
+		}
+		if token == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "需要登录"})
 			c.Abort()
 			return
 		}
-
-		// 检查 Bearer token 格式
-		tokenParts := strings.SplitN(authHeader, " ", 2)
-		if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token格式"})
-			c.Abort()
-			return
-		}
-
 		// 验证 token
-		claims, err := ValidateToken(tokenParts[1])
+		claims, err := ValidateToken(token)
 		if err != nil {
 			if errors.Is(err, ErrTokenExpired) {
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "token已过期"})

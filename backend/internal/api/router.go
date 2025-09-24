@@ -33,7 +33,7 @@ type Server struct {
 func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(ginzap(logger))
+	// r.Use(ginzap(logger))
 
 	s := &Server{logger: logger, docker: docker, registry: reg, scanner: sc, updater: updater.New(docker), scheduler: sch}
 
@@ -62,20 +62,21 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.DELETE("/images", s.handleDeleteImage())
 		protected.GET("/config", s.handleGetConfig())
 		protected.POST("/config", s.handleSaveConfig())
+		protected.GET("/logs", s.handleLogStream)
 	}
 	return r
 }
 
 // simple logging middleware using zap
-func ginzap(logger *zap.Logger) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		path := c.Request.URL.Path
-		method := c.Request.Method
-		c.Next()
-		status := c.Writer.Status()
-		logger.Info("http", zap.String("method", method), zap.String("path", path), zap.Int("status", status))
-	}
-}
+// func ginzap(logger *zap.Logger) gin.HandlerFunc {
+// 	return func(c *gin.Context) {
+// 		path := c.Request.URL.Path
+// 		method := c.Request.Method
+// 		c.Next()
+// 		status := c.Writer.Status()
+// 		logger.Info("页面请求", zap.String("method", method), zap.String("path", path), zap.Int("status", status))
+// 	}
+// }
 
 func (s *Server) handleUpdateContainer() gin.HandlerFunc {
 	type reqBody struct {
@@ -386,5 +387,41 @@ func (s *Server) handleAuthStatus() gin.HandlerFunc {
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"authEnabled": auth.IsAuthEnabled(),
 		}))
+	}
+}
+
+// handleLogStream 处理日志 SSE 流
+func (s *Server) handleLogStream(c *gin.Context) {
+	// 设置SSE相关头部
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("Transfer-Encoding", "chunked")
+
+	// 订阅日志
+	ch := logger.Subscribe()
+	defer logger.Unsubscribe(ch)
+
+	// 将请求上下文用于取消
+	ctx := c.Request.Context()
+
+	// 简单心跳，防止某些代理超时
+	c.Writer.Flush()
+
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			// 发送事件
+			c.SSEvent("message", msg)
+			// 手动刷新
+			if f, ok := c.Writer.(http.Flusher); ok {
+				f.Flush()
+			}
+		case <-ctx.Done():
+			return
+		}
 	}
 }
