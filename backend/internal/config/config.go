@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -115,15 +116,24 @@ type LoggingConfig struct {
 	Level string `mapstructure:"level" json:"level"`
 }
 
+// NotificationConfig 通知相关配置
+// url: 通知地址，仅支持配置一个；允许使用占位符 {title}/{content}/{text}
+// method: 请求方法，仅允许 GET 或 POST
+type NotificationConfig struct {
+	URL    string `mapstructure:"url" json:"url"`
+	Method string `mapstructure:"method" json:"method"`
+}
+
 // Config 顶层配置聚合
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server" json:"server"`
-	Docker   DockerConfig   `mapstructure:"docker" json:"docker"`
-	Scan     ScanConfig     `mapstructure:"scan" json:"scan"`
-	Policy   PolicyConfig   `mapstructure:"policy" json:"policy"`
-	Registry RegistryConfig `mapstructure:"registry" json:"registry"`
-	Proxy    ProxyConfig    `mapstructure:"proxy" json:"proxy"`
-	Logging  LoggingConfig  `mapstructure:"logging" json:"logging"`
+	Server   ServerConfig       `mapstructure:"server" json:"server"`
+	Docker   DockerConfig       `mapstructure:"docker" json:"docker"`
+	Scan     ScanConfig         `mapstructure:"scan" json:"scan"`
+	Policy   PolicyConfig       `mapstructure:"policy" json:"policy"`
+	Registry RegistryConfig     `mapstructure:"registry" json:"registry"`
+	Proxy    ProxyConfig        `mapstructure:"proxy" json:"proxy"`
+	Logging  LoggingConfig      `mapstructure:"logging" json:"logging"`
+	Notify   NotificationConfig `mapstructure:"notify" json:"notify"`
 }
 
 var (
@@ -175,6 +185,7 @@ func defaults() *Config {
 		},
 		Proxy:   ProxyConfig{}, // 默认不使用代理
 		Logging: LoggingConfig{Level: "info"},
+		Notify:  NotificationConfig{Method: http.MethodGet},
 	}
 }
 
@@ -211,6 +222,17 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Scan.Concurrency <= 0 {
 		return fmt.Errorf("scan.concurrency must be > 0")
+	}
+	if strings.TrimSpace(cfg.Notify.URL) != "" {
+		method := strings.ToUpper(strings.TrimSpace(cfg.Notify.Method))
+		switch method {
+		case http.MethodGet, http.MethodPost:
+			cfg.Notify.Method = method
+		case "":
+			cfg.Notify.Method = http.MethodGet
+		default:
+			return fmt.Errorf("notify.method must be GET or POST")
+		}
 	}
 	return nil
 }

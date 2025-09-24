@@ -58,6 +58,10 @@ export interface Config {
   server: {
     addr: string
   }
+  notify: {
+    url: string
+    method: 'GET' | 'POST'
+  }
   docker: {
     host: string
     includeStopped: boolean

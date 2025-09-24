@@ -20,6 +20,21 @@
           </n-form>
         </n-card> -->
 
+        <!-- 通知设置 -->
+        <n-card title="通知设置" embedded>
+          <n-form :model="configForm" label-placement="left" label-width="120px">
+            <n-form-item label="通知地址">
+              <n-input v-model:value="configForm.notify.url" :placeholder="notifyUrlPlaceholder" />
+            </n-form-item>
+            <n-form-item label="请求方法">
+              <n-select v-model:value="configForm.notify.method" :options="notifyMethodOptions" placeholder="选择请求方法" />
+            </n-form-item>
+            <n-alert title="占位符说明" type="info" class="mt-2">
+              支持在查询参数或路径中使用 title={title}、content={content}、url={url}、image={image} 占位符
+            </n-alert>
+          </n-form>
+        </n-card>
+
         <!-- Docker 设置 -->
         <n-card title="Docker 设置" embedded>
           <n-form :model="configForm" label-placement="left" label-width="120px">
@@ -170,10 +185,23 @@ const message = useMessage()
 // 保存状态
 const saving = ref(false)
 
+const notifyUrlPlaceholder = computed(() => {
+  const host = 'http://127.0.0.1:8080'
+  if (configForm.notify.method == 'GET') {
+    return `${host}/notify?title={title}&content={content}&url={url}&image={image}`
+  } else {
+    return `${host}/notify`
+  }
+})
+
 // 表单数据
 const configForm = reactive<Config>({
   server: {
     addr: ':8080'
+  },
+  notify: {
+    url: '',
+    method: 'GET'
   },
   docker: {
     host: '',
@@ -209,6 +237,11 @@ const logLevelOptions = [
   { label: 'Info', value: 'info' },
   { label: 'Warn', value: 'warn' },
   { label: 'Error', value: 'error' }
+]
+
+const notifyMethodOptions = [
+  { label: 'GET', value: 'GET' },
+  { label: 'POST', value: 'POST' }
 ]
 
 // 添加仓库认证
