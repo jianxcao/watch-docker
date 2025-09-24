@@ -24,3 +24,5 @@ frontend/dev-dist/*
 .vite
 __debug*
 frontend/dist
+
+test.sh

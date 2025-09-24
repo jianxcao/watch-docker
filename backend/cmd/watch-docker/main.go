@@ -15,6 +15,8 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"github.com/jianxcao/watch-docker/backend/internal/notificationmanager"
+	"github.com/jianxcao/watch-docker/backend/internal/notify"
 	"github.com/jianxcao/watch-docker/backend/internal/registry"
 	"github.com/jianxcao/watch-docker/backend/internal/scanner"
 	"github.com/jianxcao/watch-docker/backend/internal/scheduler"
@@ -47,8 +49,12 @@ func main() {
 	reg := registry.New()
 	sc := scanner.New(dockerClient, reg)
 
+	// init notification system
+	notifier := notify.New(func() *config.Config { return cfg })
+	notificationManager := notificationmanager.New(notifier, path.Join(conf.EnvCfg.CONFIG_PATH, "notification-history.json"))
+
 	// start scheduler
-	sch := scheduler.New(log, sc, updater.New(dockerClient))
+	sch := scheduler.New(log, sc, updater.New(dockerClient), notificationManager)
 	sch.Start()
 
 	r := api.NewRouter(log, dockerClient, reg, sc, sch)
@@ -77,6 +83,8 @@ func main() {
 	logger.Logger.Info("shutting down http server")
 	// stop scheduler
 	sch.Stop()
+	// close notification manager (flush pending notifications)
+	notificationManager.Close()
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Logger.Error("server shutdown error", logger.ZapErr(err))
 	}

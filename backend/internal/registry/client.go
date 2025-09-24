@@ -113,6 +113,7 @@ func (c *Client) GetRemoteDigests(ctx context.Context, imageRef string, isUserCa
 		}
 
 		if resp.IsError() {
+			logger.Logger.Error("get remote digest", logger.ZapField("endpoint", endpoint), zap.Int("StatusCode", resp.StatusCode()), logger.ZapErr(fmt.Errorf("registry error: %s", resp.Status())))
 			return nil, fmt.Errorf("registry error: %s", resp.Status())
 		}
 
@@ -193,6 +194,7 @@ func (c *Client) fetchBearerToken(ctx context.Context, host, repo, wwwAuth strin
 			}
 		}
 	}
+	logger.Logger.Info("fetch bearer token", logger.ZapField("url", u.String()))
 	tr, err := req.Get(u.String())
 	if err != nil {
 		return "", err

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/config"
+	"github.com/jianxcao/watch-docker/backend/internal/notificationmanager"
 	"github.com/jianxcao/watch-docker/backend/internal/scanner"
 	"github.com/jianxcao/watch-docker/backend/internal/updater"
 
@@ -15,15 +16,21 @@ import (
 
 // Scheduler 负责周期扫描与按 cron 自动更新
 type Scheduler struct {
-	logger  *zap.Logger
-	scanner *scanner.Scanner
-	updater *updater.Updater
+	logger              *zap.Logger
+	scanner             *scanner.Scanner
+	updater             *updater.Updater
+	notificationManager *notificationmanager.Manager
 
 	cancel context.CancelFunc
 }
 
-func New(logger *zap.Logger, sc *scanner.Scanner, up *updater.Updater) *Scheduler {
-	return &Scheduler{logger: logger, scanner: sc, updater: up}
+func New(logger *zap.Logger, sc *scanner.Scanner, up *updater.Updater, nm *notificationmanager.Manager) *Scheduler {
+	return &Scheduler{
+		logger:              logger,
+		scanner:             sc,
+		updater:             up,
+		notificationManager: nm,
+	}
 }
 
 // Start 启动调度器：优先使用 cron；未配置 cron 时退回到 interval 定时器。
@@ -73,6 +80,22 @@ func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
 		return
 	}
 	s.logger.Info("扫描更新任务完成", zap.Any("statuses", statuses))
+
+	// 通知有更新可用的容器
+	if s.notificationManager != nil {
+		var updateAvailableContainers []scanner.ContainerStatus
+		for _, st := range statuses {
+			if st.Status == "UpdateAvailable" && !st.Skipped {
+				updateAvailableContainers = append(updateAvailableContainers, st)
+			}
+		}
+		if len(updateAvailableContainers) > 0 {
+			if err := s.notificationManager.NotifyUpdateAvailable(ctx, updateAvailableContainers); err != nil {
+				s.logger.Error("发送更新可用通知失败", zap.Error(err))
+			}
+		}
+	}
+
 	if !cfg.Scan.IsUpdate {
 		return
 	}
@@ -94,8 +117,21 @@ func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
 		s.logger.Info(fmt.Sprintf("开始执行更新任务: %s", st.Name))
 		if err := s.updater.UpdateContainer(uctx, st.ID, st.Image); err != nil {
 			s.logger.Error(fmt.Sprintf("更新任务失败: %s", st.Name), zap.Error(err))
+			// 通知更新失败
+			if s.notificationManager != nil {
+				if notifyErr := s.notificationManager.NotifyUpdateFailed(ctx, st.Name, st.Image, err.Error()); notifyErr != nil {
+					s.logger.Error("发送更新失败通知失败", zap.Error(notifyErr))
+				}
+			}
+		} else {
+			s.logger.Info(fmt.Sprintf("更新任务完成: %s", st.Name))
+			// 通知更新成功
+			if s.notificationManager != nil {
+				if notifyErr := s.notificationManager.NotifyUpdateSuccess(ctx, st.Name, st.Image); notifyErr != nil {
+					s.logger.Error("发送更新成功通知失败", zap.Error(notifyErr))
+				}
+			}
 		}
-		s.logger.Info(fmt.Sprintf("更新任务完成: %s", st.Name))
 		cancel()
 	}
 	s.logger.Info("更新任务完成")
