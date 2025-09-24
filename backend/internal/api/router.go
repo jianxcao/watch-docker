@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -64,6 +66,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.POST("/config", s.handleSaveConfig())
 		protected.GET("/logs", s.handleLogStream)
 	}
+	s.setupStaticRoutes(r)
 	return r
 }
 
@@ -424,4 +427,48 @@ func (s *Server) handleLogStream(c *gin.Context) {
 			return
 		}
 	}
+}
+
+// setupStaticRoutes 设置静态文件路由 (前端资源)
+func (s *Server) setupStaticRoutes(r *gin.Engine) {
+	// 静态文件目录
+	staticDir := conf.EnvCfg.STATIC_DIR
+
+	// 检查静态文件目录是否存在
+	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
+		logger.Logger.Warn(fmt.Sprintf("静态文件目录不存在，跳过前端资源服务: %s", staticDir))
+		return
+	}
+
+	logger.Logger.Info(fmt.Sprintf("启用前端静态文件服务, dir=%s", staticDir))
+
+	// 根路径重定向到index.html
+	r.GET("/", func(c *gin.Context) {
+		c.File(filepath.Join(staticDir, "index.html"))
+	})
+	r.HEAD("/", func(c *gin.Context) {
+		// HEAD请求只返回头部，不需要文件内容
+		c.Status(http.StatusOK)
+	})
+
+	// 处理所有非API路径的静态文件服务
+	r.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+
+		// 如果是API请求，返回404
+		if path == "/api" || strings.HasPrefix(path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})
+			return
+		}
+		fs := gin.Dir(staticDir, false)
+		fileServerStatic := http.StripPrefix("/", http.FileServer(fs))
+		file, err := fs.Open(c.Request.URL.Path)
+		if err != nil {
+			c.File(filepath.Join(staticDir, "index.html"))
+			return
+		} else {
+			fileServerStatic.ServeHTTP(c.Writer, c.Request)
+		}
+		defer file.Close()
+	})
 }

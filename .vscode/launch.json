@@ -8,7 +8,8 @@
             "mode": "auto",
             "program": "${workspaceFolder}/backend/cmd/watch-docker/main.go",
             "env": {
-                "CONFIG_PATH": "./.config"
+                "CONFIG_PATH": "./.config",
+                "STATIC_DIR": "${workspaceFolder}/frontend/dist"
             },
             "cwd": "${workspaceFolder}/backend"
         }

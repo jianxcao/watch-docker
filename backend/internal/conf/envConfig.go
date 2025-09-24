@@ -12,6 +12,7 @@ type EnvConfig struct {
 	VERSION_WATCH_DOCKER string `default:"v0.0.1"`
 	USER_NAME            string `default:"admin"`
 	USER_PASSWORD        string `default:"admin"`
+	STATIC_DIR           string `default:"/app/static"`
 }
 
 func NewEnvConfig() *EnvConfig {

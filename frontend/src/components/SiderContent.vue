@@ -64,6 +64,7 @@ import { useAppStore } from '@/store/app'
 import { useAuthStore } from '@/store/auth'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
+import { useSettingStore } from '@/store/setting'
 import type { MenuOption } from 'naive-ui'
 import { useMessage } from 'naive-ui'
 import {
@@ -91,9 +92,10 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const containerStore = useContainerStore()
 const imageStore = useImageStore()
+const settingStore = useSettingStore()
 
 // 版本信息
-const version = '0.0.1'
+const version = computed(() => settingStore.systemInfo?.version)
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
