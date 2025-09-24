@@ -15,7 +15,7 @@
             <n-text class="image-text" :depth="2">{{ container.image }}</n-text>
           </n-descriptions-item>
 
-          <n-descriptions-item label="当前摘要" v-if="container.currentDigest">
+          <!-- <n-descriptions-item label="当前摘要" v-if="container.currentDigest">
             <n-tooltip>
               <template #trigger>
                 <n-text code class="digest-text cursor-pointer">{{ formatDigest(container.currentDigest) }}</n-text>
@@ -31,12 +31,61 @@
               </template>
               {{ container.remoteDigest }}
             </n-tooltip>
-          </n-descriptions-item>
+          </n-descriptions-item> -->
 
           <n-descriptions-item label="最后检查">
             <n-text :depth="3">{{ formatTime(container.lastCheckedAt) }}</n-text>
           </n-descriptions-item>
         </n-descriptions>
+      </div>
+
+      <!-- 资源使用情况 -->
+      <div v-if="container.running && container.stats" class="container-stats">
+        <n-divider style="margin: 12px 0;" />
+        <n-space vertical size="small">
+          <div class="stats-header">
+            <n-text strong style="font-size: 12px;">资源使用情况</n-text>
+          </div>
+
+          <!-- CPU使用率 -->
+          <div class="stat-item">
+            <n-space justify="space-between" align="center">
+              <n-text style="font-size: 11px;">CPU</n-text>
+              <n-text style="font-size: 11px;">{{ formatPercent(container.stats.cpuPercent) }}</n-text>
+            </n-space>
+            <n-progress :percentage="Math.min(container.stats.cpuPercent, 100)" :show-indicator="false" :height="4"
+              :color="getCpuColor(container.stats.cpuPercent)" />
+          </div>
+
+          <!-- 内存使用率 -->
+          <div class="stat-item">
+            <n-space justify="space-between" align="center">
+              <n-text style="font-size: 11px;">内存</n-text>
+              <n-text style="font-size: 11px;">{{ formatBytes(container.stats.memoryUsage) }} / {{
+                formatBytes(container.stats.memoryLimit) }}</n-text>
+            </n-space>
+            <n-progress :percentage="Math.min(container.stats.memoryPercent, 100)" :show-indicator="false" :height="4"
+              :color="getMemoryColor(container.stats.memoryPercent)" />
+          </div>
+
+          <!-- 网络流量 -->
+          <div class="stat-item">
+            <n-space justify="space-between" align="center">
+              <n-text style="font-size: 11px;">网络</n-text>
+              <n-text style="font-size: 11px;">↓{{ formatBytes(container.stats.networkRx) }} ↑{{
+                formatBytes(container.stats.networkTx) }}</n-text>
+            </n-space>
+          </div>
+
+          <!-- 进程数 -->
+          <div class="stat-item" v-if="container.stats.pidsLimit > 0">
+            <n-space justify="space-between" align="center">
+              <n-text style="font-size: 11px;">进程</n-text>
+              <n-text style="font-size: 11px;">{{ container.stats.pidsCurrent }} / {{ container.stats.pidsLimit
+                }}</n-text>
+            </n-space>
+          </div>
+        </n-space>
       </div>
 
       <!-- 跳过原因 -->
@@ -117,6 +166,7 @@ import { useContainerStore } from '@/store/container'
 import StatusBadge from './StatusBadge.vue'
 import dayjs from 'dayjs'
 import type { ContainerStatus } from '@/common/types'
+import { formatPercent, formatBytes, getCpuColor, getMemoryColor } from '@/common/utils'
 import {
   PlayCircleOutline,
   StopCircleOutline,
@@ -151,12 +201,12 @@ const isUpdating = computed(() =>
 )
 
 // 格式化摘要显示
-const formatDigest = (digest: string): string => {
-  if (digest.startsWith('sha256:')) {
-    return digest.slice(7, 19) + '...'
-  }
-  return digest.slice(0, 12) + '...'
-}
+// const formatDigest = (digest: string): string => {
+//   if (digest.startsWith('sha256:')) {
+//     return digest.slice(7, 19) + '...'
+//   }
+//   return digest.slice(0, 12) + '...'
+// }
 
 // 格式化时间显示
 const formatTime = (timeStr: string): string => {
@@ -190,12 +240,12 @@ const hiddenLabelsCount = computed(() => {
 // 标签文本截断相关
 const maxLabelLength = 30
 
-
-
 const isLabelTruncated = (key: string, value: string): boolean => {
   const fullText = `${key}=${value}`
   return fullText.length > maxLabelLength
 }
+
+
 </script>
 
 <style scoped lang="less">
@@ -237,6 +287,20 @@ const isLabelTruncated = (key: string, value: string): boolean => {
   overflow: hidden;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.container-stats {
+  .stats-header {
+    margin-bottom: 8px;
+  }
+
+  .stat-item {
+    margin-bottom: 6px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
 }
 
 // 响应式调整

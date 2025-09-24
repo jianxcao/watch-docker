@@ -2,15 +2,19 @@ services:
   watch-docker:
     image: jianxcao/watch-docker:latest 
     container_name: watch-docker
+    hostname: watch-docker
+    # 自己无法更新自己，会死求的
+    labels:
+      - "watchdocker.skip=true"
     ports:
       - "8080:8080"
     volumes:
-      - /volume1/docker-data/watch-docker:/config
+      - /volume1/watch-docker:/config
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - TZ=Asia/Shanghai
       - USER_NAME=admin
-      - USER_PASSWORD=Cidsic-sisjad-ryzmu1
+      - USER_PASSWORD=admin
       - PUID=0
       - PGID=0
       - UMASK=0000

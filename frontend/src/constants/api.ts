@@ -12,6 +12,7 @@ export const API_ENDPOINTS = {
 
   // 容器相关
   CONTAINERS: '/containers',
+  CONTAINERS_STATS: '/containers/stats',
   CONTAINER_UPDATE: (id: string) => `/containers/${id}/update`,
   CONTAINER_START: (id: string) => `/containers/${id}/start`,
   CONTAINER_STOP: (id: string) => `/containers/${id}/stop`,

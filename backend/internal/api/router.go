@@ -55,6 +55,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	{
 
 		protected.GET("/containers", s.handleListContainers())
+		protected.POST("/containers/stats", s.handleGetContainersStats())
 		protected.POST("/containers/:id/update", s.handleUpdateContainer())
 		protected.POST("/updates/run", s.handleBatchUpdate())
 		protected.POST("/containers/:id/stop", s.handleStopContainer())
@@ -183,6 +184,38 @@ func (s *Server) handleListContainers() gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"containers": statuses}))
+	}
+}
+
+func (s *Server) handleGetContainersStats() gin.HandlerFunc {
+	type reqBody struct {
+		ContainerIDs []string `json:"containerIds" binding:"required"`
+	}
+
+	return func(c *gin.Context) {
+		var body reqBody
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid request body"))
+			return
+		}
+
+		if len(body.ContainerIDs) == 0 {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "container ids required"))
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+
+		// 获取容器统计信息
+		statsMap, err := s.docker.GetContainersStats(ctx, body.ContainerIDs)
+		if err != nil {
+			s.logger.Error("get containers stats failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "获取容器统计信息失败"))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"stats": statsMap}))
 	}
 }
 

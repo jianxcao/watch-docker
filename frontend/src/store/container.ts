@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { containerApi } from '@/common/api'
-import type { ContainerStatus, BatchUpdateResult } from '@/common/types'
+import type { ContainerStatus, ContainerStats, BatchUpdateResult } from '@/common/types'
 
 export const useContainerStore = defineStore('container', () => {
   // 状态
@@ -157,6 +157,45 @@ export const useContainerStore = defineStore('container', () => {
     return updating.value.has(id)
   }
 
+  // 方法：获取容器统计信息
+  const fetchContainersStats = async (
+    containerIds: string[]
+  ): Promise<Record<string, ContainerStats>> => {
+    try {
+      const data = await containerApi.getContainersStats(containerIds)
+      if (data.code === 0) {
+        return data.data.stats
+      } else {
+        console.error('获取容器统计信息失败:', data.msg)
+        throw new Error(data.msg)
+      }
+    } catch (error) {
+      console.error('获取容器统计信息失败:', error)
+      throw error
+    }
+  }
+
+  // 方法：更新容器统计信息
+  const updateContainersStats = async () => {
+    const runningContainers = containers.value.filter((c) => c.running)
+    if (runningContainers.length === 0) return
+
+    try {
+      const containerIds = runningContainers.map((c) => c.id)
+      const statsMap = await fetchContainersStats(containerIds)
+
+      // 更新容器统计信息
+      containers.value = containers.value.map((container) => {
+        if (container.running && statsMap[container.id]) {
+          return { ...container, stats: statsMap[container.id] }
+        }
+        return container
+      })
+    } catch (error) {
+      console.error('更新容器统计信息失败:', error)
+    }
+  }
+
   return {
     // 状态
     containers,
@@ -183,5 +222,7 @@ export const useContainerStore = defineStore('container', () => {
     findContainerById,
     findContainerByName,
     isContainerUpdating,
+    fetchContainersStats,
+    updateContainersStats,
   }
 })

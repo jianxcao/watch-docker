@@ -5,6 +5,22 @@ export interface BaseResponse<T = any> {
   data: T
 }
 
+// 容器资源统计信息
+export interface ContainerStats {
+  id: string
+  name: string
+  cpuPercent: number
+  memoryUsage: number // 字节
+  memoryLimit: number // 字节
+  memoryPercent: number
+  networkRx: number // 字节
+  networkTx: number // 字节
+  blockRead: number // 字节
+  blockWrite: number // 字节
+  pidsCurrent: number
+  pidsLimit: number
+}
+
 // 容器状态类型
 export interface ContainerStatus {
   id: string
@@ -18,6 +34,7 @@ export interface ContainerStatus {
   skipReason: string
   labels: Record<string, string>
   lastCheckedAt: string
+  stats?: ContainerStats // 可选的资源统计信息
 }
 
 // 镜像信息类型

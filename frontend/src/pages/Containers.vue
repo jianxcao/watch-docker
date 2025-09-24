@@ -26,6 +26,7 @@
             </template>
           </n-input>
 
+
           <!-- 刷新按钮 -->
           <n-button @click="handleRefresh" :loading="containerStore.loading" circle>
             <template #icon>
@@ -89,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useContainerStore } from '@/store/container'
 import { useContainer } from '@/hooks/useContainer'
 import { useResponsive } from '@/hooks/useResponsive'
@@ -110,6 +111,10 @@ const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsiv
 const searchKeyword = ref('')
 const statusFilter = ref<string | null>(null)
 const operationLoading = ref(false)
+
+// 定时刷新相关
+const refreshInterval = 3000 // 3秒
+let statsTimer: NodeJS.Timeout | null = null
 
 // 状态过滤选项
 const statusFilterOptions = [
@@ -200,11 +205,42 @@ const handleRefresh = async () => {
   await containerHooks.handleRefresh()
 }
 
+// 启动定时刷新
+const startStatsRefresh = () => {
+  if (statsTimer) {
+    clearInterval(statsTimer)
+  }
+
+  statsTimer = setInterval(async () => {
+    try {
+      await containerStore.updateContainersStats()
+    } catch (error) {
+      console.error('定时刷新容器统计信息失败:', error)
+    }
+  }, refreshInterval)
+}
+
+// 停止定时刷新
+const stopStatsRefresh = () => {
+  if (statsTimer) {
+    clearInterval(statsTimer)
+    statsTimer = null
+  }
+}
+
 // 页面初始化
 onMounted(async () => {
   if (containerStore.containers.length === 0) {
     await containerStore.fetchContainers()
   }
+  containerStore.updateContainersStats()
+  // 启动定时刷新
+  startStatsRefresh()
+})
+
+// 页面卸载时清理定时器
+onUnmounted(() => {
+  stopStatsRefresh()
 })
 </script>
 

@@ -176,7 +176,7 @@ import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
 import { useContainer } from '@/hooks/useContainer'
-import { useImage } from '@/hooks/useImage'
+// import { useImage } from '@/hooks/useImage'
 import StatusBadge from '@/components/StatusBadge.vue'
 import dayjs from 'dayjs'
 import {
@@ -194,7 +194,7 @@ const appStore = useAppStore()
 const containerStore = useContainerStore()
 const imageStore = useImageStore()
 const containerHooks = useContainer()
-const imageHooks = useImage()
+// const imageHooks = useImage()
 
 // 版本信息
 const version = '0.0.1'

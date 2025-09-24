@@ -1,5 +1,5 @@
 import axios from './axiosConfig'
-import type { ContainerStatus, ImageInfo, BatchUpdateResult, Config } from './types'
+import type { ContainerStatus, ContainerStats, ImageInfo, BatchUpdateResult, Config } from './types'
 import { API_ENDPOINTS } from '@/constants/api'
 
 // 健康检查相关
@@ -54,6 +54,12 @@ export const containerApi = {
   // 删除容器
   deleteContainer: (id: string) =>
     axios.delete<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_DELETE(id)),
+
+  // 获取容器统计信息
+  getContainersStats: (containerIds: string[]) =>
+    axios.post<{ stats: Record<string, ContainerStats> }>(API_ENDPOINTS.CONTAINERS_STATS, {
+      containerIds,
+    }),
 }
 
 // 镜像相关API
