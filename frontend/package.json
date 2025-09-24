@@ -9,7 +9,8 @@
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext .ts,.vue --fix",
-    "lint:fix": "eslint . --ext .ts,.vue --fix"
+    "lint:fix": "eslint . --ext .ts,.vue --fix",
+    "generate-pwa-assets": "pwa-assets-generator -c ./pwa-assets.config.ts"
   },
   "dependencies": {
     "@iconify/vue": "^5.0.0",
@@ -32,6 +33,7 @@
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^24.1.0",
     "@unocss/postcss": "^66.3.3",
+    "@vite-pwa/assets-generator": "^1.0.1",
     "@vitejs/plugin-vue": "^6.0.0",
     "@vue/eslint-config-prettier": "^10.2.0",
     "@vue/eslint-config-typescript": "^14.6.0",

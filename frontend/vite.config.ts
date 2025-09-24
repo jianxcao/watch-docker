@@ -69,22 +69,34 @@ export default defineConfig({
         type: 'module',
       },
       manifest: {
-        name: 'Notify',
-        short_name: 'Notify',
+        name: 'Watch Docker',
+        short_name: 'Watch Docker',
         start_url: '/',
         display: 'standalone',
         id: '/',
         screenshots: [
           {
             src: '/bg.png',
-            sizes: '742x1332',
+            sizes: '822x1408',
             type: 'image/png',
           },
         ],
         icons: [
           {
-            src: '/logo.png',
-            sizes: '1024x1024',
+            src: '/64x64.png',
+            sizes: '64x64',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: '/192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: '/512x512.png',
+            sizes: '512x512',
             type: 'image/png',
             purpose: 'any',
           },
