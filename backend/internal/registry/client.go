@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/config"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"go.uber.org/zap"
 
 	"golang.org/x/sync/singleflight"
 
@@ -93,16 +95,19 @@ func (c *Client) GetRemoteDigests(ctx context.Context, imageRef string, isUserCa
 
 		resp, err := req.Get(endpoint)
 		if err != nil {
+			logger.Logger.Error("get remote digest", logger.ZapField("endpoint", endpoint), zap.Int("StatusCode", resp.StatusCode()), logger.ZapErr(err))
 			return nil, err
 		}
 
 		if resp.StatusCode() == http.StatusUnauthorized {
 			token, terr := c.fetchBearerToken(ctx, host, repo, resp.Header().Get("Www-Authenticate"))
 			if terr != nil {
+				logger.Logger.Error("get remote digest", logger.ZapField("endpoint", endpoint), zap.Int("StatusCode", resp.StatusCode()), logger.ZapErr(terr))
 				return nil, fmt.Errorf("bearer token: %w", terr)
 			}
 			resp, err = req.SetHeader("Authorization", "Bearer "+token).Get(endpoint)
 			if err != nil {
+				logger.Logger.Error("get remote digest", logger.ZapField("endpoint", endpoint), zap.Int("StatusCode", resp.StatusCode()), logger.ZapErr(err))
 				return nil, err
 			}
 		}
