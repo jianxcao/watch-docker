@@ -58,6 +58,7 @@ export const useSettingStore = defineStore('setting', () => {
 
   // 获取系统信息
   async function fetchSystemInfo() {
+    console.debug('fetchSystemInfo')
     if (systemInfoLoading.value) return
 
     systemInfoLoading.value = true

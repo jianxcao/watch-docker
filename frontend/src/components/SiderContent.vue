@@ -206,6 +206,11 @@ const handleLogout = async () => {
 const handleGithubClick = () => {
   window.open('https://github.com/jianxcao/watch-docker', '_blank')
 }
+
+onMounted(() => {
+  settingStore.fetchSystemInfo()
+})
+
 </script>
 
 <style scoped lang="less">
