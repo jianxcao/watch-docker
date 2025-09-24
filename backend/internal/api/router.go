@@ -174,7 +174,6 @@ func (s *Server) handleListContainers() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
 		isUserCache := c.Query("isUserCache") == "true"
-		fmt.Println("isUserCache", isUserCache, c.Query("isUserCache"))
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Minute)
 		defer cancel()
 		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, isUserCache)
