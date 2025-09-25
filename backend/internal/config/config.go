@@ -74,12 +74,11 @@ type ScanConfig struct {
 
 // PolicyConfig 策略配置
 // skip* 相关开关用于定义默认跳过规则
-// onlyLabels/excludeLabels 为包含/排除的 label 过滤
+// onlyLabels 为包含/排除的 label 过滤
 // floatingTags 指定哪些 tag 被视为"浮动"，仅这些会被检查更新
 type PolicyConfig struct {
 	SkipLabels       []string `mapstructure:"skipLabels" json:"skipLabels"`
 	OnlyLabels       []string `mapstructure:"onlyLabels" json:"onlyLabels"`
-	ExcludeLabels    []string `mapstructure:"excludeLabels" json:"excludeLabels"`
 	SkipLocalBuild   bool     `mapstructure:"skipLocalBuild" json:"skipLocalBuild"`
 	SkipPinnedDigest bool     `mapstructure:"skipPinnedDigest" json:"skipPinnedDigest"`
 	SkipSemverPinned bool     `mapstructure:"skipSemverPinned" json:"skipSemverPinned"`
@@ -177,7 +176,6 @@ func defaults() *Config {
 		Policy: PolicyConfig{
 			SkipLabels:       []string{"watchdocker.skip=true"},
 			OnlyLabels:       []string{},
-			ExcludeLabels:    []string{},
 			SkipLocalBuild:   true,
 			SkipPinnedDigest: true,
 			SkipSemverPinned: true,

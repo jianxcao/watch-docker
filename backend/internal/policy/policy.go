@@ -38,8 +38,8 @@ type Input struct {
 	SkipSemver bool
 	// OnlyLabels 仅当容器包含这些 label（或精确键值）之一时才纳入检查
 	OnlyLabels []string
-	// ExcludeLabels 容器包含这些 label（或精确键值）则跳过
-	ExcludeLabels []string
+	// SkipLabels 容器包含这些 label（或精确键值）则跳过
+	SkipLabels []string
 	// AllowComposeUpdate 允许对 Compose 管理的容器进行更新
 	AllowComposeUpdate bool
 }
@@ -79,16 +79,16 @@ func Evaluate(in Input) Decision {
 			return Decision{Skipped: true, Reason: "onlyLabels filter"}
 		}
 	}
-	// excludeLabels filter：命中即跳过
-	for _, kv := range in.ExcludeLabels {
+
+	for _, kv := range in.SkipLabels {
 		parts := strings.SplitN(kv, "=", 2)
 		if len(parts) == 2 {
 			if v, ok := in.Labels[parts[0]]; ok && v == parts[1] {
-				return Decision{Skipped: true, Reason: "excludeLabels"}
+				return Decision{Skipped: true, Reason: "label skip"}
 			}
 		} else {
 			if _, ok := in.Labels[kv]; ok {
-				return Decision{Skipped: true, Reason: "excludeLabels"}
+				return Decision{Skipped: true, Reason: "label skip"}
 			}
 		}
 	}

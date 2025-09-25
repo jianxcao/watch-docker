@@ -82,9 +82,6 @@
             <n-form-item label="仅包含标签">
               <n-dynamic-tags v-model:value="configForm.policy.onlyLabels" />
             </n-form-item>
-            <n-form-item label="排除标签">
-              <n-dynamic-tags v-model:value="configForm.policy.excludeLabels" />
-            </n-form-item>
             <n-form-item label="跳过本地构建">
               <n-switch v-model:value="configForm.policy.skipLocalBuild" />
             </n-form-item>
@@ -217,7 +214,6 @@ const configForm = reactive<Config>({
   policy: {
     skipLabels: ['watchdocker.skip=true'],
     onlyLabels: [],
-    excludeLabels: [],
     skipLocalBuild: true,
     skipPinnedDigest: true,
     skipSemverPinned: true,

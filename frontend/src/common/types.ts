@@ -76,7 +76,6 @@ export interface Config {
   policy: {
     skipLabels: string[]
     onlyLabels: string[]
-    excludeLabels: string[]
     skipLocalBuild: boolean
     skipPinnedDigest: boolean
     skipSemverPinned: boolean

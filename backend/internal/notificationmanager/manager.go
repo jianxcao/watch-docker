@@ -256,7 +256,7 @@ func (m *Manager) formatNotificationContent(batch NotificationBatch) (string, st
 
 	content := strings.Join(contentLines, "\n")
 	if content != "" {
-		content += fmt.Sprintf("\n\n⏰ 通知时间: %s", batch.Timestamp.Format("2006-01-02 15:04:05"))
+		content += fmt.Sprintf("\n⏰ 通知时间: %s", batch.Timestamp.Format("2006-01-02 15:04:05"))
 	}
 
 	return title, content
