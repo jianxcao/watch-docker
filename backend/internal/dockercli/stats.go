@@ -3,13 +3,15 @@ package dockercli
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"go.uber.org/zap"
 )
 
 // ContainerStats 容器资源统计信息
@@ -199,7 +201,7 @@ func (sm *StatsManager) statsMonitoringLoop(ctx context.Context) {
 	for {
 		select {
 		case <-sm.stopChan:
-			log.Println("Stats monitoring stopped")
+			logger.Logger.Info("信息统计监控停止")
 			return
 		case <-ticker.C:
 			sm.collectAllContainerStats(ctx)
@@ -212,7 +214,7 @@ func (sm *StatsManager) collectAllContainerStats(ctx context.Context) {
 	// 获取所有运行中的容器
 	containers, err := sm.dockerClient.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
-		log.Printf("Failed to list containers: %v", err)
+		logger.Logger.Error("获取运行中容器失败", zap.Error(err))
 		return
 	}
 
@@ -256,7 +258,7 @@ func (sm *StatsManager) collectSingleContainerStats(ctx context.Context, contain
 	// 使用defer recover避免单个容器的panic影响整体
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Panic while collecting stats for container %s: %v", containerID[:12], r)
+			logger.Logger.Error("收集容器统计信息失败", zap.String("containerID", containerID[:12]), zap.Any("error", r))
 		}
 	}()
 
@@ -265,21 +267,21 @@ func (sm *StatsManager) collectSingleContainerStats(ctx context.Context, contain
 	if err != nil {
 		// 容器可能已停止或删除，这是正常情况，降低日志级别
 		if ctx.Err() == context.DeadlineExceeded {
-			log.Printf("Timeout getting stats for container %s", containerID[:12])
+			logger.Logger.Error("获取容器统计信息超时", zap.String("containerID", containerID[:12]))
 		} else {
-			log.Printf("Failed to get stats for container %s: %v", containerID[:12], err)
+			logger.Logger.Error("获取容器统计信息失败", zap.String("containerID", containerID[:12]), zap.Error(err))
 		}
 		return
 	}
 	defer func() {
 		if closeErr := stats.Body.Close(); closeErr != nil {
-			log.Printf("Failed to close stats body for container %s: %v", containerID[:12], closeErr)
+			logger.Logger.Error("关闭容器统计信息失败", zap.String("containerID", containerID[:12]), zap.Error(closeErr))
 		}
 	}()
 
 	var currentStats container.StatsResponse
 	if err := json.NewDecoder(stats.Body).Decode(&currentStats); err != nil {
-		log.Printf("Failed to decode stats for container %s: %v", containerID[:12], err)
+		logger.Logger.Error("解码容器统计信息失败", zap.String("containerID", containerID[:12]), zap.Error(err))
 		return
 	}
 
@@ -341,16 +343,30 @@ func (sm *StatsManager) calculateStats(containerID string, previous, current *co
 	var memoryUsage uint64
 
 	if current.MemoryStats.Limit > 0 {
-		if cache, exists := current.MemoryStats.Stats["cache"]; exists {
-			if current.MemoryStats.Usage > cache {
-				memoryUsage = current.MemoryStats.Usage - cache
-			} else {
-				memoryUsage = current.MemoryStats.Usage
-			}
+		// 按照 Docker CLI 的计算方式，使用 total_cache 或 total_inactive_file
+		// 优先级：total_cache > total_inactive_file > cache
+		var cacheToSubtract uint64
+
+		if totalCache, exists := current.MemoryStats.Stats["total_cache"]; exists {
+			// Docker stats 使用的字段
+			cacheToSubtract = totalCache
+		} else if totalInactiveFile, exists := current.MemoryStats.Stats["total_inactive_file"]; exists {
+			// kubectl top 等工具使用的字段，通常更准确
+			cacheToSubtract = totalInactiveFile
+		} else if cache, exists := current.MemoryStats.Stats["cache"]; exists {
+			// 后备选项
+			cacheToSubtract = cache
+		}
+
+		if current.MemoryStats.Usage > cacheToSubtract {
+			memoryUsage = current.MemoryStats.Usage - cacheToSubtract
 		} else {
 			memoryUsage = current.MemoryStats.Usage
 		}
 		memoryPercent = float64(memoryUsage) / float64(current.MemoryStats.Limit) * 100.0
+		logger.Logger.Info(fmt.Sprintf("容器 %s: 使用量=%d, 缓存=%d, 最终=%d",
+			containerID[:12], current.MemoryStats.Usage, cacheToSubtract, memoryUsage))
+
 	}
 
 	// 计算网络速率
@@ -426,11 +442,11 @@ func (sm *StatsManager) cleanupStaleStats(currentContainerIDs map[string]bool) {
 // AddConnection 添加 WebSocket 连接，如果是第一个连接则启动统计监控
 func (sm *StatsManager) AddConnection(ctx context.Context) {
 	count := atomic.AddInt32(&sm.connectionCount, 1)
-	log.Printf("WebSocket 连接已添加，当前连接数: %d", count)
+	logger.Logger.Info("WebSocket 连接已添加，当前连接数: %d", zap.Int32("count", count))
 
 	// 如果是第一个连接，启动统计监控
 	if count == 1 {
-		log.Println("启动容器统计监控（首个连接）")
+		logger.Logger.Info("启动容器统计监控（首个连接）")
 		sm.StartMonitoring(ctx)
 	}
 }
@@ -438,11 +454,11 @@ func (sm *StatsManager) AddConnection(ctx context.Context) {
 // RemoveConnection 移除 WebSocket 连接，如果没有连接则停止统计监控
 func (sm *StatsManager) RemoveConnection() {
 	count := atomic.AddInt32(&sm.connectionCount, -1)
-	log.Printf("WebSocket 连接已移除，当前连接数: %d", count)
+	logger.Logger.Info("WebSocket 连接已移除，当前连接数: %d", zap.Int32("count", count))
 
 	// 如果没有连接了，停止统计监控
 	if count == 0 {
-		log.Println("停止容器统计监控（无连接）")
+		logger.Logger.Info("停止容器统计监控（无连接）")
 		sm.StopMonitoring()
 	}
 }
