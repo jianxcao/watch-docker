@@ -156,9 +156,28 @@ func (m *Manager) flushPendingEvents() {
 	// 按类型分组
 	batch := m.groupEventsByType(events)
 
-	// 发送通知
-	if err := m.sendBatchNotification(context.Background(), batch); err != nil {
-		logger.Logger.Error("发送批量通知失败", zap.Error(err))
+	// 分别发送不同类型的通知
+	ctx := context.Background()
+
+	// 发送更新可用通知
+	if len(batch.UpdateAvailable) > 0 {
+		if err := m.sendUpdateAvailableNotification(ctx, batch.UpdateAvailable, batch.Timestamp); err != nil {
+			logger.Logger.Error("发送更新可用通知失败", zap.Error(err))
+		}
+	}
+
+	// 发送更新成功通知
+	if len(batch.UpdateSuccess) > 0 {
+		if err := m.sendUpdateSuccessNotification(ctx, batch.UpdateSuccess, batch.Timestamp); err != nil {
+			logger.Logger.Error("发送更新成功通知失败", zap.Error(err))
+		}
+	}
+
+	// 发送更新失败通知
+	if len(batch.UpdateFailed) > 0 {
+		if err := m.sendUpdateFailedNotification(ctx, batch.UpdateFailed, batch.Timestamp); err != nil {
+			logger.Logger.Error("发送更新失败通知失败", zap.Error(err))
+		}
 	}
 }
 
@@ -182,84 +201,85 @@ func (m *Manager) groupEventsByType(events []ContainerNotification) Notification
 	return batch
 }
 
-// sendBatchNotification 发送批量通知
-func (m *Manager) sendBatchNotification(ctx context.Context, batch NotificationBatch) error {
-	if len(batch.UpdateAvailable) == 0 && len(batch.UpdateSuccess) == 0 && len(batch.UpdateFailed) == 0 {
+// sendUpdateAvailableNotification 发送更新可用通知
+func (m *Manager) sendUpdateAvailableNotification(ctx context.Context, events []ContainerNotification, timestamp time.Time) error {
+	if len(events) == 0 {
 		return nil
 	}
 
-	title, content := m.formatNotificationContent(batch)
+	var title string
+	if len(events) == 1 {
+		title = "📦 有容器更新可用"
+	} else {
+		title = fmt.Sprintf("📦 有 %d 个容器更新可用", len(events))
+	}
 
-	return m.notifier.Send(ctx, title, content, "", "")
+	var contentBuilder strings.Builder
+	contentBuilder.WriteString("发现以下容器有新版本可用:\n")
+
+	for _, event := range events {
+		contentBuilder.WriteString(fmt.Sprintf("🔸 %s\n", event.ContainerName))
+		contentBuilder.WriteString(fmt.Sprintf("   镜像: %s\n", event.Image))
+	}
+
+	contentBuilder.WriteString(fmt.Sprintf("⏰ 检测时间: %s", timestamp.Format("2006-01-02 15:04:05")))
+
+	return m.notifier.Send(ctx, title, contentBuilder.String(), "", "")
 }
 
-// formatNotificationContent 格式化通知内容
-func (m *Manager) formatNotificationContent(batch NotificationBatch) (string, string) {
-	var titleParts []string
-	var contentLines []string
-
-	// 有更新可用
-	if len(batch.UpdateAvailable) > 0 {
-		if len(batch.UpdateAvailable) == 1 {
-			titleParts = append(titleParts, "1个容器有更新")
-		} else {
-			titleParts = append(titleParts, fmt.Sprintf("%d个容器有更新", len(batch.UpdateAvailable)))
-		}
-
-		contentLines = append(contentLines, "📦 有更新可用的容器:")
-		for _, event := range batch.UpdateAvailable {
-			contentLines = append(contentLines,
-				fmt.Sprintf("  • %s (%s)", event.ContainerName, event.Image))
-		}
-		contentLines = append(contentLines, "")
+// sendUpdateSuccessNotification 发送更新成功通知
+func (m *Manager) sendUpdateSuccessNotification(ctx context.Context, events []ContainerNotification, timestamp time.Time) error {
+	if len(events) == 0 {
+		return nil
 	}
 
-	// 更新成功
-	if len(batch.UpdateSuccess) > 0 {
-		if len(batch.UpdateSuccess) == 1 {
-			titleParts = append(titleParts, "1个容器更新成功")
-		} else {
-			titleParts = append(titleParts, fmt.Sprintf("%d个容器更新成功", len(batch.UpdateSuccess)))
-		}
-
-		contentLines = append(contentLines, "✅ 更新成功的容器:")
-		for _, event := range batch.UpdateSuccess {
-			contentLines = append(contentLines,
-				fmt.Sprintf("  • %s (%s)", event.ContainerName, event.Image))
-		}
-		contentLines = append(contentLines, "")
+	var title string
+	if len(events) == 1 {
+		title = "✅ 容器更新成功"
+	} else {
+		title = fmt.Sprintf("✅ %d 个容器更新成功", len(events))
 	}
 
-	// 更新失败
-	if len(batch.UpdateFailed) > 0 {
-		if len(batch.UpdateFailed) == 1 {
-			titleParts = append(titleParts, "1个容器更新失败")
-		} else {
-			titleParts = append(titleParts, fmt.Sprintf("%d个容器更新失败", len(batch.UpdateFailed)))
-		}
+	var contentBuilder strings.Builder
+	contentBuilder.WriteString("以下容器已成功更新到最新版本:\n")
 
-		contentLines = append(contentLines, "❌ 更新失败的容器:")
-		for _, event := range batch.UpdateFailed {
-			errorInfo := ""
-			if event.Error != "" {
-				errorInfo = fmt.Sprintf(" (错误: %s)", event.Error)
-			}
-			contentLines = append(contentLines,
-				fmt.Sprintf("  • %s (%s)%s", event.ContainerName, event.Image, errorInfo))
+	for _, event := range events {
+		contentBuilder.WriteString(fmt.Sprintf("🔸 %s\n", event.ContainerName))
+		contentBuilder.WriteString(fmt.Sprintf("   镜像: %s\n", event.Image))
+	}
+
+	contentBuilder.WriteString(fmt.Sprintf("⏰ 更新时间: %s", timestamp.Format("2006-01-02 15:04:05")))
+
+	return m.notifier.Send(ctx, title, contentBuilder.String(), "", "")
+}
+
+// sendUpdateFailedNotification 发送更新失败通知
+func (m *Manager) sendUpdateFailedNotification(ctx context.Context, events []ContainerNotification, timestamp time.Time) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	var title string
+	if len(events) == 1 {
+		title = "❌ 容器更新失败"
+	} else {
+		title = fmt.Sprintf("❌ %d 个容器更新失败", len(events))
+	}
+
+	var contentBuilder strings.Builder
+	contentBuilder.WriteString("以下容器更新失败，请检查:\n")
+
+	for _, event := range events {
+		contentBuilder.WriteString(fmt.Sprintf("🔸 %s\n", event.ContainerName))
+		contentBuilder.WriteString(fmt.Sprintf("   镜像: %s\n", event.Image))
+		if event.Error != "" {
+			contentBuilder.WriteString(fmt.Sprintf("   错误: %s\n", event.Error))
 		}
 	}
 
-	title := strings.Join(titleParts, "，")
-	if title == "" {
-		title = "Docker 容器状态更新"
-	}
+	contentBuilder.WriteString(fmt.Sprintf("⏰ 失败时间: %s", timestamp.Format("2006-01-02 15:04:05")))
 
-	content := strings.Join(contentLines, "\n")
-	if content != "" {
-		content += fmt.Sprintf("\n⏰ 通知时间: %s", batch.Timestamp.Format("2006-01-02 15:04:05"))
-	}
-
-	return title, content
+	return m.notifier.Send(ctx, title, contentBuilder.String(), "", "")
 }
 
 // shouldSkipNotification 检查是否应该跳过通知（去重逻辑）
