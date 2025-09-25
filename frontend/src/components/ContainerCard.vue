@@ -68,23 +68,16 @@
               :color="getMemoryColor(container.stats.memoryPercent)" />
           </div>
 
-          <!-- 网络流量 -->
+          <!-- 实时网速 -->
           <div class="stat-item">
             <n-space justify="space-between" align="center">
-              <n-text style="font-size: 11px;">网络</n-text>
-              <n-text style="font-size: 11px;">↓{{ formatBytes(container.stats.networkRx) }} ↑{{
-                formatBytes(container.stats.networkTx) }}</n-text>
+              <n-text style="font-size: 11px;">网速</n-text>
+              <n-text style="font-size: 11px;">↓{{ formatBytesPerSecond((container.stats as any).networkRxRate || 0) }}
+                ↑{{
+                  formatBytesPerSecond((container.stats as any).networkTxRate || 0) }}</n-text>
             </n-space>
           </div>
 
-          <!-- 进程数 -->
-          <div class="stat-item" v-if="container.stats.pidsLimit > 0">
-            <n-space justify="space-between" align="center">
-              <n-text style="font-size: 11px;">进程</n-text>
-              <n-text style="font-size: 11px;">{{ container.stats.pidsCurrent }} / {{ container.stats.pidsLimit
-                }}</n-text>
-            </n-space>
-          </div>
         </n-space>
       </div>
 
@@ -167,7 +160,7 @@ import RunningStatusBadge from './RunningStatusBadge.vue'
 import UpdateStatusBadge from './UpdateStatusBadge.vue'
 import dayjs from 'dayjs'
 import type { ContainerStatus } from '@/common/types'
-import { formatPercent, formatBytes, getCpuColor, getMemoryColor } from '@/common/utils'
+import { formatPercent, formatBytes, formatBytesPerSecond, getCpuColor, getMemoryColor } from '@/common/utils'
 import {
   PlayCircleOutline,
   StopCircleOutline,

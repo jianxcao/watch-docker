@@ -13,8 +13,10 @@ export interface ContainerStats {
   memoryUsage: number // 字节
   memoryLimit: number // 字节
   memoryPercent: number
-  networkRx: number // 字节
-  networkTx: number // 字节
+  networkRxRate: number // 网络接收速率（字节/秒）
+  networkTxRate: number // 网络发送速率（字节/秒）
+  networkRx: number // 总接收字节数
+  networkTx: number // 总发送字节数
   blockRead: number // 字节
   blockWrite: number // 字节
   pidsCurrent: number

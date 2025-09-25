@@ -13,7 +13,7 @@ export const formatSize = (bytes: number): string => {
 
 // 格式化百分比
 export const formatPercent = (value: number): string => {
-  return `${value.toFixed(1)}%`
+  return `${value.toFixed(2)}%`
 }
 
 // 格式化字节数
@@ -22,7 +22,16 @@ export const formatBytes = (bytes: number): string => {
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
+  return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`
+}
+
+// 格式化网速（字节每秒）
+export const formatBytesPerSecond = (bytesPerSecond: number): string => {
+  if (bytesPerSecond === 0) return '0 B/s'
+  const k = 1024
+  const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s']
+  const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k))
+  return `${(bytesPerSecond / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`
 }
 
 // 获取CPU使用率颜色
