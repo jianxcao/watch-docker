@@ -94,16 +94,6 @@ export function useContainer() {
     })
   }
 
-  // 刷新容器列表
-  const handleRefresh = async () => {
-    try {
-      await store.fetchContainers()
-      message.success('容器列表刷新成功')
-    } catch (error: any) {
-      message.error(`刷新失败: ${error.message}`)
-    }
-  }
-
   // 获取容器状态颜色
   const getStatusColor = (container: ContainerStatus): string => {
     if (!container.running) return 'warning'
@@ -157,7 +147,6 @@ export function useContainer() {
     handleUpdate,
     handleDelete,
     handleBatchUpdate,
-    handleRefresh,
 
     // 工具方法
     getStatusColor,

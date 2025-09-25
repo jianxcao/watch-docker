@@ -33,9 +33,9 @@ export const authApi = {
 // 容器相关API
 export const containerApi = {
   // 获取容器列表
-  getContainers: (isUserCache = true) =>
+  getContainers: (isUserCache = true, isHaveUpdate = true) =>
     axios.get<{ containers: ContainerStatus[] }>(API_ENDPOINTS.CONTAINERS, {
-      params: { isUserCache },
+      params: { isUserCache, isHaveUpdate },
     }),
 
   // 更新单个容器

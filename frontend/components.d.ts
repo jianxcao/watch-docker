@@ -59,7 +59,9 @@ declare module 'vue' {
     NTooltip: typeof import('naive-ui')['NTooltip']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    RunningStatusBadge: typeof import('./src/components/RunningStatusBadge.vue')['default']
     SiderContent: typeof import('./src/components/SiderContent.vue')['default']
     StatusBadge: typeof import('./src/components/StatusBadge.vue')['default']
+    UpdateStatusBadge: typeof import('./src/components/UpdateStatusBadge.vue')['default']
   }
 }

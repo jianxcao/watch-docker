@@ -29,7 +29,7 @@ export interface ContainerStatus {
   running: boolean
   currentDigest: string
   remoteDigest: string
-  status: 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error'
+  status: 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error' | ''
   skipped: boolean
   skipReason: string
   labels: Record<string, string>

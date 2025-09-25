@@ -37,12 +37,25 @@ export const useContainerStore = defineStore('container', () => {
   }))
 
   // 方法：获取容器列表
-  const fetchContainers = async (isUserCache = true) => {
+  const fetchContainers = async (isUserCache = true, isHaveUpdate = true) => {
     loading.value = true
     try {
-      const data = await containerApi.getContainers(isUserCache)
+      const data = await containerApi.getContainers(isUserCache, isHaveUpdate)
       if (data.code === 0) {
-        containers.value = data.data.containers
+        // 按照 ID 进行合并，新数据覆盖旧数据
+        const newContainers = data.data.containers
+        const existingContainersMap = new Map(containers.value.map((c) => [c.id, c]))
+
+        containers.value = newContainers.map((newContainer) => {
+          const existingContainer = existingContainersMap.get(newContainer.id)
+          // 如果存在旧容器，合并数据，新数据覆盖旧数据
+          if (existingContainer) {
+            return { ...existingContainer, ...newContainer }
+          }
+          // 如果是新容器，直接使用新数据
+          return newContainer
+        })
+        console.log(containers.value)
       } else {
         console.error('获取容器列表失败:', data.msg)
         throw new Error(data.msg)

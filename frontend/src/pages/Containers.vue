@@ -202,7 +202,7 @@ const handleBatchUpdate = async () => {
 }
 
 const handleRefresh = async () => {
-  await containerHooks.handleRefresh()
+  await containerStore.fetchContainers(true, true)
 }
 
 // 启动定时刷新
@@ -230,9 +230,7 @@ const stopStatsRefresh = () => {
 
 // 页面初始化
 onMounted(async () => {
-  if (containerStore.containers.length === 0) {
-    await containerStore.fetchContainers()
-  }
+  await containerStore.fetchContainers(true, true)
   containerStore.updateContainersStats()
   // 启动定时刷新
   startStatsRefresh()

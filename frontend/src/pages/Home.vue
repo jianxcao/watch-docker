@@ -273,7 +273,7 @@ const handleRefreshAll = async () => {
 onMounted(async () => {
   // 如果没有数据，先加载数据
   if (containerStore.containers.length === 0) {
-    await containerStore.fetchContainers()
+    await containerStore.fetchContainers(true, false)
   }
 
   if (imageStore.images.length === 0) {

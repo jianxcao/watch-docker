@@ -2,8 +2,8 @@
   <n-card :title="container.name" hoverable class="container-card" :class="{ 'card-updating': isUpdating }">
     <template #header-extra>
       <n-space>
-        <StatusBadge :container="container" show-running-status />
-        <StatusBadge :container="container" />
+        <RunningStatusBadge :container="container" />
+        <UpdateStatusBadge :container="container" />
       </n-space>
     </template>
 
@@ -163,7 +163,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useContainerStore } from '@/store/container'
-import StatusBadge from './StatusBadge.vue'
+import RunningStatusBadge from './RunningStatusBadge.vue'
+import UpdateStatusBadge from './UpdateStatusBadge.vue'
 import dayjs from 'dayjs'
 import type { ContainerStatus } from '@/common/types'
 import { formatPercent, formatBytes, getCpuColor, getMemoryColor } from '@/common/utils'

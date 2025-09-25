@@ -45,23 +45,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
-import { useAppStore } from '@/store/app'
-import { useContainerStore } from '@/store/container'
-import { useImageStore } from '@/store/image'
 import { useResponsive } from '@/hooks/useResponsive'
-import { healthApi } from '@/common/api'
-import SiderContent from './SiderContent.vue'
-import MobileDrawer from './MobileDrawer.vue'
-import { MenuOutline } from '@vicons/ionicons5'
+import { useAppStore } from '@/store/app'
 import { useSettingStore } from '@/store/setting'
-import { Moon as MoonIcon, Sunny as SunIcon } from '@vicons/ionicons5'
+import { MenuOutline, Moon as MoonIcon, Sunny as SunIcon } from '@vicons/ionicons5'
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import MobileDrawer from './MobileDrawer.vue'
+import SiderContent from './SiderContent.vue'
 
 const route = useRoute()
 const appStore = useAppStore()
-const containerStore = useContainerStore()
-const imageStore = useImageStore()
 const { isLargeScreen, isSmallScreen } = useResponsive()
 const settingStore = useSettingStore()
 const isDark = computed(() => settingStore.setting.theme === 'dark')
@@ -95,37 +89,8 @@ const currentPageTitle = computed(() => {
 })
 
 
-// 检查系统健康状态
-const checkHealth = async () => {
-  try {
-    await healthApi.health()
-    appStore.setSystemHealth('healthy')
-  } catch (error) {
-    appStore.setSystemHealth('unhealthy')
-    console.error('健康检查失败:', error)
-  }
-}
 
-// 页面加载时检查系统健康状态并初始化数据
-onMounted(async () => {
-  await checkHealth()
 
-  // 设置页面标题
-  appStore.setPageTitle(currentPageTitle.value)
-
-  // 根据当前路由初始化相应数据
-  if (activeKey.value === 'containers') {
-    await containerStore.fetchContainers()
-  } else if (activeKey.value === 'images') {
-    await imageStore.fetchImages()
-  } else {
-    // 首页加载所有数据
-    await Promise.all([
-      containerStore.fetchContainers(),
-      imageStore.fetchImages(),
-    ])
-  }
-})
 </script>
 
 <style scoped lang="less">

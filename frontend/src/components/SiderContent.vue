@@ -173,13 +173,13 @@ const handleRefresh = async () => {
   try {
     // 根据当前页面刷新相应数据
     if (activeKey.value === 'containers') {
-      await containerStore.fetchContainers(false)
+      await containerStore.fetchContainers(false, true)
     } else if (activeKey.value === 'images') {
       await imageStore.fetchImages()
     } else {
       // 首页刷新所有数据
       await Promise.all([
-        containerStore.fetchContainers(false),
+        containerStore.fetchContainers(false, true),
         imageStore.fetchImages(),
       ])
     }

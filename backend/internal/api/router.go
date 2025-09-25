@@ -120,7 +120,7 @@ func (s *Server) handleBatchUpdate() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 		defer cancel()
 
-		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true)
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true, true)
 		if err != nil {
 			s.logger.Error("batch scan failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeScanFailed, "scan failed"))
@@ -175,9 +175,10 @@ func (s *Server) handleListContainers() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
 		isUserCache := c.Query("isUserCache") == "true"
+		isHaveUpdate := c.Query("isHaveUpdate") == "true"
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Minute)
 		defer cancel()
-		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, isUserCache)
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, isUserCache, isHaveUpdate)
 		if err != nil {
 			s.logger.Error("scan failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeScanFailed, "scan failed"))
@@ -256,7 +257,7 @@ func (s *Server) handleDeleteContainer() gin.HandlerFunc {
 		cfg := config.Get()
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 		defer cancel()
-		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true)
+		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true, true)
 		if err != nil {
 			s.logger.Error("scan after delete failed", zap.Error(err))
 			// 即使扫描失败，也返回删除成功的响应
