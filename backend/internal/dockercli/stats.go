@@ -3,7 +3,6 @@ package dockercli
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -343,29 +342,24 @@ func (sm *StatsManager) calculateStats(containerID string, previous, current *co
 	var memoryUsage uint64
 
 	if current.MemoryStats.Limit > 0 {
-		// 按照 Docker CLI 的计算方式，使用 total_cache 或 total_inactive_file
-		// 优先级：total_cache > total_inactive_file > cache
 		var cacheToSubtract uint64
-
-		if totalCache, exists := current.MemoryStats.Stats["total_cache"]; exists {
-			// Docker stats 使用的字段
+		// 按优先级查找实际存在的字段
+		if file, exists := current.MemoryStats.Stats["file"]; exists {
+			// cgroup v2 中表示可回收的非活跃文件缓存
+			cacheToSubtract = file
+		} else if totalCache, exists := current.MemoryStats.Stats["total_cache"]; exists {
+			// 某些版本中可能存在的字段
 			cacheToSubtract = totalCache
-		} else if totalInactiveFile, exists := current.MemoryStats.Stats["total_inactive_file"]; exists {
-			// kubectl top 等工具使用的字段，通常更准确
-			cacheToSubtract = totalInactiveFile
 		} else if cache, exists := current.MemoryStats.Stats["cache"]; exists {
-			// 后备选项
+			// 备用字段
 			cacheToSubtract = cache
 		}
-
 		if current.MemoryStats.Usage > cacheToSubtract {
 			memoryUsage = current.MemoryStats.Usage - cacheToSubtract
 		} else {
 			memoryUsage = current.MemoryStats.Usage
 		}
 		memoryPercent = float64(memoryUsage) / float64(current.MemoryStats.Limit) * 100.0
-		logger.Logger.Info(fmt.Sprintf("容器 %s: 使用量=%d, 缓存=%d, 最终=%d",
-			containerID[:12], current.MemoryStats.Usage, cacheToSubtract, memoryUsage))
 
 	}
 
