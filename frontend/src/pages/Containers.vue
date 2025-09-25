@@ -4,7 +4,12 @@
     <n-card class="page-header">
       <n-space align="center" justify="space-between">
         <div>
-          <n-h2 style="margin: 0;">容器管理</n-h2>
+          <n-space align="center">
+            <n-h2 style="margin: 0;">容器管理</n-h2>
+            <n-tag :type="getConnectionStatusType()" size="small">
+              {{ getConnectionStatusText() }}
+            </n-tag>
+          </n-space>
           <n-text depth="3">
             共 {{ containerStore.stats.total }} 个容器，
             {{ containerStore.stats.running }} 个运行中，
@@ -112,9 +117,8 @@ const searchKeyword = ref('')
 const statusFilter = ref<string | null>(null)
 const operationLoading = ref(false)
 
-// 定时刷新相关
-const refreshInterval = 1200 // 3秒
-let statsTimer: NodeJS.Timeout | null = null
+// WebSocket 连接状态
+const wsConnectionState = computed(() => containerStore.wsConnectionState)
 
 // 状态过滤选项
 const statusFilterOptions = [
@@ -205,40 +209,43 @@ const handleRefresh = async () => {
   await containerStore.fetchContainers(true, true)
 }
 
-// 启动定时刷新
-const startStatsRefresh = () => {
-  if (statsTimer) {
-    clearInterval(statsTimer)
+// WebSocket 连接状态指示器
+const getConnectionStatusType = () => {
+  switch (wsConnectionState.value) {
+    case 'connected':
+      return 'success'
+    case 'connecting':
+      return 'info'
+    case 'disconnected':
+      return 'error'
+    default:
+      return 'warning'
   }
-
-  statsTimer = setInterval(async () => {
-    try {
-      await containerStore.updateContainersStats()
-    } catch (error) {
-      console.error('定时刷新容器统计信息失败:', error)
-    }
-  }, refreshInterval)
 }
 
-// 停止定时刷新
-const stopStatsRefresh = () => {
-  if (statsTimer) {
-    clearInterval(statsTimer)
-    statsTimer = null
+const getConnectionStatusText = () => {
+  switch (wsConnectionState.value) {
+    case 'connected':
+      return '实时连接'
+    case 'connecting':
+      return '连接中'
+    case 'disconnected':
+      return '连接断开'
+    default:
+      return '未知状态'
   }
 }
 
 // 页面初始化
 onMounted(async () => {
   await containerStore.fetchContainers(true, true)
-  containerStore.updateContainersStats()
-  // 启动定时刷新
-  startStatsRefresh()
+  // 启动 WebSocket 统计监听
+  containerStore.startStatsWebSocket()
 })
 
-// 页面卸载时清理定时器
+// 页面卸载时停止 WebSocket 监听
 onUnmounted(() => {
-  stopStatsRefresh()
+  containerStore.stopStatsWebSocket()
 })
 </script>
 

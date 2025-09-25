@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { containerApi } from '@/common/api'
 import type { ContainerStatus, ContainerStats, BatchUpdateResult } from '@/common/types'
+import { getStatsWebSocketService, type StatsCallback } from '@/services/statsSocket'
+import { useSettingStore } from './setting'
 
 export const useContainerStore = defineStore('container', () => {
   // 状态
@@ -9,6 +11,12 @@ export const useContainerStore = defineStore('container', () => {
   const loading = ref(false)
   const updating = ref(new Set<string>())
   const batchUpdating = ref(false)
+  const settingStore = useSettingStore()
+
+  // WebSocket 相关状态
+  const wsConnected = ref(false)
+  const wsConnectionState = ref('disconnected')
+  const statsWebSocketService = getStatsWebSocketService(settingStore.getToken())
 
   // 计算属性
   const runningContainers = computed(() => containers.value.filter((c) => c.running))
@@ -188,25 +196,37 @@ export const useContainerStore = defineStore('container', () => {
     }
   }
 
-  // 方法：更新容器统计信息
-  const updateContainersStats = async () => {
-    const runningContainers = containers.value.filter((c) => c.running)
-    if (runningContainers.length === 0) return
+  // WebSocket 统计数据回调处理
+  const handleStatsUpdate: StatsCallback = (statsMap: Record<string, ContainerStats>) => {
+    // 更新容器统计信息
+    containers.value = containers.value.map((container) => {
+      if (container.running && statsMap[container.id]) {
+        return { ...container, stats: statsMap[container.id] }
+      }
+      return container
+    })
+  }
 
-    try {
-      const containerIds = runningContainers.map((c) => c.id)
-      const statsMap = await fetchContainersStats(containerIds)
+  // 方法：启动 WebSocket 统计监听
+  const startStatsWebSocket = () => {
+    statsWebSocketService.addStatsCallback(handleStatsUpdate)
+    wsConnected.value = statsWebSocketService.isConnected()
+    wsConnectionState.value = statsWebSocketService.getConnectionState()
 
-      // 更新容器统计信息
-      containers.value = containers.value.map((container) => {
-        if (container.running && statsMap[container.id]) {
-          return { ...container, stats: statsMap[container.id] }
-        }
-        return container
-      })
-    } catch (error) {
-      console.error('更新容器统计信息失败:', error)
+    // 监听连接状态变化
+    const checkConnectionState = () => {
+      wsConnected.value = statsWebSocketService.isConnected()
+      wsConnectionState.value = statsWebSocketService.getConnectionState()
     }
+
+    setInterval(checkConnectionState, 1000)
+  }
+
+  // 方法：停止 WebSocket 统计监听
+  const stopStatsWebSocket = () => {
+    statsWebSocketService.removeStatsCallback(handleStatsUpdate)
+    wsConnected.value = false
+    wsConnectionState.value = 'disconnected'
   }
 
   return {
@@ -215,6 +235,8 @@ export const useContainerStore = defineStore('container', () => {
     loading,
     updating,
     batchUpdating,
+    wsConnected,
+    wsConnectionState,
 
     // 计算属性
     runningContainers,
@@ -236,6 +258,7 @@ export const useContainerStore = defineStore('container', () => {
     findContainerByName,
     isContainerUpdating,
     fetchContainersStats,
-    updateContainersStats,
+    startStatsWebSocket,
+    stopStatsWebSocket,
   }
 })

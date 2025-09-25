@@ -24,12 +24,13 @@ import (
 )
 
 type Server struct {
-	logger    *zap.Logger
-	docker    *dockercli.Client
-	registry  *registry.Client
-	scanner   *scanner.Scanner
-	updater   *updater.Updater
-	scheduler *scheduler.Scheduler
+	logger         *zap.Logger
+	docker         *dockercli.Client
+	registry       *registry.Client
+	scanner        *scanner.Scanner
+	updater        *updater.Updater
+	scheduler      *scheduler.Scheduler
+	wsStatsManager *StatsWebSocketManager
 }
 
 func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler) *gin.Engine {
@@ -37,7 +38,18 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	r.Use(gin.Recovery())
 	// r.Use(ginzap(logger))
 
-	s := &Server{logger: logger, docker: docker, registry: reg, scanner: sc, updater: updater.New(docker), scheduler: sch}
+	// 创建 WebSocket 管理器
+	wsStatsManager := NewStatsWebSocketManager(docker)
+
+	s := &Server{
+		logger:         logger,
+		docker:         docker,
+		registry:       reg,
+		scanner:        sc,
+		updater:        updater.New(docker),
+		scheduler:      sch,
+		wsStatsManager: wsStatsManager,
+	}
 
 	api := r.Group("/api/v1")
 	{
@@ -56,6 +68,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 
 		protected.GET("/containers", s.handleListContainers())
 		protected.POST("/containers/stats", s.handleGetContainersStats())
+		protected.GET("/containers/stats/ws", s.handleStatsWebSocket())
 		protected.POST("/containers/:id/update", s.handleUpdateContainer())
 		protected.POST("/updates/run", s.handleBatchUpdate())
 		protected.POST("/containers/:id/stop", s.handleStopContainer())
@@ -68,6 +81,10 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.GET("/logs", s.handleLogStream)
 	}
 	s.setupStaticRoutes(r)
+
+	// 启动 WebSocket 管理器
+	go wsStatsManager.Run(context.Background())
+
 	return r
 }
 
@@ -504,4 +521,9 @@ func (s *Server) setupStaticRoutes(r *gin.Engine) {
 		}
 		defer file.Close()
 	})
+}
+
+// handleStatsWebSocket 处理容器统计 WebSocket 连接
+func (s *Server) handleStatsWebSocket() gin.HandlerFunc {
+	return s.wsStatsManager.HandleWebSocket
 }

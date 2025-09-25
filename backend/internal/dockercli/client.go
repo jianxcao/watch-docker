@@ -53,7 +53,6 @@ func NewWithStatsConfig(ctx context.Context, host string, statsConfig StatsManag
 		docker:       dockerClient,
 		statsManager: statsManager,
 	}
-	clientInstance.StartStatsMonitoring(ctx)
 	return clientInstance, nil
 }
 
@@ -62,14 +61,14 @@ func (c *Client) Close() error {
 	return c.docker.Close()
 }
 
-// StartStatsMonitoring 启动后台统计监控
-func (c *Client) StartStatsMonitoring(ctx context.Context) {
-	c.statsManager.StartMonitoring(ctx)
+// AddStatsConnection 添加统计 WebSocket 连接
+func (c *Client) AddStatsConnection(ctx context.Context) {
+	c.statsManager.AddConnection(ctx)
 }
 
-// StopStatsMonitoring 停止后台统计监控
-func (c *Client) StopStatsMonitoring() {
-	c.statsManager.StopMonitoring()
+// RemoveStatsConnection 移除统计 WebSocket 连接
+func (c *Client) RemoveStatsConnection() {
+	c.statsManager.RemoveConnection()
 }
 
 // GetContainerStats 获取容器统计信息
