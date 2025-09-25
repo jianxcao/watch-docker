@@ -79,7 +79,8 @@ func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
 		s.logger.Error("scan failed", zap.Error(err))
 		return
 	}
-	s.logger.Info("扫描更新任务完成", zap.Any("statuses", statuses))
+	s.logger.Info("扫描更新任务完成")
+	s.logger.Debug("扫描更新结果", zap.Any("statuses", statuses))
 
 	// 通知有更新可用的容器
 	if s.notificationManager != nil {
@@ -111,9 +112,9 @@ func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
 		s.logger.Info("没有需要更新的容器")
 		return
 	}
-	s.logger.Info("开始执行更新任务")
+	s.logger.Info("开始执行批量更新任务")
 	for _, st := range updateStatuses {
-		uctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		uctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		s.logger.Info(fmt.Sprintf("开始执行更新任务: %s", st.Name))
 		if err := s.updater.UpdateContainer(uctx, st.ID, st.Image); err != nil {
 			s.logger.Error(fmt.Sprintf("更新任务失败: %s", st.Name), zap.Error(err))
@@ -134,5 +135,5 @@ func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
 		}
 		cancel()
 	}
-	s.logger.Info("更新任务完成")
+	s.logger.Info("批量更新任务完成")
 }
