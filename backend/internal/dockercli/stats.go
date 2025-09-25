@@ -3,8 +3,11 @@ package dockercli
 import (
 	"context"
 	"encoding/json"
+	"log"
+	"sync"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 )
 
@@ -26,212 +29,392 @@ type ContainerStats struct {
 	PidsLimit     uint64  `json:"pidsLimit"`
 }
 
-// StatsWithTimeDelta 包含两次采样的统计数据和时间差
-type StatsWithTimeDelta struct {
-	Stats1    container.StatsResponse
-	Stats2    container.StatsResponse
-	TimeDelta float64 // 时间间隔（秒）
+// StatsManager 容器统计管理器
+type StatsManager struct {
+	dockerClient  DockerClientInterface               // Docker客户端接口
+	statsCache    map[string]*ContainerStats          // 计算后的统计数据缓存
+	rawStatsCache map[string]*container.StatsResponse // 原始统计数据缓存（用于计算差值）
+	statsMutex    sync.RWMutex                        // 保护统计数据的读写锁
+
+	// 配置选项
+	maxConcurrency int           // 最大并发数
+	collectTimeout time.Duration // 单个容器采集超时时间
+
+	// 后台任务管理
+	statsTimer *time.Timer   // 定时器
+	stopChan   chan struct{} // 停止信号
+	isRunning  bool          // 任务运行状态
 }
 
-// sampleStatsWithInterval 执行双次采样并返回结果
-func (c *Client) sampleStatsWithInterval(ctx context.Context, id string, interval time.Duration) (*StatsWithTimeDelta, error) {
-	// 第一次采样
-	stats1, err := c.docker.ContainerStatsOneShot(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	var v1 container.StatsResponse
-	if err := json.NewDecoder(stats1.Body).Decode(&v1); err != nil {
-		stats1.Body.Close()
-		return nil, err
-	}
-	stats1.Body.Close()
-
-	// 记录第一次采样时间
-	firstTime := time.Now()
-
-	// 等待指定时间间隔
-	time.Sleep(interval)
-
-	// 第二次采样
-	stats2, err := c.docker.ContainerStatsOneShot(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	defer stats2.Body.Close()
-
-	var v2 container.StatsResponse
-	if err := json.NewDecoder(stats2.Body).Decode(&v2); err != nil {
-		return nil, err
-	}
-
-	// 记录第二次采样时间
-	secondTime := time.Now()
-
-	// 计算实际时间间隔（秒）
-	timeDelta := secondTime.Sub(firstTime).Seconds()
-
-	return &StatsWithTimeDelta{
-		Stats1:    v1,
-		Stats2:    v2,
-		TimeDelta: timeDelta,
-	}, nil
+// StatsManagerConfig 统计管理器配置
+type StatsManagerConfig struct {
+	MaxConcurrency int           // 最大并发数，默认10
+	CollectTimeout time.Duration // 单个容器采集超时时间，默认3秒
 }
 
-// GetContainerStats 获取容器资源统计信息（双次采样版本）
-func (c *Client) GetContainerStats(ctx context.Context, id string) (*ContainerStats, error) {
-	// 执行双次采样
-	sampledStats, err := c.sampleStatsWithInterval(ctx, id, 500*time.Millisecond)
-	if err != nil {
-		return nil, err
+// DockerClientInterface Docker客户端接口，用于解耦
+type DockerClientInterface interface {
+	ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error)
+	ContainerStatsOneShot(ctx context.Context, containerID string) (container.StatsResponseReader, error)
+}
+
+// NewStatsManager 创建新的统计管理器
+func NewStatsManager(dockerClient DockerClientInterface) *StatsManager {
+	return NewStatsManagerWithConfig(dockerClient, StatsManagerConfig{
+		MaxConcurrency: 10,
+		CollectTimeout: 3 * time.Second,
+	})
+}
+
+// NewStatsManagerWithConfig 使用自定义配置创建统计管理器
+func NewStatsManagerWithConfig(dockerClient DockerClientInterface, config StatsManagerConfig) *StatsManager {
+	// 设置默认值
+	if config.MaxConcurrency <= 0 {
+		config.MaxConcurrency = 10
+	}
+	if config.CollectTimeout <= 0 {
+		config.CollectTimeout = 3 * time.Second
 	}
 
-	// 获取采样数据
-	v1 := sampledStats.Stats1
-	v2 := sampledStats.Stats2
-	timeDelta := sampledStats.TimeDelta
+	return &StatsManager{
+		dockerClient:   dockerClient,
+		statsCache:     make(map[string]*ContainerStats),
+		rawStatsCache:  make(map[string]*container.StatsResponse),
+		maxConcurrency: config.MaxConcurrency,
+		collectTimeout: config.CollectTimeout,
+		stopChan:       make(chan struct{}),
+		isRunning:      false,
+	}
+}
 
-	// 计算CPU使用率（0-100%）
-	var cpuPercent float64
-	if timeDelta > 0 {
-		cpuDelta := float64(v2.CPUStats.CPUUsage.TotalUsage - v1.CPUStats.CPUUsage.TotalUsage)
-		systemDelta := float64(v2.CPUStats.SystemUsage - v1.CPUStats.SystemUsage)
+// StartMonitoring 启动后台统计监控
+func (sm *StatsManager) StartMonitoring(ctx context.Context) {
+	sm.statsMutex.Lock()
+	if sm.isRunning {
+		sm.statsMutex.Unlock()
+		return
+	}
+	sm.isRunning = true
+	sm.statsMutex.Unlock()
 
-		if systemDelta > 0 && cpuDelta >= 0 {
-			// 计算相对于单核的CPU使用率，然后限制在0-100%之间
-			rawPercent := (cpuDelta / systemDelta) * 100.0
-			// if rawPercent > 100.0 {
-			// 	cpuPercent = 100.0
-			// } else {
+	go sm.statsMonitoringLoop(ctx)
+}
 
-			// }
-			cpuPercent = rawPercent
+// StopMonitoring 停止后台统计监控
+func (sm *StatsManager) StopMonitoring() {
+	sm.statsMutex.Lock()
+	defer sm.statsMutex.Unlock()
+
+	if !sm.isRunning {
+		return
+	}
+
+	sm.isRunning = false
+	if sm.statsTimer != nil {
+		sm.statsTimer.Stop()
+	}
+	close(sm.stopChan)
+
+	// 重新初始化停止信号
+	sm.stopChan = make(chan struct{})
+}
+
+// GetContainerStats 获取容器资源统计信息（从缓存读取）
+func (sm *StatsManager) GetContainerStats(ctx context.Context, id string) *ContainerStats {
+	sm.statsMutex.RLock()
+	defer sm.statsMutex.RUnlock()
+
+	// 从缓存中获取统计数据
+	if stats, exists := sm.statsCache[id]; exists {
+		// 返回数据的副本，避免外部修改
+		return &ContainerStats{
+			ID:            stats.ID,
+			Name:          stats.Name,
+			CPUPercent:    stats.CPUPercent,
+			MemoryUsage:   stats.MemoryUsage,
+			MemoryLimit:   stats.MemoryLimit,
+			MemoryPercent: stats.MemoryPercent,
+			NetworkRxRate: stats.NetworkRxRate,
+			NetworkTxRate: stats.NetworkTxRate,
+			NetworkRx:     stats.NetworkRx,
+			NetworkTx:     stats.NetworkTx,
+			BlockRead:     stats.BlockRead,
+			BlockWrite:    stats.BlockWrite,
+			PidsCurrent:   stats.PidsCurrent,
+			PidsLimit:     stats.PidsLimit,
 		}
 	}
 
-	// 计算内存使用率
-	var memoryPercent float64
-	var memoryUsage uint64
-
-	// 检查内存统计是否有效
-	if v2.MemoryStats.Limit > 0 {
-		// 使用实际使用内存（排除缓存）
-		if cache, exists := v2.MemoryStats.Stats["cache"]; exists {
-			// 实际使用内存 = 总使用内存 - 缓存
-			if v2.MemoryStats.Usage > cache {
-				memoryUsage = v2.MemoryStats.Usage - cache
-			} else {
-				memoryUsage = v2.MemoryStats.Usage
-			}
-		} else {
-			memoryUsage = v2.MemoryStats.Usage
-		}
-		memoryPercent = float64(memoryUsage) / float64(v2.MemoryStats.Limit) * 100.0
+	// 如果缓存中没有数据，返回默认的零值统计
+	name := id
+	if len(id) > 12 {
+		name = id[:12]
 	}
-
-	// 计算网络统计（总流量和实时速率）
-	var networkRx1, networkTx1, networkRx2, networkTx2 uint64
-
-	// 第一次采样的网络数据
-	for _, network := range v1.Networks {
-		networkRx1 += network.RxBytes
-		networkTx1 += network.TxBytes
-	}
-
-	// 第二次采样的网络数据
-	for _, network := range v2.Networks {
-		networkRx2 += network.RxBytes
-		networkTx2 += network.TxBytes
-	}
-
-	// 计算网络速率（字节/秒）
-	var networkRxRate, networkTxRate uint64
-	if timeDelta > 0 {
-		if networkRx2 >= networkRx1 {
-			networkRxRate = uint64(float64(networkRx2-networkRx1) / timeDelta)
-		}
-		if networkTx2 >= networkTx1 {
-			networkTxRate = uint64(float64(networkTx2-networkTx1) / timeDelta)
-		}
-	}
-
-	// 计算块设备统计
-	var blockRead, blockWrite uint64
-	for _, block := range v2.BlkioStats.IoServiceBytesRecursive {
-		switch block.Op {
-		case "Read":
-			blockRead += block.Value
-		case "Write":
-			blockWrite += block.Value
-		}
-	}
-
-	// 使用容器ID的前12位作为名称
-	name := id[:12]
 
 	return &ContainerStats{
 		ID:            id,
 		Name:          name,
-		CPUPercent:    cpuPercent,
-		MemoryUsage:   memoryUsage,
-		MemoryLimit:   v2.MemoryStats.Limit,
-		MemoryPercent: memoryPercent,
-		NetworkRxRate: networkRxRate,
-		NetworkTxRate: networkTxRate,
-		NetworkRx:     networkRx2,
-		NetworkTx:     networkTx2,
-		BlockRead:     blockRead,
-		BlockWrite:    blockWrite,
-		PidsCurrent:   v2.PidsStats.Current,
-		PidsLimit:     v2.PidsStats.Limit,
-	}, nil
+		CPUPercent:    0,
+		MemoryUsage:   0,
+		MemoryLimit:   0,
+		MemoryPercent: 0,
+		NetworkRxRate: 0,
+		NetworkTxRate: 0,
+		NetworkRx:     0,
+		NetworkTx:     0,
+		BlockRead:     0,
+		BlockWrite:    0,
+		PidsCurrent:   0,
+		PidsLimit:     0,
+	}
 }
 
-// GetContainersStats 批量获取多个容器的资源统计信息（优化版本）
-func (c *Client) GetContainersStats(ctx context.Context, containerIDs []string) (map[string]*ContainerStats, error) {
+// GetContainersStats 批量获取多个容器的资源统计信息（从缓存读取）
+func (sm *StatsManager) GetContainersStats(ctx context.Context, containerIDs []string) (map[string]*ContainerStats, error) {
 	statsMap := make(map[string]*ContainerStats)
 
 	if len(containerIDs) == 0 {
 		return statsMap, nil
 	}
 
-	// 使用信号量控制并发数，避免过多并发请求
-	const maxConcurrency = 5
-	semaphore := make(chan struct{}, maxConcurrency)
+	sm.statsMutex.RLock()
+	defer sm.statsMutex.RUnlock()
 
-	// 并发获取统计信息
-	type result struct {
-		id    string
-		stats *ContainerStats
-		err   error
+	// 从缓存中批量获取统计信息
+	for _, containerID := range containerIDs {
+		statsMap[containerID] = sm.GetContainerStats(ctx, containerID)
+	}
+	return statsMap, nil
+}
+
+// statsMonitoringLoop 后台统计监控循环
+func (sm *StatsManager) statsMonitoringLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-sm.stopChan:
+			log.Println("Stats monitoring stopped")
+			return
+		case <-ticker.C:
+			sm.collectAllContainerStats(ctx)
+		}
+	}
+}
+
+// collectAllContainerStats 收集所有运行中容器的统计信息
+func (sm *StatsManager) collectAllContainerStats(ctx context.Context) {
+	// 获取所有运行中的容器
+	containers, err := sm.dockerClient.ContainerList(ctx, container.ListOptions{})
+	if err != nil {
+		log.Printf("Failed to list containers: %v", err)
+		return
 	}
 
-	results := make(chan result, len(containerIDs))
+	// 创建当前容器ID集合
+	currentContainerIDs := make(map[string]bool)
+	for _, containerInfo := range containers {
+		currentContainerIDs[containerInfo.ID] = true
+	}
 
-	for _, id := range containerIDs {
+	// 使用信号量控制并发数，避免过多并发请求
+	semaphore := make(chan struct{}, sm.maxConcurrency)
+
+	// 并发收集统计信息
+	var wg sync.WaitGroup
+	for _, containerInfo := range containers {
+		wg.Add(1)
 		go func(containerID string) {
+			defer wg.Done()
+
 			// 获取信号量
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
-			// 为每个容器创建独立的超时上下文
-			containerCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			// 为每个容器创建独立的超时上下文，避免阻塞
+			containerCtx, cancel := context.WithTimeout(ctx, sm.collectTimeout)
 			defer cancel()
 
-			stats, err := c.GetContainerStats(containerCtx, containerID)
-			results <- result{id: containerID, stats: stats, err: err}
-		}(id)
+			sm.collectSingleContainerStats(containerCtx, containerID)
+		}(containerInfo.ID)
 	}
 
-	// 收集结果
-	for i := 0; i < len(containerIDs); i++ {
-		res := <-results
-		if res.err != nil {
-			// 记录错误但继续处理其他容器
-			continue
+	wg.Wait()
+
+	// 清理不再存在的容器统计数据
+	sm.cleanupStaleStats(currentContainerIDs)
+}
+
+// collectSingleContainerStats 收集单个容器的统计信息
+func (sm *StatsManager) collectSingleContainerStats(ctx context.Context, containerID string) {
+	// logger.Logger.Info("collectSingleContainerStats", zap.String("containerID", containerID))
+	// 使用defer recover避免单个容器的panic影响整体
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Panic while collecting stats for container %s: %v", containerID[:12], r)
 		}
-		statsMap[res.id] = res.stats
+	}()
+
+	// 获取当前统计数据
+	stats, err := sm.dockerClient.ContainerStatsOneShot(ctx, containerID)
+	if err != nil {
+		// 容器可能已停止或删除，这是正常情况，降低日志级别
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("Timeout getting stats for container %s", containerID[:12])
+		} else {
+			log.Printf("Failed to get stats for container %s: %v", containerID[:12], err)
+		}
+		return
+	}
+	defer func() {
+		if closeErr := stats.Body.Close(); closeErr != nil {
+			log.Printf("Failed to close stats body for container %s: %v", containerID[:12], closeErr)
+		}
+	}()
+
+	var currentStats container.StatsResponse
+	if err := json.NewDecoder(stats.Body).Decode(&currentStats); err != nil {
+		log.Printf("Failed to decode stats for container %s: %v", containerID[:12], err)
+		return
 	}
 
-	return statsMap, nil
+	sm.statsMutex.Lock()
+	defer sm.statsMutex.Unlock()
+
+	// 获取上一次的统计数据
+	previousStats, hasPrevious := sm.rawStatsCache[containerID]
+
+	// 存储当前原始数据作为下次的previous
+	sm.rawStatsCache[containerID] = &currentStats
+
+	// 如果有上一次的数据，计算差值并更新统计
+	if hasPrevious {
+		calculatedStats := sm.calculateStats(containerID, previousStats, &currentStats)
+		if calculatedStats != nil {
+			sm.statsCache[containerID] = calculatedStats
+		}
+	} else {
+		// 第一次采样，创建一个默认的统计数据
+		sm.statsCache[containerID] = &ContainerStats{
+			ID:            containerID,
+			Name:          containerID[:12],
+			CPUPercent:    0,
+			MemoryUsage:   currentStats.MemoryStats.Usage,
+			MemoryLimit:   currentStats.MemoryStats.Limit,
+			MemoryPercent: 0,
+			NetworkRxRate: 0,
+			NetworkTxRate: 0,
+			NetworkRx:     sm.getTotalNetworkBytes(currentStats.Networks, "rx"),
+			NetworkTx:     sm.getTotalNetworkBytes(currentStats.Networks, "tx"),
+			BlockRead:     sm.getTotalBlockBytes(currentStats.BlkioStats.IoServiceBytesRecursive, "Read"),
+			BlockWrite:    sm.getTotalBlockBytes(currentStats.BlkioStats.IoServiceBytesRecursive, "Write"),
+			PidsCurrent:   currentStats.PidsStats.Current,
+			PidsLimit:     currentStats.PidsStats.Limit,
+		}
+	}
+}
+
+// calculateStats 计算两次采样之间的统计差值
+func (sm *StatsManager) calculateStats(containerID string, previous, current *container.StatsResponse) *ContainerStats {
+	timeDelta := current.Read.Sub(previous.Read).Seconds()
+	// logger.Logger.Info("calculateStats", zap.Float64("timeDelta", timeDelta))
+	if timeDelta <= 0 {
+		return nil
+	}
+
+	// 计算CPU使用率
+	var cpuPercent float64
+	cpuDelta := float64(current.CPUStats.CPUUsage.TotalUsage - previous.CPUStats.CPUUsage.TotalUsage)
+	systemDelta := float64(current.CPUStats.SystemUsage - previous.CPUStats.SystemUsage)
+
+	if systemDelta > 0 && cpuDelta >= 0 {
+		cpuPercent = (cpuDelta / systemDelta) * 100.0
+	}
+
+	// 计算内存使用率
+	var memoryPercent float64
+	var memoryUsage uint64
+
+	if current.MemoryStats.Limit > 0 {
+		if cache, exists := current.MemoryStats.Stats["cache"]; exists {
+			if current.MemoryStats.Usage > cache {
+				memoryUsage = current.MemoryStats.Usage - cache
+			} else {
+				memoryUsage = current.MemoryStats.Usage
+			}
+		} else {
+			memoryUsage = current.MemoryStats.Usage
+		}
+		memoryPercent = float64(memoryUsage) / float64(current.MemoryStats.Limit) * 100.0
+	}
+
+	// 计算网络速率
+	prevRx := sm.getTotalNetworkBytes(previous.Networks, "rx")
+	prevTx := sm.getTotalNetworkBytes(previous.Networks, "tx")
+	currRx := sm.getTotalNetworkBytes(current.Networks, "rx")
+	currTx := sm.getTotalNetworkBytes(current.Networks, "tx")
+
+	var networkRxRate, networkTxRate uint64
+	if currRx >= prevRx {
+		networkRxRate = uint64(float64(currRx-prevRx) / timeDelta)
+	}
+	if currTx >= prevTx {
+		networkTxRate = uint64(float64(currTx-prevTx) / timeDelta)
+	}
+
+	return &ContainerStats{
+		ID:            containerID,
+		Name:          containerID[:12],
+		CPUPercent:    cpuPercent,
+		MemoryUsage:   memoryUsage,
+		MemoryLimit:   current.MemoryStats.Limit,
+		MemoryPercent: memoryPercent,
+		NetworkRxRate: networkRxRate,
+		NetworkTxRate: networkTxRate,
+		NetworkRx:     currRx,
+		NetworkTx:     currTx,
+		BlockRead:     sm.getTotalBlockBytes(current.BlkioStats.IoServiceBytesRecursive, "Read"),
+		BlockWrite:    sm.getTotalBlockBytes(current.BlkioStats.IoServiceBytesRecursive, "Write"),
+		PidsCurrent:   current.PidsStats.Current,
+		PidsLimit:     current.PidsStats.Limit,
+	}
+}
+
+// getTotalNetworkBytes 计算网络总字节数
+func (sm *StatsManager) getTotalNetworkBytes(networks map[string]container.NetworkStats, direction string) uint64 {
+	var total uint64
+	for _, network := range networks {
+		if direction == "rx" {
+			total += network.RxBytes
+		} else {
+			total += network.TxBytes
+		}
+	}
+	return total
+}
+
+// getTotalBlockBytes 计算块设备总字节数
+func (sm *StatsManager) getTotalBlockBytes(entries []container.BlkioStatEntry, operation string) uint64 {
+	var total uint64
+	for _, entry := range entries {
+		if entry.Op == operation {
+			total += entry.Value
+		}
+	}
+	return total
+}
+
+// cleanupStaleStats 清理不再存在的容器统计数据
+func (sm *StatsManager) cleanupStaleStats(currentContainerIDs map[string]bool) {
+	sm.statsMutex.Lock()
+	defer sm.statsMutex.Unlock()
+
+	// 清理不存在的容器数据
+	for containerID := range sm.statsCache {
+		if !currentContainerIDs[containerID] {
+			delete(sm.statsCache, containerID)
+			delete(sm.rawStatsCache, containerID)
+		}
+	}
 }

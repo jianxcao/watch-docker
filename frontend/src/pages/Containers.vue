@@ -113,7 +113,7 @@ const statusFilter = ref<string | null>(null)
 const operationLoading = ref(false)
 
 // 定时刷新相关
-const refreshInterval = 3000 // 3秒
+const refreshInterval = 1200 // 3秒
 let statsTimer: NodeJS.Timeout | null = null
 
 // 状态过滤选项
