@@ -1,5 +1,17 @@
 <template>
-  <n-card :title="container.name" hoverable class="container-card" :class="{ 'card-updating': isUpdating }">
+  <n-card hoverable class="container-card" :class="{ 'card-updating': isUpdating }">
+    <template #header>
+      <div class="container-header">
+        <span class="container-name">{{ container.name }}</span>
+        <n-button size="tiny" circle ghost @click="copyContainerId" class="copy-id-btn">
+          <template #icon>
+            <n-icon>
+              <CopyOutline />
+            </n-icon>
+          </template>
+        </n-button>
+      </div>
+    </template>
     <template #header-extra>
       <n-space>
         <RunningStatusBadge :container="container" />
@@ -33,8 +45,16 @@
             </n-tooltip>
           </n-descriptions-item> -->
 
-          <n-descriptions-item label="最后检查">
-            <n-text :depth="3">{{ formatTime(container.lastCheckedAt) }}</n-text>
+          <n-descriptions-item label="运行时间" v-if="container.running && container.startedAt">
+            <n-text :depth="3">{{ formatRunningTime(container.startedAt) }}</n-text>
+          </n-descriptions-item>
+
+          <n-descriptions-item label="端口映射" v-if="container.ports && container.ports.length > 0">
+            <n-space size="small">
+              <n-tag v-for="port in container.ports" :key="`${port.privatePort}-${port.type}`" size="small" type="info">
+                {{ formatPort(port) }}
+              </n-tag>
+            </n-space>
           </n-descriptions-item>
         </n-descriptions>
       </div>
@@ -166,7 +186,9 @@ import {
   StopCircleOutline,
   CloudDownloadOutline,
   TrashOutline,
+  CopyOutline,
 } from '@vicons/ionicons5'
+import { useMessage } from 'naive-ui'
 
 interface Props {
   container: ContainerStatus
@@ -188,6 +210,7 @@ defineEmits<Emits>()
 
 const containerStore = useContainerStore()
 const showAllLabels = ref(false)
+const message = useMessage()
 
 // 是否正在更新
 const isUpdating = computed(() =>
@@ -202,9 +225,50 @@ const isUpdating = computed(() =>
 //   return digest.slice(0, 12) + '...'
 // }
 
-// 格式化时间显示
-const formatTime = (timeStr: string): string => {
-  return dayjs(timeStr).format('MM-DD HH:mm')
+// 格式化运行时间显示
+const formatRunningTime = (startedAt: string): string => {
+  if (!startedAt) return '-'
+  const start = dayjs(startedAt)
+  const now = dayjs()
+  const diffMs = now.diff(start)
+
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+  const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
+
+  if (days > 0) {
+    return `${days}天${hours}小时${minutes}分钟`
+  } else if (hours > 0) {
+    return `${hours}小时${minutes}分钟`
+  } else {
+    return `${minutes}分钟`
+  }
+}
+
+// 格式化端口映射显示
+const formatPort = (port: any): string => {
+  if (port.publicPort) {
+    return `${port.publicPort}:${port.privatePort}/${port.type}`
+  } else {
+    return `${port.privatePort}/${port.type}`
+  }
+}
+
+// 复制容器ID
+const copyContainerId = async () => {
+  try {
+    await navigator.clipboard.writeText(props.container.id)
+    message.success('容器ID已复制到剪贴板')
+  } catch (err) {
+    // 兼容旧浏览器
+    const textarea = document.createElement('textarea')
+    textarea.value = props.container.id
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    message.success('容器ID已复制到剪贴板')
+  }
 }
 
 // 标签相关计算
@@ -254,6 +318,27 @@ const isLabelTruncated = (key: string, value: string): boolean => {
   &.card-updating {
     border-color: #1890ff;
     box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+  }
+}
+
+.container-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .container-name {
+    flex: 1;
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .copy-id-btn {
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+
+    &:hover {
+      opacity: 1;
+    }
   }
 }
 

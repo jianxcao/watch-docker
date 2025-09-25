@@ -23,6 +23,14 @@ export interface ContainerStats {
   pidsLimit: number
 }
 
+// 端口映射信息
+export interface PortInfo {
+  ip: string
+  privatePort: number
+  publicPort: number
+  type: string
+}
+
 // 容器状态类型
 export interface ContainerStatus {
   id: string
@@ -36,6 +44,8 @@ export interface ContainerStatus {
   skipReason: string
   labels: Record<string, string>
   lastCheckedAt: string
+  startedAt: string // 容器启动时间
+  ports: PortInfo[] // 端口映射信息
   stats?: ContainerStats // 可选的资源统计信息
 }
 

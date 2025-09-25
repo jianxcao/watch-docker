@@ -13,19 +13,6 @@ type Client struct {
 	statsManager *StatsManager
 }
 
-type ContainerInfo struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Image       string            `json:"image"`
-	ImageID     string            `json:"imageId"`
-	RepoTags    []string          `json:"repoTags"`
-	RepoDigests []string          `json:"repoDigests"`
-	Labels      map[string]string `json:"labels"`
-	State       string            `json:"state"`
-	Status      string            `json:"status"`
-	Created     int64             `json:"created"`
-}
-
 func New(ctx context.Context, host string) (*Client, error) {
 	return NewWithStatsConfig(ctx, host, StatsManagerConfig{})
 }
