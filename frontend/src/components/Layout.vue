@@ -29,7 +29,7 @@
 
       <!-- 内容区域 -->
       <n-layout-content class="layout-content" position="static">
-        <router-view />
+        <router-view class="h-full" />
       </n-layout-content>
       <n-el id="footer"></n-el>
     </n-layout>
@@ -72,6 +72,8 @@ function onToggleTheme() {
 
 .layout-content {
   padding: 16px;
+  box-sizing: border-box;
+  min-height: calc(100vh - 56px);
 }
 
 #footer {

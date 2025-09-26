@@ -95,8 +95,8 @@ const filteredImages = computed(() => {
 
 
 // 操作处理函数
-const handleDelete = async (image: ImageInfo, force: boolean = false) => {
-  await imageHooks.handleDelete(image, force)
+const handleDelete = async (image: ImageInfo) => {
+  await imageHooks.handleDelete(image)
 }
 
 // const handleDeleteDangling = async () => {
@@ -132,7 +132,7 @@ onMounted(async () => {
 
 .images-page {
   .images-content {
-    margin-top: 16px;
+    margin-block: 16px;
     position: relative;
   }
 

@@ -8,7 +8,7 @@
         </div>
         <span class="message">
           <span>{{ log.msg }}</span>
-          <span>{{ _.omit(log, ['level', 'time', 'msg']) }}</span>
+          <span>{{ _.omit(log, ['level', 'time', 'msg', '_k']) }}</span>
         </span>
       </div>
     </div>
@@ -40,34 +40,7 @@ const logs = ref<LogEntry[]>([])
 let eventSource: EventSource | null = null
 const containerRef = ref<HTMLDivElement | null>(null)
 
-// 批量缓冲，避免高频渲染
-const buffer: LogEntry[] = []
-let flushScheduled = false
 let nextId = 1
-
-
-
-function scheduleFlush() {
-  if (flushScheduled) return
-  flushScheduled = true
-  requestAnimationFrame(async () => {
-    try {
-      if (buffer.length === 0) return
-      // 批量一次性 push，减少响应触发次数
-      logs.value.push(...buffer)
-      buffer.length = 0
-      // 控制日志数量上限
-      if (logs.value.length > 500) {
-        const removeCount = logs.value.length - 500
-        logs.value.splice(0, removeCount)
-      }
-    } finally {
-      flushScheduled = false
-      // 若在 flush 过程中又有新数据，继续安排下一次
-      if (buffer.length > 0) scheduleFlush()
-    }
-  })
-}
 
 
 
@@ -90,12 +63,23 @@ function levelColor(level: string) {
 onMounted(() => {
   eventSource = new EventSource(`/api/v1/logs?token=${token.value}`)
   eventSource.onmessage = (e) => {
-    const entry = JSON.parse(e.data)
-    entry.time = new Date(entry.time).toLocaleString()
-    // 为每条日志生成稳定 key
-    entry._k = nextId++
-    buffer.push(entry)
-    scheduleFlush()
+    // 统一处理数组格式的消息
+    const logArray = JSON.parse(e.data)
+
+    // 处理数组中的每条日志
+    logArray.forEach((logEntry: any) => {
+      logEntry.time = new Date(logEntry.time).toLocaleString()
+      logEntry._k = nextId++
+    })
+
+    const newLogs = [...logs.value, ...logArray]
+    // 控制日志数量上限
+    if (newLogs.length > 500) {
+      const removeCount = newLogs.length - 500
+      newLogs.splice(0, removeCount)
+    }
+    // 直接添加所有日志
+    logs.value = newLogs
   }
 })
 

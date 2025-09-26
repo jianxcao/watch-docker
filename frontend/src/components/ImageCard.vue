@@ -1,97 +1,62 @@
 <template>
-  <n-card hoverable class="image-card">
-    <template #header>
-      <n-space align="center" justify="space-between">
-        <div class="image-title">
-          <n-text strong>{{ imageStore.getImageDisplayTag(image) }}</n-text>
-          <n-tag v-if="imageStore.isDanglingImage(image)" type="warning" size="small" style="margin-left: 8px;">
-            悬空
-          </n-tag>
-        </div>
-      </n-space>
-    </template>
-
-    <n-space vertical>
-      <!-- 镜像信息 -->
-      <n-descriptions :column="1" size="small">
-        <n-descriptions-item label="ID">
-          <n-tooltip>
-            <template #trigger>
-              <n-text code class="image-id cursor-pointer">{{ imageStore.getDigestDisplayText(image)
-              }}</n-text>
-            </template>
-            {{ getFullDigestText(image) }}
-          </n-tooltip>
-        </n-descriptions-item>
-
-        <n-descriptions-item label="标签">
-          <n-text class="image-tags">{{ imageHooks.getTagsDisplayText(image) }}</n-text>
-        </n-descriptions-item>
-
-        <n-descriptions-item label="大小">
-          <n-text>{{ imageStore.formatSize(image.size) }}</n-text>
-        </n-descriptions-item>
-
-        <n-descriptions-item label="创建时间">
-          <n-text :depth="3">{{ imageHooks.formatCreateTime(image.created) }}</n-text>
-        </n-descriptions-item>
-
-        <n-descriptions-item label="持续时间">
-          <n-text :depth="3">{{ imageHooks.getImageAge(image.created) }}</n-text>
-        </n-descriptions-item>
-
-        <n-descriptions-item label="使用状态">
-          <n-space align="center" size="small">
-            <n-tag :type="imageHooks.isImageInUse(image) ? 'info' : 'default'" size="small">
-              {{ imageHooks.getImageUsageText(image) }}
-            </n-tag>
-
-            <!-- 如果有使用该镜像的容器，显示容器列表 -->
-            <n-tooltip v-if="imageHooks.isImageInUse(image)">
-              <template #trigger>
-                <n-icon style="cursor: pointer; color: #999;">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <path
-                      d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
-                  </svg>
-                </n-icon>
-              </template>
-              <div>
-                <div style="margin-bottom: 4px;"><strong>使用此镜像的容器：</strong></div>
-                <div v-for="containerName in imageHooks.getImageUsageContainers(image)" :key="containerName">
-                  • {{ containerName }}
-                </div>
-              </div>
-            </n-tooltip>
-          </n-space>
-        </n-descriptions-item>
-      </n-descriptions>
-
-      <!-- 完整标签列表 -->
-      <div v-if="image.repoTags && image.repoTags.length > 1" class="full-tags">
-        <n-text strong style="font-size: 12px;">所有标签:</n-text>
-        <n-space style="margin-top: 4px;" vertical size="small">
-          <n-tag v-for="tag in validTags(image.repoTags)" :key="tag" size="tiny" type="info">
-            {{ tag }}
-          </n-tag>
-        </n-space>
+  <div class="image-card">
+    <!-- 头部：镜像名称和状态 -->
+    <div class="card-header">
+      <div class="image-name">
+        {{ imageHooks.getImageNameOnly(image) }}
       </div>
-    </n-space>
+      <div class="status-tags">
+        <n-tag v-if="imageHooks.isImageInUse(image)" :bordered="false" round type="success" size="small">
+          使用中
+        </n-tag>
+      </div>
+    </div>
 
-    <template #action>
-      <n-space justify="end">
-        <n-button @click="() => handleDelete()" type="error" size="small" ghost
-          :loading="imageStore.isImageDeleting(image.id)">
-          <template #icon>
-            <n-icon>
-              <TrashOutline />
-            </n-icon>
-          </template>
-          删除
-        </n-button>
-      </n-space>
-    </template>
-  </n-card>
+    <!-- 版本信息 -->
+    <div class="tag-section">
+      <n-icon class="tag-icon">
+        <TagIcon />
+      </n-icon>
+      <span class="tag-text">{{ imageHooks.getVersionDisplayText(image) }}</span>
+    </div>
+
+    <!-- 信息列表 -->
+    <div class="info-list">
+      <div class="info-item">
+        <span class="info-label">ID</span>
+        <span class="info-value">{{ imageStore.getDisplayId(image) }}</span>
+      </div>
+
+      <div class="info-item">
+        <n-icon class="info-icon">
+          <SizeIcon />
+        </n-icon>
+        <span class="info-label">大小</span>
+        <span class="info-value">{{ imageStore.formatSize(image.size) }}</span>
+      </div>
+
+      <div class="info-item">
+        <n-icon class="info-icon">
+          <CalendarIcon />
+        </n-icon>
+        <span class="info-label">创建时间</span>
+        <span class="info-value">{{ imageHooks.formatCreateTime(image.created) }}</span>
+      </div>
+    </div>
+
+    <!-- 删除按钮 -->
+    <div class="card-footer">
+      <n-button @click="() => handleDelete()" type="error" ghost size="small" class="delete-btn"
+        :loading="imageStore.isImageDeleting(image.id)">
+        <template #icon>
+          <n-icon>
+            <TrashOutline />
+          </n-icon>
+        </template>
+        删除
+      </n-button>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -100,6 +65,10 @@ import { useImage } from '@/hooks/useImage'
 import type { ImageInfo } from '@/common/types'
 import { TrashOutline } from '@vicons/ionicons5'
 
+// 导入 SVG 图标
+import TagIcon from '@/assets/svg/tag.svg?component'
+import SizeIcon from '@/assets/svg/size.svg?component'
+import CalendarIcon from '@/assets/svg/calendar.svg?component'
 // Props
 interface Props {
   image: ImageInfo
@@ -116,50 +85,117 @@ const emit = defineEmits<{
 const imageStore = useImageStore()
 const imageHooks = useImage()
 
-// 获取有效标签（过滤掉 <none>:<none>）
-const validTags = (tags: string[]): string[] => {
-  return tags.filter(tag => tag !== '<none>:<none>')
-}
 
-// 获取完整的摘要文本（用于悬停提示）
-const getFullDigestText = (image: ImageInfo): string => {
-  // 优先显示 repoDigests 中的第一个摘要
-  if (image.repoDigests && image.repoDigests.length > 0) {
-    return image.repoDigests[0]
-  }
-
-  // 如果没有摘要，显示完整的镜像 ID
-  return image.id
-}
 
 // 删除处理函数
 const handleDelete = () => {
-  emit('delete', props.image, false)
+  emit('delete', props.image)
 }
 </script>
 
 <style scoped lang="less">
 .image-card {
-  .image-title {
+  background: var(--card-color);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  padding: 16px;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+  color: var(--text-color-1);
+  box-shadow: var(--box-shadow-1);
+
+  &:hover {
+    transform: translateY(-2px);
+    background: linear-gradient(135deg, var(--card-color) 0%, color-mix(in srgb, var(--card-color) 10%, transparent) 100%);
+    border-color: color-mix(in srgb, var(--border-color) 90%, var(--text-color-3) 100%);
+  }
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, var(--text-color-disabled) 50%, transparent 100%);
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1px;
+
+    .image-name {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-base);
+      line-height: 1.3;
+      flex: 1;
+      margin-right: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .tag-section {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 16px;
+
+    .tag-text {
+      color: var(--text-color-3);
+    }
+
+    .tag-icon {
+      color: var(--text-color-3);
+      flex-shrink: 0;
+    }
+
   }
 
-  .image-id {
-    font-size: 11px;
-    font-family: 'Monaco', 'Consolas', monospace;
+  .info-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+
+    .info-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 2px 0;
+
+      .info-icon {
+        color: var(--text-color-3);
+        flex-shrink: 0;
+      }
+
+      .info-label {
+        color: var(--text-color-3);
+        min-width: 60px;
+        flex-shrink: 0;
+      }
+
+      .info-value {
+        color: var(--text-color-2);
+        font-weight: 500;
+        flex: 1;
+        text-align: right;
+      }
+    }
   }
 
-  .image-tags {
-    word-break: break-all;
-    font-family: 'Monaco', 'Consolas', monospace;
-    font-size: 12px;
-  }
 
-  .full-tags {
-    padding: 8px 0;
-    border-top: 1px solid #f0f0f0;
+  .card-footer {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--divider-color);
+    display: flex;
+    justify-content: flex-end;
   }
 }
 </style>

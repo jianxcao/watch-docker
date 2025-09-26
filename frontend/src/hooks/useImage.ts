@@ -1,6 +1,8 @@
 import { useImageStore } from '@/store/image'
 import { useContainerStore } from '@/store/container'
 import { useMessage, useDialog } from 'naive-ui'
+import { h, ref } from 'vue'
+import { NCheckbox, NSpace, NText } from 'naive-ui'
 import type { ImageInfo, ContainerStatus } from '@/common/types'
 
 export function useImage() {
@@ -10,63 +12,68 @@ export function useImage() {
   const dialog = useDialog()
 
   // 删除镜像（带确认）
-  const handleDelete = (image: ImageInfo, force: boolean = false) => {
+  const handleDelete = (image: ImageInfo) => {
     const displayTag = store.getImageDisplayTag(image)
     const isDangling = store.isDanglingImage(image)
     const isInUse = isImageInUse(image)
     const usingContainers = getContainersUsingImage(image)
 
+    // 创建响应式的强制删除选项，如果镜像正在被使用则默认选中
+    const forceDeleteRef = ref(isInUse)
+
     let title: string
-    let content: string
+    let contentText: string
 
     if (isDangling) {
       title = '确认删除悬空镜像'
-      content = `确定要删除悬空镜像 "${displayTag}" 吗？`
-    } else if (isInUse && !force) {
-      title = '镜像正在被使用'
-      const containerList = usingContainers.map((c) => `• ${c.name}`).join('\n')
-      content = `镜像 "${displayTag}" 正在被以下容器使用：\n\n${containerList}\n\n删除此镜像可能会影响这些容器的运行。是否强制删除？`
+      contentText = `确定要删除悬空镜像 "${displayTag}" 吗？`
     } else {
-      title = force ? '强制删除镜像' : '确认删除镜像'
-      if (force && isInUse) {
+      title = '确认删除镜像'
+      if (isInUse) {
         const containerList = usingContainers.map((c) => `• ${c.name}`).join('\n')
-        content = `确定要强制删除镜像 "${displayTag}" 吗？\n\n此镜像正在被以下容器使用：\n${containerList}\n\n这将强制删除镜像，可能会影响这些容器的运行。`
+        contentText = `镜像 "${displayTag}" 正在被以下容器使用：\n\n${containerList}\n\n删除此镜像可能会影响这些容器的运行。`
       } else {
-        content = `确定要删除镜像 "${displayTag}" 吗？${force ? '这将强制删除镜像。' : ''}`
+        contentText = `确定要删除镜像 "${displayTag}" 吗？`
       }
     }
+
+    // 创建自定义对话框内容
+    const content = () =>
+      h(
+        NSpace,
+        { vertical: true },
+        [
+          h(NText, {}, contentText),
+          // 只有在非悬空镜像时才显示强制删除选项
+          !isDangling &&
+            h(
+              NCheckbox,
+              {
+                checked: forceDeleteRef.value,
+                'onUpdate:checked': (checked: boolean) => {
+                  forceDeleteRef.value = checked
+                },
+              },
+              '强制删除'
+            ),
+        ].filter(Boolean)
+      )
 
     const d = dialog.warning({
       title,
       content,
-      positiveText: isInUse && !force ? '强制删除' : '确认删除',
+      positiveText: '确认删除',
       negativeText: '取消',
       onPositiveClick: async () => {
         try {
           d.loading = true
-          // 如果镜像被使用且不是强制删除，则设为强制删除
-          const shouldForce = force || isInUse
+          const shouldForce = isDangling ? false : forceDeleteRef.value
           await store.deleteImage(image.id, shouldForce)
           message.success(`镜像 ${displayTag} 删除成功`)
           d.loading = false
         } catch (error: any) {
           d.loading = false
-          // 如果删除失败且不是强制删除，询问是否强制删除
-          if (!force && error.message.includes('conflict')) {
-            const d1 = dialog.warning({
-              title: '删除失败',
-              content: `镜像 "${displayTag}" 正在被容器使用，是否强制删除？`,
-              positiveText: '强制删除',
-              negativeText: '取消',
-              onPositiveClick: () => {
-                d1.loading = true
-                handleDelete(image, true)
-                d1.loading = false
-              },
-            })
-          } else {
-            message.error(`删除镜像失败: ${error.message}`)
-          }
+          message.error(`删除镜像失败: ${error.message}`)
         }
       },
     })
@@ -154,8 +161,8 @@ export function useImage() {
     return '刚刚'
   }
 
-  // 获取镜像标签列表的显示文本
-  const getTagsDisplayText = (image: ImageInfo): string => {
+  // 获取镜像版本的显示文本
+  const getVersionDisplayText = (image: ImageInfo): string => {
     if (!image.repoTags || image.repoTags.length === 0) {
       return '<none>'
     }
@@ -165,11 +172,53 @@ export function useImage() {
       return '<none>'
     }
 
-    if (validTags.length === 1) {
-      return validTags[0]
+    // 从第一个有效标签中提取版本
+    const firstTag = validTags[0]
+    const colonIndex = firstTag.lastIndexOf(':')
+
+    if (colonIndex === -1) {
+      // 如果没有冒号，返回 latest
+      return 'latest'
     }
 
-    return `${validTags[0]} +${validTags.length - 1}`
+    const version = firstTag.substring(colonIndex + 1)
+
+    // 如果版本为空或者是 latest，返回 latest
+    if (!version || version === 'latest') {
+      return 'latest'
+    }
+
+    // 如果有多个标签，显示版本数量
+    if (validTags.length > 1) {
+      return `${version} +${validTags.length - 1}`
+    }
+
+    return version
+  }
+
+  // 获取镜像名称（不包含版本）
+  const getImageNameOnly = (image: ImageInfo): string => {
+    if (!image.repoTags || image.repoTags.length === 0) {
+      // 如果没有标签，返回短ID
+      return image.id.startsWith('sha256:') ? image.id.slice(7, 19) : image.id.slice(0, 12)
+    }
+
+    const validTags = image.repoTags.filter((tag) => tag !== '<none>:<none>')
+    if (validTags.length === 0) {
+      // 如果没有有效标签，返回短ID
+      return image.id.startsWith('sha256:') ? image.id.slice(7, 19) : image.id.slice(0, 12)
+    }
+
+    // 从第一个有效标签中提取镜像名称（冒号前面的部分）
+    const firstTag = validTags[0]
+    const colonIndex = firstTag.lastIndexOf(':')
+
+    if (colonIndex === -1) {
+      // 如果没有冒号，整个标签就是镜像名称
+      return firstTag
+    }
+
+    return firstTag.substring(0, colonIndex)
   }
 
   // 获取镜像摘要的显示文本
@@ -260,7 +309,8 @@ export function useImage() {
     // 工具方法
     formatCreateTime,
     getImageAge,
-    getTagsDisplayText,
+    getVersionDisplayText,
+    getImageNameOnly,
     getDigestDisplayText,
 
     // 镜像使用情况相关方法
