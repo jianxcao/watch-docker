@@ -1,48 +1,13 @@
 <template>
   <div class="images-page">
     <!-- 页面头部 -->
-    <n-card class="page-header">
-      <n-space align="center" justify="space-between">
-        <div>
-          <n-h2 style="margin: 0;">镜像管理</n-h2>
-          <n-text depth="3">
-            共 {{ imageStore.stats.total }} 个镜像，
-            总大小 {{ imageStore.stats.formattedTotalSize }}，
-            <!-- {{ imageStore.danglingImages.length }} 个悬空镜像 -->
-          </n-text>
-        </div>
-
-        <n-space>
-          <!-- 搜索 -->
-          <n-input v-model:value="searchKeyword" placeholder="搜索镜像标签或ID" style="width: 200px;" clearable>
-            <template #prefix>
-              <n-icon>
-                <SearchOutline />
-              </n-icon>
-            </template>
-          </n-input>
-
-          <!-- 批量删除悬空镜像 -->
-          <!-- <n-button v-if="imageStore.danglingImages.length > 0" @click="handleDeleteDangling" type="warning" ghost>
-            <template #icon>
-              <n-icon>
-                <TrashOutline />
-              </n-icon>
-            </template>
-            清理悬空镜像
-          </n-button> -->
-
-          <!-- 刷新按钮 -->
-          <n-button @click="handleRefresh" :loading="imageStore.loading" circle>
-            <template #icon>
-              <n-icon>
-                <RefreshOutline />
-              </n-icon>
-            </template>
-          </n-button>
-        </n-space>
-      </n-space>
-    </n-card>
+    <n-input v-model:value="searchKeyword" placeholder="搜索镜像标签或ID" style="width: 200px;" clearable>
+      <template #prefix>
+        <n-icon>
+          <SearchOutline />
+        </n-icon>
+      </template>
+    </n-input>
 
     <!-- 镜像列表 -->
     <div class="images-content">
@@ -157,6 +122,23 @@
       </n-spin>
     </div>
   </div>
+
+  <Teleport to="#header" defer>
+    <div class="welcome-card">
+      <div>
+        <n-h2 class="m-0 text-lg">镜像管理</n-h2>
+        <n-text depth="3" class="text-xs max-md:hidden ">
+          共 {{ imageStore.stats.total }} 个镜像，
+          总大小 {{ imageStore.stats.formattedTotalSize }}，
+        </n-text>
+      </div>
+      <n-button @click="handleRefresh" :loading="imageStore.loading" circle size="tiny">
+        <template #icon>
+          <RefreshOutline />
+        </template>
+      </n-button>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -246,11 +228,18 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="less">
+.welcome-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-direction: row;
+  height: 100%;
+}
+
 .images-page {
   .images-content {
     margin-top: 16px;
     position: relative;
-    min-height: 400px;
   }
 
   .empty-state {
@@ -309,28 +298,6 @@ onMounted(async () => {
   .images-page {
     .images-grid {
       gap: 8px;
-    }
-  }
-}
-
-@media (max-width: 640px) {
-  .images-page {
-    .page-header {
-      .n-space {
-        flex-direction: column;
-        align-items: stretch !important;
-
-        &>div:last-child {
-          .n-space {
-            flex-wrap: wrap;
-
-            .n-input {
-              width: 100% !important;
-              min-width: 200px;
-            }
-          }
-        }
-      }
     }
   }
 }

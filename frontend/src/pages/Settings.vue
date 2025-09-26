@@ -2,9 +2,9 @@
   <div class="settings-page">
     <!-- 页面头部 -->
     <n-card class="page-header">
-      <n-h2 style="margin: 0;">系统设置</n-h2>
+      <n-h2 style="margin: 0;"></n-h2>
       <n-text depth="3">
-        配置 Watch Docker 的运行参数和策略
+
       </n-text>
     </n-card>
 
@@ -152,17 +152,23 @@
     </div>
 
   </div>
+  <Teleport to="#header" defer>
+    <div class="welcome-card">
+      <div>
+        <n-h2 class="m-0 text-lg">系统设置</n-h2>
+        <n-text depth="3" class="text-xs max-md:hidden ">
+          配置 Watch Docker 的运行参数和策略
+        </n-text>
+      </div>
+    </div>
+  </Teleport>
+
   <!-- 底部保存按钮 -->
   <Teleport to="#footer" defer>
     <div class="save-button-container">
       <n-button type="primary" size="large" @click="handleSave" :loading="saving">
         <template #icon>
-          <n-icon>
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-              <path
-                d="M17 3H5C3.89 3 3 3.9 3 5V19C3 20.1 3.89 21 5 21H19C20.1 21 21 20.1 21 19V7L17 3M19 19H5V5H16.17L19 7.83V19M12 12C13.66 12 15 13.34 15 15S13.66 18 12 18 9 16.66 9 15 10.34 12 12 12M6 6H15V10H6V6Z" />
-            </svg>
-          </n-icon>
+          <SaveOutline />
         </template>
         保存配置
       </n-button>
@@ -174,7 +180,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import type { Config } from '@/common/types'
-import { AddOutline } from '@vicons/ionicons5'
+import { AddOutline, SaveOutline } from '@vicons/ionicons5'
 import { configApi } from '@/common/api'
 
 const message = useMessage()
@@ -298,6 +304,15 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="less">
+.welcome-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-direction: row;
+  height: 100%;
+}
+
+
 .settings-page {
   .page-header {
     margin-bottom: 16px;
@@ -315,13 +330,9 @@ onMounted(async () => {
 }
 
 .save-button-container {
-  padding: 8px 0;
   width: 100%;
-  text-align: center;
-  background: color-mix(in srgb, var(--card-color) 30%, transparent);
-  border-top: 1px solid var(--border-color);
-  backdrop-filter: blur(20px);
-  z-index: 100;
+  text-align: right;
+  padding-inline: 16px;
 }
 
 // 响应式调整

@@ -37,7 +37,7 @@
           {{ healthText }}
         </n-tag>
         <n-text depth="3" style="font-size: 12px;">
-          v{{ version }}
+          {{ version }}
         </n-text>
       </div>
       <div class="footer-actions">
@@ -227,16 +227,17 @@ onMounted(() => {
 .sider-content {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: 100vh;
   padding-bottom: var(--bottom-inset);
   padding-top: var(--top-inset);
+  box-sizing: border-box;
 }
 
 .sider-header {
-  height: 66px;
+  height: 56px;
   box-sizing: border-box;
   padding: 0 16px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--divider-color);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -254,10 +255,10 @@ onMounted(() => {
 }
 
 .user-info {
-  margin-top: auto;
   padding: 12px;
-  border-top: 1px solid var(--border-color);
-  border-bottom: 1px solid var(--border-color);
+  border-top: 1px solid var(--divider-color);
+  border-bottom: 1px solid var(--divider-color);
+  box-sizing: border-box;
 }
 
 .sider-footer {
@@ -267,7 +268,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--divider-color);
 }
 
 .footer-actions {

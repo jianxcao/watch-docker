@@ -1,8 +1,5 @@
 <template>
   <div>
-    <div class="header">
-      日志
-    </div>
     <div class="log-container" ref="containerRef">
       <div v-for="log in logs" :key="log._k" class="log-line">
         <div class="log-line-left">
@@ -16,6 +13,12 @@
       </div>
     </div>
   </div>
+
+  <Teleport to="#header" defer>
+    <div class="h-full flex items-center">
+      <n-h2 class="m-0 text-lg">日志</n-h2>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">

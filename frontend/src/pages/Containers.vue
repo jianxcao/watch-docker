@@ -1,49 +1,20 @@
 <template>
   <div class="containers-page">
     <!-- 页面头部 -->
-    <n-card class="page-header">
-      <n-space align="center" justify="space-between">
-        <div>
-          <n-space align="center">
-            <n-h2 style="margin: 0;">容器管理</n-h2>
-            <n-tag :type="getConnectionStatusType()" size="small">
-              {{ getConnectionStatusText() }}
-            </n-tag>
-          </n-space>
-          <n-text depth="3">
-            共 {{ containerStore.stats.total }} 个容器，
-            {{ containerStore.stats.running }} 个运行中，
-            {{ containerStore.stats.updateable }} 个可更新
-          </n-text>
-        </div>
+    <n-space>
+      <!-- 过滤器 -->
+      <n-select v-model:value="statusFilter" :options="statusFilterOptions" placeholder="状态过滤" style="width: 120px;"
+        clearable />
+      <!-- 搜索 -->
+      <n-input v-model:value="searchKeyword" placeholder="搜索容器名称或镜像" style="width: 200px;" clearable>
+        <template #prefix>
+          <n-icon>
+            <SearchOutline />
+          </n-icon>
+        </template>
+      </n-input>
 
-        <n-space>
-          <!-- 过滤器 -->
-          <n-select v-model:value="statusFilter" :options="statusFilterOptions" placeholder="状态过滤" style="width: 120px;"
-            clearable />
-
-          <!-- 搜索 -->
-          <n-input v-model:value="searchKeyword" placeholder="搜索容器名称或镜像" style="width: 200px;" clearable>
-            <template #prefix>
-              <n-icon>
-                <SearchOutline />
-              </n-icon>
-            </template>
-          </n-input>
-
-
-          <!-- 刷新按钮 -->
-          <n-button @click="handleRefresh" :loading="containerStore.loading" circle>
-            <template #icon>
-              <n-icon>
-                <RefreshOutline />
-              </n-icon>
-            </template>
-          </n-button>
-        </n-space>
-      </n-space>
-    </n-card>
-
+    </n-space>
     <!-- 容器列表 -->
     <div class="containers-content">
       <n-spin :show="containerStore.loading && filteredContainers.length === 0">
@@ -92,6 +63,27 @@
       <span></span>
     </n-badge>
   </div>
+
+  <Teleport to="#header" defer>
+    <div class="welcome-card">
+      <div>
+        <n-h2 class="m-0 text-lg">容器管理<span class="text-xs pl-1">{{ connectionStatusType }}</span></n-h2>
+        <n-text depth="3" class="text-xs max-md:hidden ">
+          共 {{ containerStore.stats.total }} 个容器，
+          {{ containerStore.stats.running }} 个运行中，
+          {{ containerStore.stats.updateable }} 个可更新
+        </n-text>
+      </div>
+      <!-- 刷新按钮 -->
+      <n-button @click="handleRefresh" :loading="containerStore.loading" circle size="tiny">
+        <template #icon>
+          <n-icon>
+            <RefreshOutline />
+          </n-icon>
+        </template>
+      </n-button>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -210,31 +202,20 @@ const handleRefresh = async () => {
 }
 
 // WebSocket 连接状态指示器
-const getConnectionStatusType = () => {
-  switch (wsConnectionState.value) {
-    case 'connected':
-      return 'success'
-    case 'connecting':
-      return 'info'
-    case 'disconnected':
-      return 'error'
-    default:
-      return 'warning'
-  }
-}
 
-const getConnectionStatusText = () => {
+const connectionStatusType = computed(() => {
   switch (wsConnectionState.value) {
     case 'connected':
-      return '实时连接'
+      return '🟢'
     case 'connecting':
-      return '连接中'
+      return '🟡'
     case 'disconnected':
-      return '连接断开'
+      return '🔴'
     default:
-      return '未知状态'
+      return '🟡'
   }
-}
+})
+
 
 // 页面初始化
 onMounted(async () => {
@@ -247,6 +228,14 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="less">
+.welcome-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-direction: row;
+  height: 100%;
+}
+
 .containers-page {
   width: 100%;
 
@@ -303,7 +292,7 @@ onMounted(async () => {
 
   .update-badge {
     position: fixed;
-    bottom: 75px;
+    bottom: 105px;
     right: 35px;
     z-index: 101;
   }

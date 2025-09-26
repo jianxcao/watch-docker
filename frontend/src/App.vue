@@ -57,10 +57,6 @@ onMounted(async () => {
 .container {
   height: 100vh;
   width: 100vw;
-  height: 100dvh;
-  width: 100dvw;
   box-sizing: border-box;
-  padding-top: var(--top-inset);
-  padding-bottom: var(--bottom-inset);
 }
 </style>

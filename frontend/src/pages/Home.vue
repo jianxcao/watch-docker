@@ -133,7 +133,7 @@
             <div>
               <n-text strong>{{ container.name }}</n-text>
               <br>
-              <n-text depth="3" style="font-size: 12px;">{{ container.image }}</n-text>
+              <n-text depth="3" class="text-xs">{{ container.image }}</n-text>
             </div>
 
             <n-space>
@@ -155,17 +155,11 @@
   <Teleport to="#header" defer>
     <div class="welcome-card">
       <div>
-        <n-h2 class="m-0 text-xl">欢迎使用 Watch Docker</n-h2>
-        <n-text depth="3" class="text-xs">
+        <n-h2 class="m-0 text-lg">首页<span class="text-xs pl-1">{{ systemHealthIcon }}</span></n-h2>
+        <n-text depth="3" class="text-xs max-md:hidden ">
           Docker 容器和镜像管理工具，自动检测更新并管理您的容器
         </n-text>
       </div>
-      <n-tag :type="systemHealthType" size="small">
-        <template #icon>
-          <n-icon :component="systemHealthIcon" />
-        </template>
-        {{ systemHealthText }}
-      </n-tag>
     </div>
   </Teleport>
 </template>
@@ -176,28 +170,25 @@ import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
 import { useContainer } from '@/hooks/useContainer'
-// import { useImage } from '@/hooks/useImage'
+import { useSettingStore } from '@/store/setting'
 import StatusBadge from '@/components/StatusBadge.vue'
 import dayjs from 'dayjs'
 import {
   LayersOutline,
   ArchiveOutline,
   CloudDownloadOutline,
-  // TrashOutline,
   RefreshOutline,
-  CheckmarkCircleOutline,
-  CloseCircleOutline,
-  HelpCircleOutline,
 } from '@vicons/ionicons5'
 
 const appStore = useAppStore()
 const containerStore = useContainerStore()
 const imageStore = useImageStore()
 const containerHooks = useContainer()
-// const imageHooks = useImage()
+const settingStore = useSettingStore()
 
 // 版本信息
-const version = '0.0.1'
+// 版本信息
+const version = computed(() => settingStore.systemInfo?.version)
 
 // 系统健康状态
 const systemHealthType = computed(() => {
@@ -225,11 +216,11 @@ const systemHealthText = computed(() => {
 const systemHealthIcon = computed(() => {
   switch (appStore.systemHealth) {
     case 'healthy':
-      return CheckmarkCircleOutline
+      return '🟢'
     case 'unhealthy':
-      return CloseCircleOutline
+      return '🔴'
     default:
-      return HelpCircleOutline
+      return '🟡'
   }
 })
 
