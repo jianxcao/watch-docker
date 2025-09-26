@@ -10,6 +10,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     ConfigView: typeof import('./src/components/ConfigView.vue')['default']
     ContainerCard: typeof import('./src/components/ContainerCard.vue')['default']
+    ImageCard: typeof import('./src/components/ImageCard.vue')['default']
     Layout: typeof import('./src/components/Layout.vue')['default']
     LoadingView: typeof import('./src/components/LoadingView.vue')['default']
     MobileDrawer: typeof import('./src/components/MobileDrawer.vue')['default']
