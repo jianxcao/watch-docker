@@ -20,7 +20,7 @@
           </n-avatar>
           <n-text>{{ authStore.username }}</n-text>
         </n-space>
-        <n-button text size="small" @click="handleLogout" title="登出">
+        <n-button text size="large" @click="handleLogout" title="登出">
           <template #icon>
             <n-icon>
               <LogOutOutline />
@@ -41,10 +41,10 @@
         </n-text>
       </div>
       <div class="footer-actions">
-        <n-icon @click="handleGithubClick" class="cursor-pointer" title="访问 GitHub 仓库">
+        <n-icon @click="handleGithubClick" class="cursor-pointer" title="访问 GitHub 仓库" size="20">
           <LogoGithub />
         </n-icon>
-        <n-icon @click="handleRefresh" :loading="appStore.globalLoading" class="cursor-pointer" title="刷新数据">
+        <n-icon @click="handleRefresh" :loading="appStore.globalLoading" class="cursor-pointer" title="刷新数据" size="20">
           <template v-if="appStore.globalLoading">
             <RefreshOutline class="rotating" />
           </template>
@@ -228,6 +228,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  padding-bottom: var(--bottom-inset);
+  padding-top: var(--top-inset);
 }
 
 .sider-header {
@@ -238,7 +240,6 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-
 
   .logo {
     width: 32px;
@@ -260,12 +261,13 @@ onMounted(() => {
 }
 
 .sider-footer {
-  padding: 8px;
+  padding: 12px;
   height: 56px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .footer-actions {

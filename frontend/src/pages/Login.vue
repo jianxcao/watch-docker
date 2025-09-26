@@ -19,7 +19,7 @@
           </n-form-item>
 
           <n-form-item label="密码" path="password" class="pb-2">
-            <n-input v-model:value="loginForm.password" type="password" placeholder="请输入密码" show-password-on="mousedown"
+            <n-input v-model:value="loginForm.password" type="password" placeholder="请输入密码" show-password-on="click"
               :disabled="loginLoading" @keydown.enter="handleLogin" />
           </n-form-item>
 

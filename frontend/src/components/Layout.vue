@@ -8,8 +8,8 @@
 
     <!-- 主内容区域 -->
     <n-layout class="main-layout">
-      <!-- 顶部栏 (小屏幕) -->
-      <n-layout-header bordered class="mobile-header">
+      <n-layout-header bordered class="header-wrap">
+        <div id="header"></div>
         <n-space align="center" justify="space-between" style="height: 100%;">
           <div class="flex items-center justify-center gap-1">
             <n-button text @click="appStore.toggleDrawer" v-if="isSmallScreen">
@@ -118,8 +118,7 @@ const currentPageTitle = computed(() => {
   z-index: 100;
 }
 
-
-.mobile-header {
+.header-wrap {
   height: 56px;
   box-sizing: border-box;
   padding: 0 16px;

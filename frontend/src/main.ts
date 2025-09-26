@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import 'virtual:uno.css'
+import './style.css'
 import 'dayjs/locale/zh-cn' // import locale
 import App from './App.vue'
 import { createPinia } from 'pinia'
