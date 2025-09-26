@@ -209,6 +209,7 @@ export const useContainerStore = defineStore('container', () => {
 
   // 方法：启动 WebSocket 统计监听
   const startStatsWebSocket = () => {
+    console.debug('startStatsWebSocket')
     statsWebSocketService.addStatsCallback(handleStatsUpdate)
     wsConnected.value = statsWebSocketService.isConnected()
     wsConnectionState.value = statsWebSocketService.getConnectionState()
@@ -224,6 +225,7 @@ export const useContainerStore = defineStore('container', () => {
 
   // 方法：停止 WebSocket 统计监听
   const stopStatsWebSocket = () => {
+    console.debug('stopStatsWebSocket')
     statsWebSocketService.removeStatsCallback(handleStatsUpdate)
     wsConnected.value = false
     wsConnectionState.value = 'disconnected'

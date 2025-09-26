@@ -28,12 +28,12 @@ type Client struct {
 
 // StatsWebSocketManager WebSocket 连接管理器
 type StatsWebSocketManager struct {
-	docker     *dockercli.Client
-	clients    map[*Client]bool
-	broadcast  chan []byte
-	register   chan *Client
-	unregister chan *Client
-	mu         sync.RWMutex
+	docker      *dockercli.Client
+	clients     map[*Client]bool
+	latestStats []byte // 保存最新的统计数据
+	register    chan *Client
+	unregister  chan *Client
+	mu          sync.RWMutex
 }
 
 // NewStatsWebSocketManager 创建新的 WebSocket 管理器
@@ -41,7 +41,6 @@ func NewStatsWebSocketManager(docker *dockercli.Client) *StatsWebSocketManager {
 	return &StatsWebSocketManager{
 		docker:     docker,
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 	}
@@ -63,6 +62,15 @@ func (manager *StatsWebSocketManager) Run(ctx context.Context) {
 			manager.docker.AddStatsConnection(ctx)
 			log.Printf("WebSocket 客户端已连接，当前连接数: %d", len(manager.clients))
 
+			// 如果有最新统计数据，立即发送给新客户端
+			if manager.latestStats != nil {
+				select {
+				case client.send <- manager.latestStats:
+				default:
+					// 客户端发送通道满了，忽略
+				}
+			}
+
 		case client := <-manager.unregister:
 			manager.mu.Lock()
 			if _, ok := manager.clients[client]; ok {
@@ -75,21 +83,13 @@ func (manager *StatsWebSocketManager) Run(ctx context.Context) {
 			manager.docker.RemoveStatsConnection()
 			log.Printf("WebSocket 客户端已断开，当前连接数: %d", len(manager.clients))
 
-		case message := <-manager.broadcast:
-			manager.mu.RLock()
-			for client := range manager.clients {
-				select {
-				case client.send <- message:
-				default:
-					delete(manager.clients, client)
-					close(client.send)
-				}
-			}
-			manager.mu.RUnlock()
-
 		case <-ticker.C:
 			// 定期推送统计数据
-			if len(manager.clients) > 0 {
+			manager.mu.RLock()
+			clientCount := len(manager.clients)
+			manager.mu.RUnlock()
+
+			if clientCount > 0 {
 				manager.broadcastStats(ctx)
 			}
 
@@ -142,11 +142,27 @@ func (manager *StatsWebSocketManager) broadcastStats(ctx context.Context) {
 		return
 	}
 
-	// 广播到所有连接
-	select {
-	case manager.broadcast <- message:
-	default:
-		// 广播频道满了，跳过这次广播
+	// 保存最新统计数据
+	manager.mu.Lock()
+	manager.latestStats = message
+	clients := make([]*Client, 0, len(manager.clients))
+	for client := range manager.clients {
+		clients = append(clients, client)
+	}
+	manager.mu.Unlock()
+
+	// 直接发送给所有客户端
+	for _, client := range clients {
+		select {
+		case client.send <- message:
+			// 发送成功
+		default:
+			// 客户端发送通道满了，该客户端可能已经断开或处理太慢
+			// 这里可以选择断开该客户端连接
+			// go func(c *Client) {
+			// 	manager.unregister <- c
+			// }(client)
+		}
 	}
 }
 
