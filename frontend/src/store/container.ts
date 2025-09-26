@@ -2,8 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { containerApi } from '@/common/api'
 import type { ContainerStatus, ContainerStats, BatchUpdateResult } from '@/common/types'
-import { getStatsWebSocketService, type StatsCallback } from '@/services/statsSocket'
-import { useSettingStore } from './setting'
+import { getGlobalStatsWebSocket, type StatsCallback } from '@/hooks/useStatsWebSocket'
 
 export const useContainerStore = defineStore('container', () => {
   // 状态
@@ -11,12 +10,11 @@ export const useContainerStore = defineStore('container', () => {
   const loading = ref(false)
   const updating = ref(new Set<string>())
   const batchUpdating = ref(false)
-  const settingStore = useSettingStore()
 
   // WebSocket 相关状态
-  const wsConnected = ref(false)
-  const wsConnectionState = ref('disconnected')
-  const statsWebSocketService = getStatsWebSocketService(settingStore.getToken())
+  const statsWebSocket = getGlobalStatsWebSocket()
+  const wsConnected = computed(() => statsWebSocket.isConnected.value)
+  const wsConnectionState = computed(() => statsWebSocket.connectionState.value)
 
   // 计算属性
   const runningContainers = computed(() => containers.value.filter((c) => c.running))
@@ -210,25 +208,15 @@ export const useContainerStore = defineStore('container', () => {
   // 方法：启动 WebSocket 统计监听
   const startStatsWebSocket = () => {
     console.debug('startStatsWebSocket')
-    statsWebSocketService.addStatsCallback(handleStatsUpdate)
-    wsConnected.value = statsWebSocketService.isConnected()
-    wsConnectionState.value = statsWebSocketService.getConnectionState()
-
-    // 监听连接状态变化
-    const checkConnectionState = () => {
-      wsConnected.value = statsWebSocketService.isConnected()
-      wsConnectionState.value = statsWebSocketService.getConnectionState()
-    }
-
-    setInterval(checkConnectionState, 1000)
+    statsWebSocket.addStatsCallback(handleStatsUpdate)
+    statsWebSocket.connect()
   }
 
   // 方法：停止 WebSocket 统计监听
   const stopStatsWebSocket = () => {
     console.debug('stopStatsWebSocket')
-    statsWebSocketService.removeStatsCallback(handleStatsUpdate)
-    wsConnected.value = false
-    wsConnectionState.value = 'disconnected'
+    statsWebSocket.removeStatsCallback(handleStatsUpdate)
+    statsWebSocket.disconnect()
   }
 
   return {
