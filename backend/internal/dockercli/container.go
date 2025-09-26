@@ -3,8 +3,10 @@ package dockercli
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 )
 
@@ -146,5 +148,66 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 
 // RemoveContainer 删除容器
 func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) error {
-	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: force, RemoveVolumes: false})
+	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: force, RemoveVolumes: false, RemoveLinks: true})
+}
+
+// RemoveContainerWithVolumes 删除容器并清理关联的匿名卷
+func (c *Client) RemoveContainerWithVolumes(ctx context.Context, id string, force bool) error {
+	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{
+		Force:         force,
+		RemoveVolumes: true,
+		RemoveLinks:   true, // 清理传统的容器链接（如果存在）
+	})
+}
+
+// WaitContainerStopped 等待容器完全停止
+func (c *Client) WaitContainerStopped(ctx context.Context, id string, maxWaitSeconds int) error {
+	timeout := time.Duration(maxWaitSeconds) * time.Second
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		inspect, err := c.docker.ContainerInspect(ctx, id)
+		if err != nil {
+			// 容器不存在或无法访问，认为已停止
+			return nil
+		}
+
+		if inspect.State != nil && !inspect.State.Running {
+			// 额外等待一小段时间确保文件系统完全释放
+			time.Sleep(500 * time.Millisecond)
+			return nil
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// 超时后强制杀死容器
+	_ = c.docker.ContainerKill(ctx, id, "SIGKILL")
+	time.Sleep(500 * time.Millisecond)
+	return nil
+}
+
+// PruneSystem 清理悬挂的文件系统、网络、镜像等
+func (c *Client) PruneSystem(ctx context.Context) error {
+	// 清理悬挂的卷
+	volFilter := filters.NewArgs()
+	volFilter.Add("dangling", "true")
+	_, err := c.docker.VolumesPrune(ctx, volFilter)
+	if err != nil {
+		return err
+	}
+
+	// 清理悬挂的网络
+	netFilter := filters.NewArgs()
+	netFilter.Add("dangling", "true")
+	_, err = c.docker.NetworksPrune(ctx, netFilter)
+	if err != nil {
+		return err
+	}
+
+	// 清理悬挂的镜像
+	imgFilter := filters.NewArgs()
+	imgFilter.Add("dangling", "true")
+	_, err = c.docker.ImagesPrune(ctx, imgFilter)
+	return err
 }

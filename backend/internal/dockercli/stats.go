@@ -436,7 +436,7 @@ func (sm *StatsManager) cleanupStaleStats(currentContainerIDs map[string]bool) {
 // AddConnection 添加 WebSocket 连接，如果是第一个连接则启动统计监控
 func (sm *StatsManager) AddConnection(ctx context.Context) {
 	count := atomic.AddInt32(&sm.connectionCount, 1)
-	logger.Logger.Info("WebSocket 连接已添加，当前连接数: %d", zap.Int32("count", count))
+	logger.Logger.Info("WebSocket 连接已添加，当前连接数:", zap.Int32("count", count))
 
 	// 如果是第一个连接，启动统计监控
 	if count == 1 {
@@ -448,7 +448,7 @@ func (sm *StatsManager) AddConnection(ctx context.Context) {
 // RemoveConnection 移除 WebSocket 连接，如果没有连接则停止统计监控
 func (sm *StatsManager) RemoveConnection() {
 	count := atomic.AddInt32(&sm.connectionCount, -1)
-	logger.Logger.Info("WebSocket 连接已移除，当前连接数: %d", zap.Int32("count", count))
+	logger.Logger.Info("WebSocket 连接已移除，当前连接数:", zap.Int32("count", count))
 
 	// 如果没有连接了，停止统计监控
 	if count == 0 {
