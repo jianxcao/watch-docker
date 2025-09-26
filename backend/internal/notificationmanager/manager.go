@@ -206,7 +206,7 @@ func (m *Manager) sendUpdateAvailableNotification(ctx context.Context, events []
 	if len(events) == 0 {
 		return nil
 	}
-
+	logger.Logger.Info("发送更新可用通知", zap.Any("events", events))
 	var title string
 	if len(events) == 1 {
 		title = "📦 有容器更新可用"
@@ -232,7 +232,7 @@ func (m *Manager) sendUpdateSuccessNotification(ctx context.Context, events []Co
 	if len(events) == 0 {
 		return nil
 	}
-
+	logger.Logger.Info("发送更新成功通知", zap.Any("events", events))
 	var title string
 	if len(events) == 1 {
 		title = "✅ 容器更新成功"
@@ -258,12 +258,12 @@ func (m *Manager) sendUpdateFailedNotification(ctx context.Context, events []Con
 	if len(events) == 0 {
 		return nil
 	}
-
+	logger.Logger.Info("发送更新失败通知", zap.Any("events", events))
 	var title string
 	if len(events) == 1 {
-		title = "❌ 容器更新失败"
+		title = "⭕ 容器更新失败"
 	} else {
-		title = fmt.Sprintf("❌ %d 个容器更新失败", len(events))
+		title = fmt.Sprintf("⭕ %d 个容器更新失败", len(events))
 	}
 
 	var contentBuilder strings.Builder
