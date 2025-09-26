@@ -7,6 +7,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 )
 
@@ -210,4 +211,141 @@ func (c *Client) PruneSystem(ctx context.Context) error {
 	imgFilter.Add("dangling", "true")
 	_, err = c.docker.ImagesPrune(ctx, imgFilter)
 	return err
+}
+
+// SafeRemoveImage 安全删除镜像（检查是否有其他容器使用）
+func (c *Client) SafeRemoveImage(ctx context.Context, imageID string) error {
+	if imageID == "" {
+		return nil
+	}
+
+	// 检查是否有其他容器在使用这个镜像
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return err
+	}
+
+	for _, ct := range containers {
+		if ct.ImageID == imageID {
+			// 有其他容器使用，不删除镜像
+			return nil
+		}
+	}
+
+	// 没有其他容器使用，可以安全删除
+	_, err = c.docker.ImageRemove(ctx, imageID, image.RemoveOptions{Force: false})
+	return err
+}
+
+// SafeRemoveNetworks 安全删除自定义网络（检查是否有其他容器使用）
+func (c *Client) SafeRemoveNetworks(ctx context.Context, networkIDs []string) error {
+	for _, networkID := range networkIDs {
+		if networkID == "" {
+			continue
+		}
+
+		// 检查网络信息
+		netInfo, err := c.docker.NetworkInspect(ctx, networkID, network.InspectOptions{})
+		if err != nil {
+			continue // 网络可能已删除，跳过
+		}
+
+		// 跳过系统网络（bridge, host, none）
+		if netInfo.Name == "bridge" || netInfo.Name == "host" || netInfo.Name == "none" {
+			continue
+		}
+
+		// 检查是否有其他容器连接到这个网络
+		if len(netInfo.Containers) > 0 {
+			continue // 有其他容器使用，不删除
+		}
+
+		// 安全删除自定义网络
+		_ = c.docker.NetworkRemove(ctx, networkID)
+	}
+	return nil
+}
+
+// SafeRemoveVolumes 安全删除匿名卷（检查是否有其他容器使用）
+func (c *Client) SafeRemoveVolumes(ctx context.Context, volumeNames []string) error {
+	for _, volumeName := range volumeNames {
+		if volumeName == "" {
+			continue
+		}
+
+		// 检查卷是否存在
+		_, err := c.docker.VolumeInspect(ctx, volumeName)
+		if err != nil {
+			continue // 卷可能已删除，跳过
+		}
+
+		// 只删除匿名卷（名称像随机字符串的卷，通常很长且包含随机字符）
+		if len(volumeName) < 40 {
+			// 短名称通常是命名卷，跳过
+			continue
+		}
+
+		// 检查是否有其他容器使用这个卷
+		containers, err := c.docker.ContainerList(ctx, container.ListOptions{All: true})
+		if err != nil {
+			continue
+		}
+
+		inUse := false
+		for _, ct := range containers {
+			// 检查容器的挂载信息
+			inspect, err := c.docker.ContainerInspect(ctx, ct.ID)
+			if err != nil {
+				continue
+			}
+
+			for _, mount := range inspect.Mounts {
+				if mount.Name == volumeName {
+					inUse = true
+					break
+				}
+			}
+			if inUse {
+				break
+			}
+		}
+
+		if !inUse {
+			// 没有其他容器使用，安全删除
+			_ = c.docker.VolumeRemove(ctx, volumeName, false)
+		}
+	}
+	return nil
+}
+
+// CleanupContainerResources 根据容器信息安全清理相关资源
+func (c *Client) CleanupContainerResources(ctx context.Context, containerInfo container.InspectResponse) error {
+	// 1. 清理镜像
+	if containerInfo.Image != "" {
+		_ = c.SafeRemoveImage(ctx, containerInfo.Image)
+	}
+
+	// 2. 清理自定义网络
+	if containerInfo.NetworkSettings != nil && containerInfo.NetworkSettings.Networks != nil {
+		var networkIDs []string
+		for _, netEndpoint := range containerInfo.NetworkSettings.Networks {
+			if netEndpoint.NetworkID != "" {
+				networkIDs = append(networkIDs, netEndpoint.NetworkID)
+			}
+		}
+		_ = c.SafeRemoveNetworks(ctx, networkIDs)
+	}
+
+	// 3. 清理匿名卷
+	if len(containerInfo.Mounts) > 0 {
+		var volumeNames []string
+		for _, mount := range containerInfo.Mounts {
+			if mount.Type == "volume" && mount.Name != "" {
+				volumeNames = append(volumeNames, mount.Name)
+			}
+		}
+		_ = c.SafeRemoveVolumes(ctx, volumeNames)
+	}
+
+	return nil
 }
