@@ -72,11 +72,11 @@ import {
   LayersOutline,
   ArchiveOutline,
   SettingsOutline,
-  DocumentTextOutline,
   RefreshOutline,
   LogOutOutline,
   LogoGithub,
 } from '@vicons/ionicons5'
+import LogIcon from '@/assets/svg/log.svg?component'
 
 interface Props {
   onMenuSelect?: () => void // 菜单选择后的回调，用于移动端关闭抽屉
@@ -142,7 +142,7 @@ const menuOptions = computed<MenuOption[]>(() => [
   {
     label: '日志',
     key: 'logs',
-    icon: () => h(DocumentTextOutline),
+    icon: () => h(LogIcon),
   },
   {
     label: '系统设置',
