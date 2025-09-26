@@ -72,6 +72,7 @@ import {
   LayersOutline,
   ArchiveOutline,
   SettingsOutline,
+  DocumentTextOutline,
   RefreshOutline,
   LogOutOutline,
   LogoGithub,
@@ -102,6 +103,7 @@ const activeKey = computed(() => {
   if (path === '/') return 'home'
   if (path === '/containers') return 'containers'
   if (path === '/images') return 'images'
+  if (path === '/logs') return 'logs'
   if (path === '/settings') return 'settings'
   return 'home'
 })
@@ -138,6 +140,11 @@ const menuOptions = computed<MenuOption[]>(() => [
     icon: () => h(ArchiveOutline),
   },
   {
+    label: '日志',
+    key: 'logs',
+    icon: () => h(DocumentTextOutline),
+  },
+  {
     label: '系统设置',
     key: 'settings',
     icon: () => h(SettingsOutline),
@@ -155,6 +162,9 @@ const handleMenuSelect = (key: string) => {
       break
     case 'images':
       router.push('/images')
+      break
+    case 'logs':
+      router.push('/logs')
       break
     case 'settings':
       router.push('/settings')

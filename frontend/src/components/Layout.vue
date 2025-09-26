@@ -68,6 +68,7 @@ const activeKey = computed(() => {
   if (path === '/') return 'home'
   if (path === '/containers') return 'containers'
   if (path === '/images') return 'images'
+  if (path === '/logs') return 'logs'
   if (path === '/settings') return 'settings'
   return 'home'
 })
@@ -81,6 +82,8 @@ const currentPageTitle = computed(() => {
       return '容器管理'
     case 'images':
       return '镜像管理'
+    case 'logs':
+      return '日志'
     case 'settings':
       return '系统设置'
     default:

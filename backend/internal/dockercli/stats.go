@@ -344,7 +344,7 @@ func (sm *StatsManager) calculateStats(containerID string, previous, current *co
 	if current.MemoryStats.Limit > 0 {
 		var cacheToSubtract uint64
 		// 按优先级查找实际存在的字段
-		if file, exists := current.MemoryStats.Stats["file"]; exists {
+		if file, exists := current.MemoryStats.Stats["inactive_file"]; exists {
 			// cgroup v2 中表示可回收的非活跃文件缓存
 			cacheToSubtract = file
 		} else if totalCache, exists := current.MemoryStats.Stats["total_cache"]; exists {
