@@ -45,7 +45,7 @@
     "typescript": "~5.8.3",
     "unplugin-auto-import": "^19.3.0",
     "unplugin-vue-components": "^28.8.0",
-    "vite": "npm:rolldown-vite@^7.1.13",
+    "vite": "npm:rolldown-vite@latest",
     "vite-plugin-pwa": "^1.0.3",
     "vite-svg-loader": "^5.1.0",
     "vue-tsc": "^2.2.12"

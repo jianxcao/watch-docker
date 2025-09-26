@@ -103,7 +103,7 @@ importers:
         specifier: ^28.8.0
         version: 28.8.0(@babel/parser@7.28.4)(vue@3.5.22(typescript@5.8.3))
       vite:
-        specifier: npm:rolldown-vite@^7.1.13
+        specifier: npm:rolldown-vite@latest
         version: rolldown-vite@7.1.13(@types/node@24.5.2)(esbuild@0.25.8)(jiti@2.6.0)(less@4.4.1)(terser@5.44.0)
       vite-plugin-pwa:
         specifier: ^1.0.3
