@@ -33,6 +33,7 @@ onMounted(async () => {
   await Promise.all([
     containerStore.fetchContainers(true, false),
     imageStore.fetchImages(),
+    containerStore.startStatsWebSocket(),
   ])
 })
 </script>

@@ -238,15 +238,12 @@ const getConnectionStatusText = () => {
 
 // 页面初始化
 onMounted(async () => {
-  await containerStore.fetchContainers(true, true)
+  containerStore.fetchContainers(true, true)
   // 启动 WebSocket 统计监听
   containerStore.startStatsWebSocket()
 })
 
-// 页面卸载时停止 WebSocket 监听
-onUnmounted(() => {
-  containerStore.stopStatsWebSocket()
-})
+
 </script>
 
 <style scoped lang="less">
