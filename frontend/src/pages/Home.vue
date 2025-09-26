@@ -1,22 +1,5 @@
 <template>
   <div class="home-page">
-    <!-- 欢迎标题 -->
-    <n-card class="welcome-card">
-      <n-space align="center" justify="space-between">
-        <div>
-          <n-h1 style="margin: 0;">欢迎使用 Watch Docker</n-h1>
-          <n-text depth="3">
-            Docker 容器和镜像管理工具，自动检测更新并管理您的容器
-          </n-text>
-        </div>
-        <n-tag :type="systemHealthType" size="large">
-          <template #icon>
-            <n-icon :component="systemHealthIcon" />
-          </template>
-          {{ systemHealthText }}
-        </n-tag>
-      </n-space>
-    </n-card>
 
     <!-- 统计卡片 -->
     <div class="stats-grid">
@@ -168,6 +151,23 @@
       </template>
     </n-card>
   </div>
+
+  <Teleport to="#header" defer>
+    <div class="welcome-card">
+      <div>
+        <n-h2 class="m-0 text-xl">欢迎使用 Watch Docker</n-h2>
+        <n-text depth="3" class="text-xs">
+          Docker 容器和镜像管理工具，自动检测更新并管理您的容器
+        </n-text>
+      </div>
+      <n-tag :type="systemHealthType" size="small">
+        <template #icon>
+          <n-icon :component="systemHealthIcon" />
+        </template>
+        {{ systemHealthText }}
+      </n-tag>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -283,11 +283,15 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="less">
-.home-page {
-  .welcome-card {
-    margin-bottom: 24px;
-  }
+.welcome-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-direction: row;
+  height: 100%;
+}
 
+.home-page {
   .stats-grid {
     display: grid;
     gap: 16px;

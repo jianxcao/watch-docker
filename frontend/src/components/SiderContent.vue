@@ -233,7 +233,7 @@ onMounted(() => {
 }
 
 .sider-header {
-  height: 56px;
+  height: 66px;
   box-sizing: border-box;
   padding: 0 16px;
   border-bottom: 1px solid var(--border-color);
