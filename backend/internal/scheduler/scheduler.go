@@ -21,7 +21,9 @@ type Scheduler struct {
 	updater             *updater.Updater
 	notificationManager *notificationmanager.Manager
 
-	cancel context.CancelFunc
+	cancel  context.CancelFunc
+	cron    *cron.Cron
+	entryID cron.EntryID // 任务ID，用于管理和移除任务
 }
 
 func New(logger *zap.Logger, sc *scanner.Scanner, up *updater.Updater, nm *notificationmanager.Manager) *Scheduler {
@@ -35,38 +37,99 @@ func New(logger *zap.Logger, sc *scanner.Scanner, up *updater.Updater, nm *notif
 
 // Start 启动调度器：优先使用 cron；未配置 cron 时退回到 interval 定时器。
 func (s *Scheduler) Start() {
-	if s.cancel != nil {
+	cfg := config.Get()
+	if cfg.Scan.Cron == "" {
+		s.logger.Info("未配置 cron 表达式，调度器将不启动")
 		return
+	}
+
+	// 移除已存在的任务
+	s.RemoveTask()
+
+	// 创建或复用 cron 实例
+	if s.cron == nil {
+		s.cron = cron.New(cron.WithSeconds())
+		s.cron.Start()
+		s.logger.Info("cron 调度器已启动")
+	}
+
+	// 设置上下文
+	if s.cancel != nil {
+		s.cancel() // 取消之前的 context
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 
-	// 单一路径：若配置了 cron 则使用 cron；否则使用 interval 定时器
-	go func() {
-		cfg := config.Get()
-		if cfg.Scan.Cron != "" {
-			c := cron.New(cron.WithSeconds())
-			s.logger.Info("开始添加 cron 任务", zap.String("cron", cfg.Scan.Cron))
-			_, err := c.AddFunc(cfg.Scan.Cron, func() { s.runScanAndUpdate(ctx) })
-			if err != nil {
-				s.logger.Error("cron add failed", zap.Error(err))
-				return
-			}
-			c.Start()
-			<-ctx.Done()
-			ctx2 := c.Stop()
-			<-ctx2.Done()
-			return
-		}
-	}()
+	// 添加新任务
+	taskName := "scan-and-update"
+	s.logger.Info("开始添加 cron 任务",
+		zap.String("taskName", taskName),
+		zap.String("cron", cfg.Scan.Cron))
+
+	entryID, err := s.cron.AddFunc(cfg.Scan.Cron, func() {
+		s.runScanAndUpdate(ctx)
+	})
+	if err != nil {
+		s.logger.Error("添加 cron 任务失败",
+			zap.String("taskName", taskName),
+			zap.Error(err))
+		return
+	}
+
+	s.entryID = entryID
+	s.logger.Info("cron 任务添加成功",
+		zap.String("taskName", taskName),
+		zap.Int("entryID", int(entryID)))
 }
 
 // Stop 停止调度器
 func (s *Scheduler) Stop() {
+	s.RemoveTask()
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
 	}
+}
+
+// RemoveTask 移除当前的定时任务
+func (s *Scheduler) RemoveTask() {
+	if s.cron != nil && s.entryID != 0 {
+		s.cron.Remove(s.entryID)
+		s.logger.Info("已移除定时任务", zap.Int("entryID", int(s.entryID)))
+		s.entryID = 0
+	}
+}
+
+// StopCron 停止并清理 cron 调度器
+func (s *Scheduler) StopCron() {
+	if s.cron != nil {
+		ctx := s.cron.Stop()
+		<-ctx.Done()
+		s.cron = nil
+		s.entryID = 0
+		s.logger.Info("cron 调度器已停止")
+	}
+}
+
+// Restart 重启调度器，重新读取配置
+func (s *Scheduler) Restart() {
+	s.logger.Info("重启调度器")
+	s.Start() // Start 方法会自动移除旧任务并添加新任务
+}
+
+// IsRunning 检查调度器是否正在运行
+func (s *Scheduler) IsRunning() bool {
+	return s.cron != nil && s.entryID != 0
+}
+
+// GetTaskInfo 获取当前任务信息
+func (s *Scheduler) GetTaskInfo() (bool, int, string) {
+	if s.cron == nil || s.entryID == 0 {
+		return false, 0, ""
+	}
+
+	cfg := config.Get()
+	return true, int(s.entryID), cfg.Scan.Cron
 }
 
 func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
