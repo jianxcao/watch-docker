@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jianxcao/watch-docker/backend/internal/config"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/jianxcao/watch-docker/backend/internal/notify"
 	"github.com/jianxcao/watch-docker/backend/internal/scanner"
@@ -143,6 +144,11 @@ func (m *Manager) scheduleFlush() {
 // flushPendingEvents 立即发送所有待处理的事件
 func (m *Manager) flushPendingEvents() {
 	m.mu.Lock()
+	cfg := config.Get()
+	if !cfg.Notify.IsEnable {
+		m.mu.Unlock()
+		return
+	}
 	if len(m.pendingEvents) == 0 {
 		m.mu.Unlock()
 		return

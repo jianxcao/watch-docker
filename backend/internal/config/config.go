@@ -119,8 +119,9 @@ type LoggingConfig struct {
 // url: 通知地址，仅支持配置一个；允许使用占位符 {title}/{content}/{text}
 // method: 请求方法，仅允许 GET 或 POST
 type NotificationConfig struct {
-	URL    string `mapstructure:"url" json:"url"`
-	Method string `mapstructure:"method" json:"method"`
+	URL      string `mapstructure:"url" json:"url"`
+	Method   string `mapstructure:"method" json:"method"`
+	IsEnable bool   `mapstructure:"isEnable" json:"isEnable"`
 }
 
 // Config 顶层配置聚合
@@ -183,7 +184,7 @@ func defaults() *Config {
 		},
 		Proxy:   ProxyConfig{}, // 默认不使用代理
 		Logging: LoggingConfig{Level: "info"},
-		Notify:  NotificationConfig{Method: http.MethodGet},
+		Notify:  NotificationConfig{Method: http.MethodGet, IsEnable: true},
 	}
 }
 

@@ -73,6 +73,7 @@ export interface Config {
   notify: {
     url: string
     method: 'GET' | 'POST'
+    isEnable: boolean
   }
   docker: {
     host: string

@@ -1,12 +1,5 @@
 <template>
   <div class="settings-page">
-    <!-- 页面头部 -->
-    <n-card class="page-header">
-      <n-h2 style="margin: 0;"></n-h2>
-      <n-text depth="3">
-
-      </n-text>
-    </n-card>
 
     <!-- 设置内容 -->
     <div class="settings-content">
@@ -28,6 +21,9 @@
             </n-form-item>
             <n-form-item label="请求方法">
               <n-select v-model:value="configForm.notify.method" :options="notifyMethodOptions" placeholder="选择请求方法" />
+            </n-form-item>
+            <n-form-item label="启用通知">
+              <n-switch v-model:value="configForm.notify.isEnable" />
             </n-form-item>
             <n-alert title="占位符说明" type="info" class="mt-2">
               支持在查询参数或路径中使用 title={title}、content={content}、url={url}、image={image} 占位符
@@ -205,7 +201,8 @@ const configForm = reactive<Config>({
   },
   notify: {
     url: '',
-    method: 'GET'
+    method: 'GET',
+    isEnable: true
   },
   docker: {
     host: '',
