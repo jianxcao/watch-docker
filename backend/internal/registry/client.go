@@ -52,6 +52,17 @@ func New() *Client {
 	return &Client{http: httpClient, cache: make(map[string]CacheEntry)}
 }
 
+func (c *Client) GetRemoteDigestByCache(ctx context.Context, imageRef string) (digest string, err error) {
+	normalized, _, _, _, err := normalizeImageRef(imageRef)
+	if err != nil {
+		return "", err
+	}
+	if d, ok := c.getCache(normalized); ok {
+		return d, nil
+	}
+	return "", nil
+}
+
 // GetRemoteDigest resolves the digest for the provided image ref (e.g. nginx:latest).
 // It supports manifest lists by selecting the child manifest matching runtime platform.
 // GetRemoteDigests 返回镜像的索引(manifest list)层 digest 与子镜像(平台专属 manifest)层 digest。

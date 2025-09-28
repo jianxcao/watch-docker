@@ -79,6 +79,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.GET("/config", s.handleGetConfig())
 		protected.POST("/config", s.handleSaveConfig())
 		protected.GET("/logs", s.handleLogStream)
+		protected.GET("/update/all", s.handleUpdateAll())
 	}
 	s.setupStaticRoutes(r)
 
@@ -526,4 +527,11 @@ func (s *Server) setupStaticRoutes(r *gin.Engine) {
 // handleStatsWebSocket 处理容器统计 WebSocket 连接
 func (s *Server) handleStatsWebSocket() gin.HandlerFunc {
 	return s.wsStatsManager.HandleWebSocket
+}
+
+func (s *Server) handleUpdateAll() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.scheduler.RunScanAndUpdate(c.Request.Context())
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+	}
 }

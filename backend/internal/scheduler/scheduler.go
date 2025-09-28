@@ -67,7 +67,7 @@ func (s *Scheduler) Start() {
 		zap.String("cron", cfg.Scan.Cron))
 
 	entryID, err := s.cron.AddFunc(cfg.Scan.Cron, func() {
-		s.runScanAndUpdate(ctx)
+		s.RunScanAndUpdate(ctx)
 	})
 	if err != nil {
 		s.logger.Error("添加 cron 任务失败",
@@ -132,7 +132,7 @@ func (s *Scheduler) GetTaskInfo() (bool, int, string) {
 	return true, int(s.entryID), cfg.Scan.Cron
 }
 
-func (s *Scheduler) runScanAndUpdate(ctx context.Context) {
+func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
 	s.logger.Info("开始执行扫描更新任务")
 	cfg := config.Get()
 	includeStopped := cfg.Docker.IncludeStopped

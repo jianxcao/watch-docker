@@ -103,26 +103,30 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				continue
 			}
 			st.CurrentDigest = firstDigest(ct.RepoDigests)
+			var indexDigest, childDigest string
+			var err error
 			if isHaveUpdate {
 				// 获取远端 digest：indexDigest 为清单索引，多架构镜像；childDigest 为匹配当前平台的子 manifest
-				indexDigest, childDigest, err := s.registry.GetRemoteDigests(ctx, ct.Image, isUserCache)
-				if err != nil {
-					logger.Logger.Error("get remote digest", logger.ZapErr(err))
-					st.Status = "Error"
-					st.SkipReason = "registry: " + err.Error()
-					result[j.idx] = st
-					continue
-				}
-				chosen := indexDigest
-				if chosen == "" {
-					chosen = childDigest
-				}
-				st.RemoteDigest = chosen
-				if st.CurrentDigest == "" || !strings.EqualFold(st.CurrentDigest, chosen) {
-					st.Status = "UpdateAvailable"
-				} else {
-					st.Status = "UpToDate"
-				}
+				indexDigest, childDigest, err = s.registry.GetRemoteDigests(ctx, ct.Image, isUserCache)
+			} else {
+				indexDigest, err = s.registry.GetRemoteDigestByCache(ctx, ct.Image)
+			}
+			if err != nil {
+				logger.Logger.Error("get remote digest", logger.ZapErr(err))
+				st.Status = "Error"
+				st.SkipReason = "registry: " + err.Error()
+				result[j.idx] = st
+				continue
+			}
+			chosen := indexDigest
+			if chosen == "" {
+				chosen = childDigest
+			}
+			st.RemoteDigest = chosen
+			if st.CurrentDigest == "" || (st.RemoteDigest != "" && !strings.EqualFold(st.CurrentDigest, chosen)) {
+				st.Status = "UpdateAvailable"
+			} else {
+				st.Status = "UpToDate"
 			}
 			result[j.idx] = st
 		}
