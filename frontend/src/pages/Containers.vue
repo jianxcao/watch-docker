@@ -2,9 +2,26 @@
   <div class="containers-page">
     <!-- 页面头部 -->
     <n-space>
-      <!-- 过滤器 -->
-      <n-select v-model:value="statusFilter" :options="statusFilterOptions" placeholder="状态过滤" style="width: 120px;"
-        clearable />
+      <!-- 过滤器菜单 -->
+      <n-dropdown :options="statusFilterMenuOptions" @select="handleFilterSelect">
+        <n-button circle size="small" :type="statusFilter ? 'primary' : 'default'">
+          <template #icon>
+            <n-icon>
+              <FunnelOutline />
+            </n-icon>
+          </template>
+        </n-button>
+      </n-dropdown>
+      <!-- 排序菜单 -->
+      <n-dropdown :options="sortMenuOptions" @select="handleSortSelect">
+        <n-button circle size="small" :type="isSortActive ? 'primary' : 'default'">
+          <template #icon>
+            <n-icon>
+              <SwapVerticalOutline />
+            </n-icon>
+          </template>
+        </n-button>
+      </n-dropdown>
       <!-- 搜索 -->
       <n-input v-model:value="searchKeyword" placeholder="搜索容器名称或镜像" style="width: 200px;" clearable>
         <template #prefix>
@@ -28,8 +45,8 @@
 
         <div v-else class="containers-grid" :class="{
           'grid-cols-1': isMobile,
-          'grid-cols-2': isTablet,
-          'grid-cols-3': isLaptop || isDesktop,
+          'grid-cols-2': isTablet || isLaptop,
+          'grid-cols-3': isDesktop,
           'grid-cols-4': isDesktopLarge,
         }">
           <ContainerCard v-for="container in filteredContainers" :key="container.id" :container="container"
@@ -93,12 +110,25 @@ import { computed, ref, onMounted } from 'vue'
 import { useContainerStore } from '@/store/container'
 import { useContainer } from '@/hooks/useContainer'
 import { useResponsive } from '@/hooks/useResponsive'
+import { renderIcon } from '@/common/utils'
 import ContainerCard from '@/components/ContainerCard.vue'
 import type { ContainerStatus } from '@/common/types'
 import {
   SearchOutline,
   RefreshOutline,
   CloudDownloadOutline,
+  FunnelOutline,
+  AppsOutline,
+  PlayOutline,
+  StopOutline,
+  CloudUploadOutline,
+  CheckmarkCircleOutline,
+  CloseCircleOutline,
+  RemoveCircleOutline,
+  SwapVerticalOutline,
+  CalendarOutline,
+  TextOutline,
+  RadioButtonOnOutline,
 } from '@vicons/ionicons5'
 
 const containerStore = useContainerStore()
@@ -109,23 +139,95 @@ const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsiv
 // 搜索和过滤
 const searchKeyword = ref('')
 const statusFilter = ref<string | null>(null)
+const sortBy = ref<string>('name') // 默认按名称排序
+const sortOrder = ref<'asc' | 'desc'>('asc') // 排序方向，默认升序
 const operationLoading = ref(false)
 
 // WebSocket 连接状态
 const wsConnectionState = computed(() => containerStore.wsConnectionState)
 
-// 状态过滤选项
-const statusFilterOptions = [
-  { label: '全部', value: null },
-  { label: '运行中', value: 'running' },
-  { label: '已停止', value: 'stopped' },
-  { label: '可更新', value: 'updateable' },
-  { label: '最新', value: 'uptodate' },
-  { label: '错误', value: 'error' },
-  { label: '跳过', value: 'skipped' },
-]
+// 状态过滤菜单选项
+const statusFilterMenuOptions = computed(() => [
+  {
+    label: '全部',
+    key: null,
+    icon: renderIcon(AppsOutline)
+  },
+  {
+    label: '运行中',
+    key: 'running',
+    icon: renderIcon(PlayOutline),
+  },
+  {
+    label: '已停止',
+    key: 'stopped',
+    icon: renderIcon(StopOutline),
+  },
+  {
+    label: '可更新',
+    key: 'updateable',
+    icon: renderIcon(CloudUploadOutline),
+  },
+  {
+    label: '最新',
+    key: 'uptodate',
+    icon: renderIcon(CheckmarkCircleOutline),
+  },
+  {
+    label: '错误',
+    key: 'error',
+    icon: renderIcon(CloseCircleOutline),
+  },
+  {
+    label: '跳过更新',
+    key: 'skipped',
+    icon: renderIcon(RemoveCircleOutline),
+  },
+])
 
-// 过滤后的容器列表
+// 排序菜单选项
+const sortMenuOptions = computed(() => [
+  {
+    label: `名称 ${sortBy.value === 'name' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
+    key: 'name',
+    icon: renderIcon(TextOutline),
+  },
+  {
+    label: `启动时间 ${sortBy.value === 'created' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
+    key: 'created',
+    icon: renderIcon(CalendarOutline),
+  },
+  {
+    label: `状态 ${sortBy.value === 'status' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
+    key: 'status',
+    icon: renderIcon(RadioButtonOnOutline),
+  },
+])
+
+// 处理过滤器菜单选择
+const handleFilterSelect = (key: string | null) => {
+  statusFilter.value = key
+}
+
+// 判断排序按钮是否应该显示为主色（激活状态）
+const isSortActive = computed(() => {
+  // 如果不是默认排序设置（名称升序），则显示为激活状态
+  return sortBy.value !== 'name' || sortOrder.value !== 'asc'
+})
+
+// 处理排序菜单选择
+const handleSortSelect = (key: string) => {
+  if (sortBy.value === key) {
+    // 如果选择的是相同字段，切换升序/降序
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    // 如果选择的是不同字段，设置新字段并默认为升序
+    sortBy.value = key
+    sortOrder.value = 'asc'
+  }
+}
+
+// 过滤和排序后的容器列表
 const filteredContainers = computed(() => {
   let containers = containerStore.containers
 
@@ -160,7 +262,33 @@ const filteredContainers = computed(() => {
     })
   }
 
-  return containers
+  // 排序
+  return containers.sort((a, b) => {
+    let result = 0
+
+    switch (sortBy.value) {
+      case 'name':
+        result = a.name.localeCompare(b.name)
+        break
+      case 'created':
+        result = new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
+        break
+      case 'status':
+        // 按状态排序：运行中 > 已停止 > 其他
+        const getStatusPriority = (container: any) => {
+          if (container.running) return 0
+          if (!container.running) return 1
+          return 2
+        }
+        result = getStatusPriority(a) - getStatusPriority(b)
+        break
+      default:
+        return 0
+    }
+
+    // 根据排序方向调整结果
+    return sortOrder.value === 'asc' ? result : -result
+  })
 })
 
 // 操作处理函数

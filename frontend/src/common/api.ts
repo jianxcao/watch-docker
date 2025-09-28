@@ -52,8 +52,10 @@ export const containerApi = {
   stopContainer: (id: string) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_STOP(id)),
 
   // 删除容器
-  deleteContainer: (id: string) =>
-    axios.delete<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_DELETE(id)),
+  deleteContainer: (id: string, force: boolean = false) =>
+    axios.delete<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_DELETE(id), {
+      params: { force },
+    }),
 }
 
 // 镜像相关API

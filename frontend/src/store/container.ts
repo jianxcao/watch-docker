@@ -62,7 +62,6 @@ export const useContainerStore = defineStore('container', () => {
           // 如果是新容器，直接使用新数据
           return newContainer
         })
-        console.log(containers.value)
       } else {
         console.error('获取容器列表失败:', data.msg)
         throw new Error(data.msg)
@@ -147,9 +146,9 @@ export const useContainerStore = defineStore('container', () => {
   }
 
   // 方法：删除容器
-  const deleteContainer = async (id: string): Promise<boolean> => {
+  const deleteContainer = async (id: string, force: boolean = false): Promise<boolean> => {
     try {
-      const data = await containerApi.deleteContainer(id)
+      const data = await containerApi.deleteContainer(id, force)
       if (data.code === 0) {
         await fetchContainers() // 重新获取列表
         return true

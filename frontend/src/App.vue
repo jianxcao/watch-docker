@@ -28,7 +28,7 @@ const containerStore = useContainerStore()
 const imageStore = useImageStore()
 
 watchEffect(() => {
-  document.documentElement.setAttribute('data-theme', settingStore.setting.theme)
+  document.body.setAttribute('data-theme', settingStore.setting.theme)
 })
 
 // 检查系统健康状态
@@ -57,7 +57,6 @@ onUnmounted(() => {
   containerStore.stopStatsWebSocket()
 })
 
-const focused = useWindowFocus()
 
 async function refresh() {
   if (appStore.systemHealth === 'unhealthy') {
@@ -70,9 +69,11 @@ async function refresh() {
   }
 }
 
-watch(focused, (newVal) => {
-  if (newVal) {
-    console.debug('窗口聚焦')
+const visibility = useDocumentVisibility()
+
+watch(visibility, (newVal) => {
+  console.debug('visibility', newVal)
+  if (newVal === 'visible') {
     refresh()
   }
 })

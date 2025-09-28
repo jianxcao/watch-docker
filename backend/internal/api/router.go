@@ -265,7 +265,8 @@ func (s *Server) handleStartContainer() gin.HandlerFunc {
 func (s *Server) handleDeleteContainer() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
-		if err := s.docker.RemoveContainer(c.Request.Context(), id, true); err != nil {
+		force := c.Query("force") == "true"
+		if err := s.docker.RemoveContainer(c.Request.Context(), id, force); err != nil {
 			s.logger.Error("delete container", zap.String("container", id), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return

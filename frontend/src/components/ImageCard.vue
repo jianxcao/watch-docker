@@ -32,7 +32,7 @@
           <SizeIcon />
         </n-icon>
         <span class="info-label">大小</span>
-        <span class="info-value">{{ imageStore.formatSize(image.size) }}</span>
+        <span class="info-value">{{ formatBytes(image.size) }}</span>
       </div>
 
       <div class="info-item">
@@ -64,6 +64,7 @@ import { useImageStore } from '@/store/image'
 import { useImage } from '@/hooks/useImage'
 import type { ImageInfo } from '@/common/types'
 import { TrashOutline } from '@vicons/ionicons5'
+import { formatBytes } from '@/common/utils'
 
 // 导入 SVG 图标
 import TagIcon from '@/assets/svg/tag.svg?component'

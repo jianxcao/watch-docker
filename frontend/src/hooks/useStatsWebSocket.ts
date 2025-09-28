@@ -168,6 +168,9 @@ export function useStatsWebSocket() {
 
   // 启动连接
   const connect = () => {
+    if (isConnected.value) {
+      return
+    }
     console.debug('connect')
     if (wsUrl.value) {
       open()

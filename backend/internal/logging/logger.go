@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -14,6 +15,11 @@ var (
 	Logger      *zap.Logger
 	atomicLevel zap.AtomicLevel
 )
+
+// customTimeEncoder 自定义时间编码器，格式为 YYYY-MM-DD HH:mm:ss
+func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+	enc.AppendString(t.Format("2006-01-02 15:04:05"))
+}
 
 // NewLogger creates a new logger instance with dynamic level support
 func NewLogger(level string, file string) (*zap.Logger, error) {
@@ -40,7 +46,7 @@ func NewLogger(level string, file string) (*zap.Logger, error) {
 		StacktraceKey:  "stacktrace",                     // 堆栈字段的键
 		LineEnding:     zapcore.DefaultLineEnding,        // 行结尾
 		EncodeLevel:    zapcore.CapitalColorLevelEncoder, // 日志级别格式化
-		EncodeTime:     zapcore.ISO8601TimeEncoder,       // 时间格式化
+		EncodeTime:     customTimeEncoder,                // 时间格式化：YYYY-MM-DD HH:mm:ss
 		EncodeDuration: zapcore.StringDurationEncoder,    // 时长格式化
 		EncodeCaller:   zapcore.ShortCallerEncoder,       // 调用者格式化
 	}

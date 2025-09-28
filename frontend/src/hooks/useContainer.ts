@@ -1,6 +1,8 @@
 import { useContainerStore } from '@/store/container'
 import { useMessage, useDialog } from 'naive-ui'
 import type { ContainerStatus } from '@/common/types'
+import { h, ref } from 'vue'
+import { NCheckbox } from 'naive-ui'
 
 export function useContainer() {
   const store = useContainerStore()
@@ -39,15 +41,37 @@ export function useContainer() {
 
   // 删除容器（带确认）
   const handleDelete = (container: ContainerStatus) => {
+    // 根据容器运行状态设置默认的强制删除值
+    const forceDefault = container.running
+    const forceValue = ref(forceDefault)
+
     const d = dialog.warning({
-      title: '确认删除',
-      content: `确定要删除容器 "${container.name}" 吗？此操作不可撤销。`,
+      title: '确认删除容器',
+      content: () =>
+        h('div', { class: 'flex flex-col gap-2' }, [
+          h('div', {}, `确定要删除容器 "${container.name}" 吗？此操作不可撤销。`),
+          container.running
+            ? h('div', { class: 'text-orange-500 text-sm' }, '注意：容器正在运行中')
+            : h('div', { class: 'text-gray-500 text-sm' }, '容器已停止'),
+          h(
+            NCheckbox,
+            {
+              checked: forceValue.value,
+              'onUpdate:checked': (value: boolean) => {
+                forceValue.value = value
+              },
+            },
+            {
+              default: () => (container.running ? '强制删除 (停止并删除运行中的容器)' : '强制删除'),
+            }
+          ),
+        ]),
       positiveText: '确认删除',
       negativeText: '取消',
       onPositiveClick: async () => {
         try {
           d.loading = true
-          await store.deleteContainer(container.id)
+          await store.deleteContainer(container.id, forceValue.value)
           message.success(`容器 ${container.name} 删除成功`)
         } catch (error: any) {
           message.error(`删除容器失败: ${error.message}`)

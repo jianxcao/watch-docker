@@ -1,8 +1,8 @@
-import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
 import { imageApi } from '@/common/api'
 import type { ImageInfo } from '@/common/types'
-import { formatSize } from '@/common/utils'
+import { formatBytes } from '@/common/utils'
+import { defineStore } from 'pinia'
+import { computed, ref } from 'vue'
 export const useImageStore = defineStore('image', () => {
   // 状态
   const images = ref<ImageInfo[]>([])
@@ -26,7 +26,7 @@ export const useImageStore = defineStore('image', () => {
   const totalSize = computed(() => normalImages.value.reduce((sum, img) => sum + img.size, 0))
 
   // 格式化的总大小
-  const formattedTotalSize = computed(() => formatSize(totalSize.value))
+  const formattedTotalSize = computed(() => formatBytes(totalSize.value))
 
   // 统计信息
   const stats = computed(() => ({
@@ -145,7 +145,6 @@ export const useImageStore = defineStore('image', () => {
     getImageDisplayTag,
     getDisplayId,
     isDanglingImage,
-    formatSize,
     stopImagesPolling,
     startImagesPolling,
   }

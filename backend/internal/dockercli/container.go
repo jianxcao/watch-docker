@@ -149,7 +149,7 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 
 // RemoveContainer 删除容器
 func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) error {
-	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: force, RemoveVolumes: false, RemoveLinks: true})
+	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: force, RemoveVolumes: false, RemoveLinks: false})
 }
 
 // RemoveContainerWithVolumes 删除容器并清理关联的匿名卷

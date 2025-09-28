@@ -1,194 +1,165 @@
 <template>
-  <n-card hoverable class="container-card" :class="{ 'card-updating': isUpdating }">
-    <template #header>
+  <div class="container-card" :data-theme="settingStore.setting.theme" :class="{ 'card-updating': isUpdating }">
+    <!-- 状态指示条 -->
+    <div class="status-bar" :class="container.running ? 'running' : 'stopped'"></div>
+    <div class="card-content">
+      <!-- 容器头部信息 -->
       <div class="container-header">
-        <span class="container-name">{{ container.name }}</span>
-        <n-button size="tiny" circle ghost @click="copyContainerId" class="copy-id-btn">
-          <template #icon>
-            <n-icon>
-              <CopyOutline />
-            </n-icon>
-          </template>
-        </n-button>
+        <div class="container-logo">
+          <n-icon size="24">
+            <ContainerLogo />
+          </n-icon>
+          <div class="absolute -top-1 -right-1">
+            <div class="w-4 h-4 rounded-full flex items-center justify-center" :class="statusConfig.color">
+              <div class="w-2 h-2 rounded-full" v-if="container.running" :class="statusConfig.pulseColor"></div>
+            </div>
+          </div>
+        </div>
+        <div class="container-basic-info">
+          <n-tooltip :delay="500">
+            <template #trigger>
+              <div class="container-name">{{ container.name }}</div>
+            </template>
+            <span>{{ container.name }}</span>
+          </n-tooltip>
+          <div class="container-image">
+            <n-tooltip :delay="500">
+              <template #trigger>
+                <span class="truncate w-full block">{{ container.image }}</span>
+              </template>
+              <span>{{ container.image }}</span>
+            </n-tooltip>
+            <n-tooltip :delay="500" v-if="container.status === 'UpdateAvailable'">
+              <template #trigger>
+                <div class="absolute -top-1 -right-1 w-3 h-3 bg-orange-500 rounded-full cursor-help">
+                  <div class="w-full h-full bg-orange-400 rounded-full animate-ping"></div>
+                </div>
+              </template>
+              <span>可更新</span>
+            </n-tooltip>
+          </div>
+        </div>
+        <div class="container-status">
+          <RunningStatusBadge :container="container" />
+          <n-dropdown :options="dropdownOptions" @select="handleMenuSelect" trigger="click">
+            <n-button quaternary circle>
+              <template #icon>
+                <n-icon>
+                  <MenuIcon />
+                </n-icon>
+              </template>
+            </n-button>
+          </n-dropdown>
+        </div>
       </div>
-    </template>
-    <template #header-extra>
-      <n-space>
-        <RunningStatusBadge :container="container" />
-        <UpdateStatusBadge :container="container" />
-      </n-space>
-    </template>
 
-    <n-space vertical>
-      <!-- 容器信息 -->
-      <div class="container-info">
-        <n-descriptions :column="1" size="small">
-          <n-descriptions-item label="镜像">
-            <n-text class="image-text" :depth="2">{{ container.image }}</n-text>
-          </n-descriptions-item>
-
-          <!-- <n-descriptions-item label="当前摘要" v-if="container.currentDigest">
-            <n-tooltip>
-              <template #trigger>
-                <n-text code class="digest-text cursor-pointer">{{ formatDigest(container.currentDigest) }}</n-text>
-              </template>
-              {{ container.currentDigest }}
-            </n-tooltip>
-          </n-descriptions-item>
-
-          <n-descriptions-item label="远程摘要" v-if="container.remoteDigest">
-            <n-tooltip>
-              <template #trigger>
-                <n-text code class="digest-text cursor-pointer">{{ formatDigest(container.remoteDigest) }}</n-text>
-              </template>
-              {{ container.remoteDigest }}
-            </n-tooltip>
-          </n-descriptions-item> -->
-
-          <n-descriptions-item label="运行时间" v-if="container.running && container.startedAt">
-            <n-text :depth="3">{{ formatRunningTime(container.startedAt) }}</n-text>
-          </n-descriptions-item>
-
-          <n-descriptions-item label="端口映射" v-if="container.ports && container.ports.length > 0">
-            <n-space size="small">
-              <n-tag v-for="port in container.ports" :key="`${port.privatePort}-${port.type}`" size="small" type="info">
-                {{ formatPort(port) }}
-              </n-tag>
-            </n-space>
-          </n-descriptions-item>
-        </n-descriptions>
+      <!-- 容器详细信息 -->
+      <div class="container-details">
+        <div class="detail-row">
+          <div class="detail-item">
+            <div class="detail-label">
+              <n-icon size="16">
+                <CreateTimeIcon />
+              </n-icon>
+              创建时间
+            </div>
+            <div class="detail-label">
+              <n-icon size="16">
+                <PortIcon />
+              </n-icon>
+              端口映射
+            </div>
+          </div>
+          <div class="detail-item">
+            <div class="detail-value min-w-[152px]">{{ formatCreatedTime(container.startedAt) }}</div>
+            <div class="detail-value">{{ formatPorts(container.ports) }}</div>
+          </div>
+        </div>
       </div>
 
       <!-- 资源使用情况 -->
-      <div v-if="container.running && container.stats" class="container-stats">
-        <n-divider style="margin: 12px 0;" />
-        <n-space vertical size="small">
-          <div class="stats-header">
-            <n-text strong style="font-size: 12px;">资源使用情况</n-text>
+      <div class="container-stats">
+        <div class="flex flex-row justify-between items-center mb-2">
+          <div class="stats-title">资源使用情况</div>
+          <div class="flex flex-row gap-2" v-if="container.running">
+            <div class="stat-header">
+              <n-icon size="12">
+                <TimeOutline />
+              </n-icon>
+              <span>运行时长</span>
+            </div>
+            <div class="time-value" :class="container.running ? 'running' : 'stopped'">{{ container.running &&
+              container.startedAt ?
+              formatTime(container.startedAt) :
+              '-' }}</div>
           </div>
 
-          <!-- CPU使用率 -->
+        </div>
+        <div class="stats-grid">
           <div class="stat-item">
-            <n-space justify="space-between" align="center">
-              <n-text style="font-size: 11px;">CPU</n-text>
-              <n-text style="font-size: 11px;">{{ formatPercent(container.stats.cpuPercent) }}</n-text>
-            </n-space>
-            <n-progress :percentage="Math.min(container.stats.cpuPercent, 100)" :show-indicator="false" :height="4"
-              :color="getCpuColor(container.stats.cpuPercent)" />
+            <div class="stat-header">
+              <n-icon size="12">
+                <CpuIcon />
+              </n-icon>
+              <span>CPU</span>
+            </div>
+            <div class="stat-value">{{ formatPercent(stats.cpuPercent) }}</div>
           </div>
 
-          <!-- 内存使用率 -->
           <div class="stat-item">
-            <n-space justify="space-between" align="center">
-              <n-text style="font-size: 11px;">内存</n-text>
-              <n-text style="font-size: 11px;">{{ formatBytes(container.stats.memoryUsage) }} / {{
-                formatBytes(container.stats.memoryLimit) }}</n-text>
-            </n-space>
-            <n-progress :percentage="Math.min(container.stats.memoryPercent, 100)" :show-indicator="false" :height="4"
-              :color="getMemoryColor(container.stats.memoryPercent)" />
+            <div class="stat-header">
+              <n-icon size="12">
+                <MemoryIcon />
+              </n-icon>
+              <span>内存</span>
+            </div>
+            <div class="stat-value">{{ formatBytes(stats.memoryUsage) }}</div>
           </div>
 
-          <!-- 实时网速 -->
-          <div class="stat-item">
-            <n-space justify="space-between" align="center">
-              <n-text style="font-size: 11px;">网速</n-text>
-              <n-text style="font-size: 11px;">↓{{ formatBytesPerSecond((container.stats as any).networkRxRate || 0) }}
-                ↑{{
-                  formatBytesPerSecond((container.stats as any).networkTxRate || 0) }}</n-text>
-            </n-space>
+          <div class="stat-status-item">
+            <div class="flex flex-row gap-2 items-center">
+              <div class="stat-header">
+                <n-icon size="12">
+                  <CloudDownloadOutline />
+                </n-icon>
+                <span>下载</span>
+              </div>
+              <div class="network-rate">{{ formatBytesPerSecond(stats.networkRxRate) }}</div>
+            </div>
+            <div class="flex flex-row gap-2 items-center">
+              <div class="stat-header">
+                <n-icon size="12">
+                  <CloudUploadOutline />
+                </n-icon>
+                <span>上传</span>
+              </div>
+              <div class="network-rate">{{ formatBytesPerSecond(stats.networkTxRate) }}</div>
+            </div>
           </div>
-
-        </n-space>
-      </div>
-
-      <!-- 跳过原因 -->
-      <n-alert v-if="container.skipped && container.skipReason" type="warning" :show-icon="false" size="small">
-        跳过原因: {{ container.skipReason }}
-      </n-alert>
-
-      <!-- 标签 -->
-      <div v-if="hasLabels" class="container-labels">
-        <n-text strong style="font-size: 12px;">标签:</n-text>
-        <div class="flex flex-col gap-2">
-          <n-tooltip v-for="(value, key) in visibleLabels" :key="key" :disabled="!isLabelTruncated(key, value)">
-            <template #trigger>
-              <n-tag type="info" class="container-label-tag flex-1 w-full">
-                {{ key }}={{ value }}
-              </n-tag>
-            </template>
-            {{ key }}={{ value }}
-          </n-tooltip>
-          <n-button v-if="hiddenLabelsCount > 0" text size="tiny" @click="showAllLabels = !showAllLabels"
-            class="self-end">
-            {{ showAllLabels ? '收起' : `+${hiddenLabelsCount}` }}
-          </n-button>
         </div>
       </div>
-    </n-space>
 
-    <template #action>
-      <n-space justify="space-between">
-        <!-- 基础操作 -->
-        <n-button-group>
-          <n-button v-if="!container.running" @click="$emit('start')" type="primary" size="small" :loading="loading">
-            <template #icon>
-              <n-icon>
-                <PlayCircleOutline />
-              </n-icon>
-            </template>
-            启动
-          </n-button>
-
-          <n-button v-else @click="$emit('stop')" type="warning" size="small" :loading="loading">
-            <template #icon>
-              <n-icon>
-                <StopCircleOutline />
-              </n-icon>
-            </template>
-            停止
-          </n-button>
-
-          <n-button v-if="container.status === 'UpdateAvailable' && !container.skipped" @click="$emit('update')"
-            type="info" size="small" :loading="isUpdating">
-            <template #icon>
-              <n-icon>
-                <CloudDownloadOutline />
-              </n-icon>
-            </template>
-            更新
-          </n-button>
-        </n-button-group>
-
-        <!-- 危险操作 -->
-        <n-button @click="$emit('delete')" type="error" size="small" ghost :loading="loading">
-          <template #icon>
-            <n-icon>
-              <TrashOutline />
-            </n-icon>
-          </template>
-          删除
-        </n-button>
-      </n-space>
-    </template>
-  </n-card>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useContainerStore } from '@/store/container'
-import RunningStatusBadge from './RunningStatusBadge.vue'
-import UpdateStatusBadge from './UpdateStatusBadge.vue'
-import dayjs from 'dayjs'
+import ContainerLogo from '@/assets/svg/containerLogo.svg?component'
+import CpuIcon from '@/assets/svg/cpu.svg?component'
+import CreateTimeIcon from '@/assets/svg/createTime.svg?component'
+import MemoryIcon from '@/assets/svg/memory.svg?component'
+import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
+import PortIcon from '@/assets/svg/port.svg?component'
 import type { ContainerStatus } from '@/common/types'
-import { formatPercent, formatBytes, formatBytesPerSecond, getCpuColor, getMemoryColor } from '@/common/utils'
-import {
-  PlayCircleOutline,
-  StopCircleOutline,
-  CloudDownloadOutline,
-  TrashOutline,
-  CopyOutline,
-} from '@vicons/ionicons5'
-import { useMessage } from 'naive-ui'
+import { formatBytes, formatBytesPerSecond, formatPercent, formatTime } from '@/common/utils'
+import { useContainerStore } from '@/store/container'
+import { useSettingStore } from '@/store/setting'
+import { CloudDownloadOutline, CloudUploadOutline, PlayCircleOutline, StopCircleOutline, TimeOutline, TrashOutline } from '@vicons/ionicons5'
+import dayjs from 'dayjs'
+import { NIcon, useThemeVars } from 'naive-ui'
+import { computed, h } from 'vue'
+import RunningStatusBadge from './RunningStatusBadge.vue'
+const settingStore = useSettingStore()
 
 interface Props {
   container: ContainerStatus
@@ -198,198 +169,327 @@ interface Props {
 interface Emits {
   (e: 'start'): void
   (e: 'stop'): void
-  (e: 'update'): void
   (e: 'delete'): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
   loading: false,
 })
+const theme = useThemeVars()
+const emits = defineEmits<Emits>()
 
-defineEmits<Emits>()
+const stats = computed(() => {
+  return props.container.stats || {
+    cpuPercent: 0,
+    memoryUsage: 0,
+    memoryPercent: 0,
+    networkRxRate: 0,
+    networkTxRate: 0,
+  }
+})
 
 const containerStore = useContainerStore()
-const showAllLabels = ref(false)
-const message = useMessage()
 
 // 是否正在更新
-const isUpdating = computed(() =>
-  containerStore.isContainerUpdating(props.container.id)
-)
+const isUpdating = computed(() => containerStore.isContainerUpdating(props.container.id))
 
-// 格式化摘要显示
-// const formatDigest = (digest: string): string => {
-//   if (digest.startsWith('sha256:')) {
-//     return digest.slice(7, 19) + '...'
-//   }
-//   return digest.slice(0, 12) + '...'
-// }
-
-// 格式化运行时间显示
-const formatRunningTime = (startedAt: string): string => {
-  if (!startedAt) return '-'
-  const start = dayjs(startedAt)
-  const now = dayjs()
-  const diffMs = now.diff(start)
-
-  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-  const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-  const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
-
-  if (days > 0) {
-    return `${days}天${hours}小时${minutes}分钟`
-  } else if (hours > 0) {
-    return `${hours}小时${minutes}分钟`
-  } else {
-    return `${minutes}分钟`
+const statusConfig = computed(() => {
+  return {
+    color: props.container.running ? 'bg-emerald-500' : 'bg-slate-500',
+    pulseColor: props.container.running ? 'bg-emerald-400' : 'bg-slate-400',
   }
-}
-
-// 格式化端口映射显示
-const formatPort = (port: any): string => {
-  if (port.publicPort) {
-    return `${port.publicPort}:${port.privatePort}/${port.type}`
-  } else {
-    return `${port.privatePort}/${port.type}`
-  }
-}
-
-// 复制容器ID
-const copyContainerId = async () => {
-  try {
-    await navigator.clipboard.writeText(props.container.id)
-    message.success('容器ID已复制到剪贴板')
-  } catch (err) {
-    // 兼容旧浏览器
-    const textarea = document.createElement('textarea')
-    textarea.value = props.container.id
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    document.body.removeChild(textarea)
-    message.success('容器ID已复制到剪贴板')
-  }
-}
-
-// 标签相关计算
-const hasLabels = computed(() => {
-  return props.container.labels && Object.keys(props.container.labels).length > 0
 })
 
-const maxVisibleLabels = 3
-
-const visibleLabels = computed(() => {
-  if (!props.container.labels) return {}
-
-  const entries = Object.entries(props.container.labels)
-  if (showAllLabels.value) {
-    return props.container.labels
-  }
-
-  return Object.fromEntries(entries.slice(0, maxVisibleLabels))
-})
-
-const hiddenLabelsCount = computed(() => {
-  if (!props.container.labels) return 0
-  const totalCount = Object.keys(props.container.labels).length
-  return Math.max(0, totalCount - maxVisibleLabels)
-})
-
-// 标签文本截断相关
-const maxLabelLength = 30
-
-const isLabelTruncated = (key: string, value: string): boolean => {
-  const fullText = `${key}=${value}`
-  return fullText.length > maxLabelLength
+// 格式化创建时间
+const formatCreatedTime = (createdAt: string): string => {
+  if (!createdAt) return '-'
+  return dayjs(createdAt).format('YYYY-MM-DD HH:mm')
 }
 
+// 格式化端口映射
+const formatPorts = (ports: any[]): string => {
+  if (!ports || ports.length === 0) return '-'
+  // return ports
+  //   .map((port) => {
+  //     if (port.publicPort) {
+  //       return `${port.publicPort}:${port.privatePort}`
+  //     } else {
+  //       return `${port.privatePort}/${port.type}`
+  //     }
+  //   })
+  //   .join(', ')
+  return ports.filter(port => port.publicPort).map(port => `${port.publicPort}:${port.privatePort}`)[0] || '-'
+}
+
+
+
+// 下拉菜单选项
+const dropdownOptions = computed(() => [
+  {
+    key: props.container.running ? 'stop' : 'start',
+    label: props.container.running ? '停止容器' : '启动容器',
+    icon: () => h(NIcon, null, {
+      default: () => h(props.container.running ? StopCircleOutline : PlayCircleOutline)
+    }),
+    disabled: props.loading
+  },
+  {
+    key: 'delete',
+    label: '删除容器',
+    icon: () => h(NIcon, {
+      color: theme.value.errorColor
+    }, {
+      default: () => h(TrashOutline)
+    }),
+    disabled: props.loading,
+  }
+])
+
+// 处理下拉菜单选择
+const handleMenuSelect = (key: string) => {
+  switch (key) {
+    case 'start':
+      emits('start')
+      break
+    case 'stop':
+      emits('stop')
+      break
+    case 'delete':
+      emits('delete')
+      break
+  }
+}
 
 </script>
 
 <style scoped lang="less">
-@import '@/styles/mix.less';
-
 .container-card {
-  transition: all 0.3s ease;
-  overflow-x: auto;
   position: relative;
-  .scrollbar();
+  border-radius: 16px;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+  color: var(--text-color-1);
+  box-shadow: var(--box-shadow-1);
+  min-width: 320px;
 
-  &.card-updating {
-    border-color: #1890ff;
-    box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
-  }
-}
-
-.container-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-
-  .container-name {
-    flex: 1;
-    font-weight: 600;
-    font-size: 14px;
+  &:hover {
+    transform: translateY(-2px);
   }
 
-  .copy-id-btn {
-    opacity: 0.6;
-    transition: opacity 0.2s ease;
+  &:has(.status-bar.running) {
+    border: 2px solid rgba(0, 188, 125, 0.2);
+    background: linear-gradient(135deg, rgba(0, 188, 125, 0.05) 0%, rgba(0, 201, 80, 0.05) 100%);
+  }
 
-    &:hover {
-      opacity: 1;
+  &[data-theme='light']:has(.status-bar.running) {
+    border: 2px solid rgba(0, 188, 125, 0.2);
+    background: linear-gradient(135deg, rgba(0, 188, 125, 0.05) 0%, rgba(0, 201, 80, 0.05) 100%);
+  }
+
+  &:has(.status-bar.stopped) {
+    background: linear-gradient(135deg,
+        rgba(98, 116, 142, 0.05) 0%,
+        rgba(106, 114, 130, 0.05) 100%);
+    border-color: rgba(98, 116, 142, 0.2);
+  }
+
+  &[data-theme='light']:has(.status-bar.stopped) {
+    border: 2px solid rgba(98, 116, 142, 0.2);
+    background: linear-gradient(135deg,
+        rgba(98, 116, 142, 0.05) 0%,
+        rgba(106, 114, 130, 0.05) 100%);
+  }
+
+  .status-bar {
+    height: 4px;
+    width: 100%;
+
+    &.running {
+      background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0) 100%), #00bc7d;
+    }
+
+    &.stopped {
+      background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0) 100%), #62748e;
     }
   }
-}
 
-.container-info {
-  .image-text {
-    word-break: break-all;
-    font-family: 'Monaco', 'Consolas', monospace;
-    font-size: 12px;
+  .card-content {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
 
-  .digest-text {
-    font-size: 11px;
+  .container-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+
+    .container-logo {
+      position: relative;
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 14px;
+      align-self: center;
+      border: 1px solid rgba(0, 188, 125, 0.2);
+      background: linear-gradient(135deg,
+          rgba(250, 250, 250, 0.1) 0%,
+          rgba(250, 250, 250, 0.05) 100%);
+    }
+
+    .container-basic-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow: hidden;
+
+      .container-name {
+        font-weight: 600;
+        font-size: 16px;
+        line-height: 1.25;
+        color: var(--text-base);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+        width: fit-content;
+      }
+
+      .container-image {
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 14px;
+        color: var(--text-color-3);
+        position: relative;
+        display: inline-block;
+        width: fit-content;
+        max-width: 100%;
+        position: relative;
+      }
+    }
+  }
+
+  &[data-theme='light'] .container-header {
+    .container-logo {
+      border: 1px solid rgba(0, 188, 125, 0.2);
+      background: linear-gradient(135deg, rgba(3, 2, 19, 0.1) 0%, rgba(3, 2, 19, 0.05) 100%);
+    }
+  }
+
+  .container-details {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-direction: column;
+      gap: 12px;
+
+      .detail-item {
+        display: flex;
+        flex: 1;
+        width: 100%;
+        gap: 8px;
+        flex: 0;
+        align-items: center;
+
+        .detail-label,
+        .detail-value {
+          flex: 0 1 50%;
+          width: fit-content;
+          display: flex;
+          gap: 4px;
+          align-items: center;
+        }
+
+        .detail-label {
+          color: var(--text-color-3);
+        }
+
+        .detail-value {
+          border-radius: 10px;
+          border: 1px solid var(--border-color);
+          padding: 8px 12px;
+        }
+      }
+    }
+  }
+
+  .container-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
   }
 }
 
-.container-labels {
-  padding: 8px 0;
-  border-top: 1px solid var(--border-color);
-}
-
-.container-label-tag {
-  display: inline-block;
-  padding: 4px 8px;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  white-space: nowrap;
-  cursor: pointer;
-}
 
 .container-stats {
-  .stats-header {
-    margin-bottom: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider-color);
+
+  .stats-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-color-3);
   }
 
-  .stat-item {
-    margin-bottom: 6px;
+  .stat-header {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    align-items: center;
+    color: var(--text-color-3);
+  }
 
-    &:last-child {
-      margin-bottom: 0;
+  .stats-grid {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    justify-content: space-between;
+
+
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      justify-content: center;
+      align-items: flex-start;
+      flex: 1;
     }
-  }
-}
 
-// 响应式调整
-@media (max-width: 768px) {
-  .container-card {
-    margin-bottom: 8px;
-  }
+    .stat-status-item {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      justify-content: space-between;
+      align-items: center;
 
-  .container-label-tag {
-    max-width: 120px;
+      .time-value,
+      .time-status,
+      .network-rate {
+        color: var(--primary-color);
+
+        &.stopped {
+          color: var(--text-color-3);
+        }
+      }
+    }
   }
 }
 </style>

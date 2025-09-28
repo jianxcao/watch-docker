@@ -205,7 +205,7 @@ func (c *Client) fetchBearerToken(ctx context.Context, host, repo, wwwAuth strin
 			}
 		}
 	}
-	logger.Logger.Info("fetch bearer token", logger.ZapField("url", u.String()))
+	logger.Logger.Debug("获取 bearer token", logger.ZapField("url", u.String()))
 	tr, err := req.Get(u.String())
 	if err != nil {
 		return "", err

@@ -1,14 +1,14 @@
+import dayjs from 'dayjs'
+import { h } from 'vue'
+import { NIcon, type IconProps } from 'naive-ui'
+
 export const sleep = (ms: number) => {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-// 格式化大小的工具函数
-export const formatSize = (bytes: number): string => {
-  if (bytes === 0) return '0 Bytes'
-  const k = 1024
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+// 渲染菜单图标
+export const renderIcon = (icon: any, props?: IconProps) => {
+  return () => h(NIcon, props, { default: () => h(icon) })
 }
 
 // 格式化百分比
@@ -32,6 +32,25 @@ export const formatBytesPerSecond = (bytesPerSecond: number): string => {
   const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s']
   const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k))
   return `${(bytesPerSecond / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`
+}
+
+export const formatTime = (startedAt: string): string => {
+  if (!startedAt) return '-'
+  const start = dayjs(startedAt)
+  const now = dayjs()
+  const diffMs = now.diff(start)
+
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+  const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
+
+  if (days > 0) {
+    return `${days}d ${hours}h ${minutes}m`
+  } else if (hours > 0) {
+    return `${hours}h ${minutes}m`
+  } else {
+    return `${minutes}m`
+  }
 }
 
 // 获取CPU使用率颜色
