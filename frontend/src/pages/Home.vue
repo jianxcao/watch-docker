@@ -150,18 +150,20 @@
         </n-button>
       </template>
     </n-card>
+
+    <Teleport to="#header" defer>
+      <div class="welcome-card">
+        <div>
+          <n-h2 class="m-0 text-lg">首页<span class="text-xs pl-1">{{ systemHealthIcon }}</span></n-h2>
+          <n-text depth="3" class="text-xs max-md:hidden ">
+            Docker 容器和镜像管理工具，自动检测更新并管理您的容器
+          </n-text>
+        </div>
+      </div>
+    </Teleport>
   </div>
 
-  <Teleport to="#header" defer>
-    <div class="welcome-card">
-      <div>
-        <n-h2 class="m-0 text-lg">首页<span class="text-xs pl-1">{{ systemHealthIcon }}</span></n-h2>
-        <n-text depth="3" class="text-xs max-md:hidden ">
-          Docker 容器和镜像管理工具，自动检测更新并管理您的容器
-        </n-text>
-      </div>
-    </div>
-  </Teleport>
+
 </template>
 
 <script setup lang="ts">

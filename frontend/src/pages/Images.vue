@@ -30,24 +30,26 @@
         </div>
       </n-spin>
     </div>
+
+    <Teleport to="#header" defer>
+      <div class="welcome-card">
+        <div>
+          <n-h2 class="m-0 text-lg">镜像管理</n-h2>
+          <n-text depth="3" class="text-xs max-md:hidden ">
+            共 {{ imageStore.stats.total }} 个镜像，
+            总大小 {{ imageStore.stats.formattedTotalSize }}，
+          </n-text>
+        </div>
+        <n-button @click="handleRefresh" :loading="imageStore.loading" circle size="tiny">
+          <template #icon>
+            <RefreshOutline />
+          </template>
+        </n-button>
+      </div>
+    </Teleport>
   </div>
 
-  <Teleport to="#header" defer>
-    <div class="welcome-card">
-      <div>
-        <n-h2 class="m-0 text-lg">镜像管理</n-h2>
-        <n-text depth="3" class="text-xs max-md:hidden ">
-          共 {{ imageStore.stats.total }} 个镜像，
-          总大小 {{ imageStore.stats.formattedTotalSize }}，
-        </n-text>
-      </div>
-      <n-button @click="handleRefresh" :loading="imageStore.loading" circle size="tiny">
-        <template #icon>
-          <RefreshOutline />
-        </template>
-      </n-button>
-    </div>
-  </Teleport>
+
 </template>
 
 <script setup lang="ts">

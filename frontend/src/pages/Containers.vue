@@ -62,28 +62,30 @@
       class="update-badge" type="info">
       <span></span>
     </n-badge>
+
+    <Teleport to="#header" defer>
+      <div class="welcome-card">
+        <div>
+          <n-h2 class="m-0 text-lg">容器管理<span class="text-xs pl-1">{{ connectionStatusType }}</span></n-h2>
+          <n-text depth="3" class="text-xs max-md:hidden ">
+            共 {{ containerStore.stats.total }} 个容器，
+            {{ containerStore.stats.running }} 个运行中，
+            {{ containerStore.stats.updateable }} 个可更新
+          </n-text>
+        </div>
+        <!-- 刷新按钮 -->
+        <n-button @click="handleRefresh" :loading="containerStore.loading" circle size="tiny">
+          <template #icon>
+            <n-icon>
+              <RefreshOutline />
+            </n-icon>
+          </template>
+        </n-button>
+      </div>
+    </Teleport>
   </div>
 
-  <Teleport to="#header" defer>
-    <div class="welcome-card">
-      <div>
-        <n-h2 class="m-0 text-lg">容器管理<span class="text-xs pl-1">{{ connectionStatusType }}</span></n-h2>
-        <n-text depth="3" class="text-xs max-md:hidden ">
-          共 {{ containerStore.stats.total }} 个容器，
-          {{ containerStore.stats.running }} 个运行中，
-          {{ containerStore.stats.updateable }} 个可更新
-        </n-text>
-      </div>
-      <!-- 刷新按钮 -->
-      <n-button @click="handleRefresh" :loading="containerStore.loading" circle size="tiny">
-        <template #icon>
-          <n-icon>
-            <RefreshOutline />
-          </n-icon>
-        </template>
-      </n-button>
-    </div>
-  </Teleport>
+
 </template>
 
 <script setup lang="ts">

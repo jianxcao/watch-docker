@@ -1,3 +1,18 @@
+<template>
+  <n-config-provider :theme="theme">
+    <n-global-style />
+    <n-el :class="$style.container">
+      <n-modal-provider>
+        <n-dialog-provider>
+          <n-message-provider placement="bottom-right">
+            <config-view> <router-view /></config-view>
+          </n-message-provider>
+        </n-dialog-provider>
+      </n-modal-provider>
+    </n-el>
+  </n-config-provider>
+</template>
+
 <script setup lang="ts">
 import { darkTheme } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
@@ -41,22 +56,29 @@ onUnmounted(() => {
   imageStore.stopImagesPolling()
   containerStore.stopStatsWebSocket()
 })
+
+const focused = useWindowFocus()
+
+async function refresh() {
+  if (appStore.systemHealth === 'unhealthy') {
+    await checkHealth()
+  }
+  containerStore.fetchContainers(true, false)
+  imageStore.fetchImages()
+  if (!containerStore.statsWebSocket.isConnected) {
+    containerStore.startStatsWebSocket()
+  }
+}
+
+watch(focused, (newVal) => {
+  if (newVal) {
+    console.debug('窗口聚焦')
+    refresh()
+  }
+})
 </script>
 
-<template>
-  <n-config-provider :theme="theme">
-    <n-global-style />
-    <n-el :class="$style.container">
-      <n-modal-provider>
-        <n-dialog-provider>
-          <n-message-provider placement="bottom-right">
-            <config-view> <router-view /></config-view>
-          </n-message-provider>
-        </n-dialog-provider>
-      </n-modal-provider>
-    </n-el>
-  </n-config-provider>
-</template>
+
 
 <style lang="less" module>
 .container {

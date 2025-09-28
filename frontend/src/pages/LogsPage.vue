@@ -12,13 +12,15 @@
         </span>
       </div>
     </div>
+
+    <Teleport to="#header" defer>
+      <div class="h-full flex items-center">
+        <n-h2 class="m-0 text-lg">日志</n-h2>
+      </div>
+    </Teleport>
   </div>
 
-  <Teleport to="#header" defer>
-    <div class="h-full flex items-center">
-      <n-h2 class="m-0 text-lg">日志</n-h2>
-    </div>
-  </Teleport>
+
 </template>
 
 <script setup lang="ts">
@@ -45,7 +47,6 @@ let nextId = 1
 
 
 function levelColor(level: string) {
-  console.log(level)
   switch (level) {
     case 'DEBUG':
       return 'indigo'

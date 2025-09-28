@@ -151,29 +151,30 @@
       </n-space>
     </div>
 
-  </div>
-  <Teleport to="#header" defer>
-    <div class="welcome-card">
-      <div>
-        <n-h2 class="m-0 text-lg">系统设置</n-h2>
-        <n-text depth="3" class="text-xs max-md:hidden ">
-          配置 Watch Docker 的运行参数和策略
-        </n-text>
+    <Teleport to="#header" defer>
+      <div class="welcome-card">
+        <div>
+          <n-h2 class="m-0 text-lg">系统设置</n-h2>
+          <n-text depth="3" class="text-xs max-md:hidden ">
+            配置 Watch Docker 的运行参数和策略
+          </n-text>
+        </div>
       </div>
-    </div>
-  </Teleport>
+    </Teleport>
 
-  <!-- 底部保存按钮 -->
-  <Teleport to="#footer" defer>
-    <div class="save-button-container">
-      <n-button type="primary" size="large" @click="handleSave" :loading="saving">
-        <template #icon>
-          <SaveOutline />
-        </template>
-        保存配置
-      </n-button>
-    </div>
-  </Teleport>
+    <!-- 底部保存按钮 -->
+    <Teleport to="#footer" defer>
+      <div class="save-button-container">
+        <n-button type="primary" size="large" @click="handleSave" :loading="saving">
+          <template #icon>
+            <SaveOutline />
+          </template>
+          保存配置
+        </n-button>
+      </div>
+    </Teleport>
+  </div>
+
 </template>
 
 <script setup lang="ts">

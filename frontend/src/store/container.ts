@@ -228,5 +228,6 @@ export const useContainerStore = defineStore('container', () => {
     isContainerUpdating,
     startStatsWebSocket,
     stopStatsWebSocket,
+    statsWebSocket,
   }
 })
