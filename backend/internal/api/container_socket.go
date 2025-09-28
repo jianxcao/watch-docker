@@ -10,7 +10,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
+	"github.com/jianxcao/watch-docker/backend/internal/scanner"
 )
 
 var upgrader = websocket.Upgrader{
@@ -29,6 +31,7 @@ type Client struct {
 // StatsWebSocketManager WebSocket 连接管理器
 type StatsWebSocketManager struct {
 	docker      *dockercli.Client
+	scanner     *scanner.Scanner
 	clients     map[*Client]bool
 	latestStats []byte // 保存最新的统计数据
 	register    chan *Client
@@ -37,9 +40,10 @@ type StatsWebSocketManager struct {
 }
 
 // NewStatsWebSocketManager 创建新的 WebSocket 管理器
-func NewStatsWebSocketManager(docker *dockercli.Client) *StatsWebSocketManager {
+func NewStatsWebSocketManager(docker *dockercli.Client, scanner *scanner.Scanner) *StatsWebSocketManager {
 	return &StatsWebSocketManager{
 		docker:     docker,
+		scanner:    scanner,
 		clients:    make(map[*Client]bool),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
@@ -100,37 +104,70 @@ func (manager *StatsWebSocketManager) Run(ctx context.Context) {
 	}
 }
 
-// broadcastStats 广播统计数据到所有连接
+// broadcastStats 广播容器状态和统计数据到所有连接
 func (manager *StatsWebSocketManager) broadcastStats(ctx context.Context) {
-	// 获取所有运行中的容器
-	containers, err := manager.docker.ListContainers(ctx, false)
+	// 获取配置
+	cfg := config.Get()
+	// 使用scanner获取完整的容器状态信息
+	containerStatuses, err := manager.scanner.ScanOnce(ctx, cfg.Docker.IncludeStopped, cfg.Scan.Concurrency, true, false)
 	if err != nil {
-		log.Printf("获取容器列表失败: %v", err)
+		log.Printf("获取容器状态失败: %v", err)
+		return
+	}
+	if len(containerStatuses) == 0 {
+		// 发送空数据
+		response := map[string]interface{}{
+			"type": "containers",
+			"data": map[string]interface{}{
+				"containers": []scanner.ContainerStatus{},
+			},
+			"timestamp": time.Now().Unix(),
+		}
+
+		message, err := json.Marshal(response)
+		if err != nil {
+			log.Printf("序列化空容器数据失败: %v", err)
+			return
+		}
+
+		manager.broadcastMessage(message)
 		return
 	}
 
-	if len(containers) == 0 {
-		return
+	// 收集运行中容器的ID
+	runningContainerIDs := make([]string, 0)
+	for _, cs := range containerStatuses {
+		if cs.Running {
+			runningContainerIDs = append(runningContainerIDs, cs.ID)
+		}
 	}
 
-	// 获取容器 ID 列表
-	containerIDs := make([]string, 0, len(containers))
-	for _, c := range containers {
-		containerIDs = append(containerIDs, c.ID)
+	// 获取运行中容器的统计数据
+	var statsMap map[string]*dockercli.ContainerStats
+	if len(runningContainerIDs) > 0 {
+		statsMap, err = manager.docker.GetContainersStats(ctx, runningContainerIDs)
+		if err != nil {
+			log.Printf("获取容器统计失败: %v", err)
+			// 即使获取统计失败，也要发送容器状态信息
+			statsMap = make(map[string]*dockercli.ContainerStats)
+		}
+	} else {
+		statsMap = make(map[string]*dockercli.ContainerStats)
 	}
 
-	// 获取统计数据
-	statsMap, err := manager.docker.GetContainersStats(ctx, containerIDs)
-	if err != nil {
-		log.Printf("获取容器统计失败: %v", err)
-		return
+	// 将统计数据合并到容器状态中
+	for i := range containerStatuses {
+		// 添加统计数据（如果容器正在运行且有统计数据）
+		if containerStatuses[i].Running && statsMap[containerStatuses[i].ID] != nil {
+			containerStatuses[i].Stats = statsMap[containerStatuses[i].ID]
+		}
 	}
 
 	// 构建响应数据
 	response := map[string]interface{}{
-		"type": "stats",
+		"type": "containers",
 		"data": map[string]interface{}{
-			"stats": statsMap,
+			"containers": containerStatuses,
 		},
 		"timestamp": time.Now().Unix(),
 	}
@@ -138,11 +175,16 @@ func (manager *StatsWebSocketManager) broadcastStats(ctx context.Context) {
 	// 序列化为 JSON
 	message, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("序列化统计数据失败: %v", err)
+		log.Printf("序列化容器数据失败: %v", err)
 		return
 	}
 
-	// 保存最新统计数据
+	manager.broadcastMessage(message)
+}
+
+// broadcastMessage 广播消息到所有连接的客户端
+func (manager *StatsWebSocketManager) broadcastMessage(message []byte) {
+	// 保存最新数据
 	manager.mu.Lock()
 	manager.latestStats = message
 	clients := make([]*Client, 0, len(manager.clients))

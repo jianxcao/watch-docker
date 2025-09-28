@@ -28,13 +28,18 @@ const checkHealth = async () => {
 }
 
 onMounted(async () => {
-  // console.log('App mounted')
   await checkHealth()
-  await Promise.all([
+  Promise.all([
     containerStore.fetchContainers(true, false),
     imageStore.fetchImages(),
     containerStore.startStatsWebSocket(),
   ])
+  imageStore.startImagesPolling()
+})
+
+onUnmounted(() => {
+  imageStore.stopImagesPolling()
+  containerStore.stopStatsWebSocket()
 })
 </script>
 

@@ -39,7 +39,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	// r.Use(ginzap(logger))
 
 	// 创建 WebSocket 管理器
-	wsStatsManager := NewStatsWebSocketManager(docker)
+	wsStatsManager := NewStatsWebSocketManager(docker, sc)
 
 	s := &Server{
 		logger:         logger,

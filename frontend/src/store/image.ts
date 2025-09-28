@@ -54,6 +54,15 @@ export const useImageStore = defineStore('image', () => {
     }
   }
 
+  // 方法：定时获取镜像列表
+  const { pause: stopImagesPolling, resume: startImagesPolling } = useIntervalFn(
+    fetchImages,
+    10000,
+    {
+      immediate: false,
+    }
+  )
+
   // 方法：删除镜像
   const deleteImage = async (ref: string, force: boolean = false): Promise<boolean> => {
     deleting.value.add(ref)
@@ -137,5 +146,7 @@ export const useImageStore = defineStore('image', () => {
     getDisplayId,
     isDanglingImage,
     formatSize,
+    stopImagesPolling,
+    startImagesPolling,
   }
 })

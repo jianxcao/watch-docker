@@ -13,19 +13,20 @@ import (
 )
 
 type ContainerStatus struct {
-	ID            string               `json:"id"`
-	Name          string               `json:"name"`
-	Image         string               `json:"image"`
-	Running       bool                 `json:"running"`
-	CurrentDigest string               `json:"currentDigest"`
-	RemoteDigest  string               `json:"remoteDigest"`
-	Status        string               `json:"status"` // UpToDate | UpdateAvailable | Skipped | Error
-	Skipped       bool                 `json:"skipped"`
-	SkipReason    string               `json:"skipReason"`
-	Labels        map[string]string    `json:"labels"`
-	LastCheckedAt time.Time            `json:"lastCheckedAt"`
-	StartedAt     string               `json:"startedAt"`
-	Ports         []dockercli.PortInfo `json:"ports"`
+	ID            string                    `json:"id"`
+	Name          string                    `json:"name"`
+	Image         string                    `json:"image"`
+	Running       bool                      `json:"running"`
+	CurrentDigest string                    `json:"currentDigest"`
+	RemoteDigest  string                    `json:"remoteDigest"`
+	Status        string                    `json:"status"` // UpToDate | UpdateAvailable | Skipped | Error
+	Skipped       bool                      `json:"skipped"`
+	SkipReason    string                    `json:"skipReason"`
+	Labels        map[string]string         `json:"labels"`
+	LastCheckedAt time.Time                 `json:"lastCheckedAt"`
+	StartedAt     string                    `json:"startedAt"`
+	Ports         []dockercli.PortInfo      `json:"ports"`
+	Stats         *dockercli.ContainerStats `json:"stats,omitempty"`
 }
 
 type Scanner struct {

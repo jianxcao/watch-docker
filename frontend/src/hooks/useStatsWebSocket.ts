@@ -1,4 +1,4 @@
-import type { ContainerStats } from '@/common/types'
+import type { ContainerStats, ContainerStatus } from '@/common/types'
 import { useSettingStore } from '@/store/setting'
 import { useWebSocket } from '@vueuse/core'
 import { computed, ref } from 'vue'
@@ -6,12 +6,14 @@ import { computed, ref } from 'vue'
 export interface StatsMessage {
   type: string
   data: {
-    stats: Record<string, ContainerStats>
+    stats?: Record<string, ContainerStats>
+    containers?: ContainerStatus[]
   }
   timestamp: number
 }
 
 export type StatsCallback = (statsMap: Record<string, ContainerStats>) => void
+export type ContainersCallback = (containers: ContainerStatus[]) => void
 
 /**
  * 容器统计数据 WebSocket Composable
@@ -22,7 +24,9 @@ export function useStatsWebSocket() {
 
   // 响应式状态
   const statsData = ref<Record<string, ContainerStats>>({})
-  const callbacks = ref<Set<StatsCallback>>(new Set())
+  const containersData = ref<ContainerStatus[]>([])
+  const statsCallbacks = ref<Set<StatsCallback>>(new Set())
+  const containersCallbacks = ref<Set<ContainersCallback>>(new Set())
 
   // 计算 WebSocket URL
   const wsUrl = computed(() => {
@@ -75,14 +79,45 @@ export function useStatsWebSocket() {
     onMessage(_, event) {
       try {
         const message: StatsMessage = JSON.parse(event.data)
-        if (message.type === 'stats' && message.data.stats) {
-          // 更新统计数据
+
+        if (message.type === 'containers' && message.data.containers) {
+          // 更新容器数据
+          containersData.value = message.data.containers
+
+          // 通知所有容器回调函数
+          containersCallbacks.value.forEach((callback) => {
+            try {
+              callback(message.data.containers!)
+            } catch (error) {
+              console.error('容器数据回调执行失败:', error)
+            }
+          })
+
+          // 为了向后兼容，提取stats数据并通知stats回调
+          const statsMap: Record<string, ContainerStats> = {}
+          message.data.containers.forEach((container) => {
+            if (container.stats) {
+              statsMap[container.id] = container.stats
+            }
+          })
+
+          if (Object.keys(statsMap).length > 0) {
+            statsData.value = statsMap
+            statsCallbacks.value.forEach((callback) => {
+              try {
+                callback(statsMap)
+              } catch (error) {
+                console.error('统计数据回调执行失败:', error)
+              }
+            })
+          }
+        } else if (message.type === 'stats' && message.data.stats) {
+          // 兼容旧的stats消息格式
           statsData.value = message.data.stats
 
-          // 通知所有回调函数
-          callbacks.value.forEach((callback) => {
+          statsCallbacks.value.forEach((callback) => {
             try {
-              callback(message.data.stats)
+              callback(message.data.stats!)
             } catch (error) {
               console.error('统计数据回调执行失败:', error)
             }
@@ -113,12 +148,22 @@ export function useStatsWebSocket() {
 
   // 添加统计数据回调
   const addStatsCallback = (callback: StatsCallback) => {
-    callbacks.value.add(callback)
+    statsCallbacks.value.add(callback)
   }
 
   // 移除统计数据回调
   const removeStatsCallback = (callback: StatsCallback) => {
-    callbacks.value.delete(callback)
+    statsCallbacks.value.delete(callback)
+  }
+
+  // 添加容器数据回调
+  const addContainersCallback = (callback: ContainersCallback) => {
+    containersCallbacks.value.add(callback)
+  }
+
+  // 移除容器数据回调
+  const removeContainersCallback = (callback: ContainersCallback) => {
+    containersCallbacks.value.delete(callback)
   }
 
   // 启动连接
@@ -133,7 +178,8 @@ export function useStatsWebSocket() {
 
   // 断开连接
   const disconnect = () => {
-    callbacks.value.clear()
+    statsCallbacks.value.clear()
+    containersCallbacks.value.clear()
     close()
   }
 
@@ -152,6 +198,7 @@ export function useStatsWebSocket() {
     connectionState,
     isConnected,
     statsData,
+    containersData,
     ws,
 
     // 方法
@@ -160,6 +207,8 @@ export function useStatsWebSocket() {
     reconnect,
     addStatsCallback,
     removeStatsCallback,
+    addContainersCallback,
+    removeContainersCallback,
     send,
   }
 }

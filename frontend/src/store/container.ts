@@ -1,8 +1,8 @@
-import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
 import { containerApi } from '@/common/api'
-import type { ContainerStatus, ContainerStats, BatchUpdateResult } from '@/common/types'
-import { getGlobalStatsWebSocket, type StatsCallback } from '@/hooks/useStatsWebSocket'
+import type { BatchUpdateResult, ContainerStatus } from '@/common/types'
+import { getGlobalStatsWebSocket, type ContainersCallback } from '@/hooks/useStatsWebSocket'
+import { defineStore } from 'pinia'
+import { computed, ref } from 'vue'
 
 export const useContainerStore = defineStore('container', () => {
   // 状态
@@ -56,7 +56,8 @@ export const useContainerStore = defineStore('container', () => {
           const existingContainer = existingContainersMap.get(newContainer.id)
           // 如果存在旧容器，合并数据，新数据覆盖旧数据
           if (existingContainer) {
-            return { ...existingContainer, ...newContainer }
+            const res = { ...existingContainer, ...newContainer }
+            return res
           }
           // 如果是新容器，直接使用新数据
           return newContainer
@@ -176,46 +177,24 @@ export const useContainerStore = defineStore('container', () => {
     return updating.value.has(id)
   }
 
-  // 方法：获取容器统计信息
-  const fetchContainersStats = async (
-    containerIds: string[]
-  ): Promise<Record<string, ContainerStats>> => {
-    try {
-      const data = await containerApi.getContainersStats(containerIds)
-      if (data.code === 0) {
-        return data.data.stats
-      } else {
-        console.error('获取容器统计信息失败:', data.msg)
-        throw new Error(data.msg)
-      }
-    } catch (error) {
-      console.error('获取容器统计信息失败:', error)
-      throw error
-    }
-  }
-
-  // WebSocket 统计数据回调处理
-  const handleStatsUpdate: StatsCallback = (statsMap: Record<string, ContainerStats>) => {
-    // 更新容器统计信息
-    containers.value = containers.value.map((container) => {
-      if (container.running && statsMap[container.id]) {
-        return { ...container, stats: statsMap[container.id] }
-      }
-      return container
-    })
+  // WebSocket 容器数据回调处理
+  const handleContainersUpdate: ContainersCallback = (newContainers: ContainerStatus[]) => {
+    console.debug('WebSocket received containers update:', newContainers.length, 'containers')
+    // 直接使用WebSocket接收到的完整容器数据，包括stats
+    containers.value = newContainers
   }
 
   // 方法：启动 WebSocket 统计监听
   const startStatsWebSocket = () => {
     console.debug('startStatsWebSocket')
-    statsWebSocket.addStatsCallback(handleStatsUpdate)
+    statsWebSocket.addContainersCallback(handleContainersUpdate)
     statsWebSocket.connect()
   }
 
   // 方法：停止 WebSocket 统计监听
   const stopStatsWebSocket = () => {
     console.debug('stopStatsWebSocket')
-    statsWebSocket.removeStatsCallback(handleStatsUpdate)
+    statsWebSocket.removeContainersCallback(handleContainersUpdate)
     statsWebSocket.disconnect()
   }
 
@@ -247,7 +226,6 @@ export const useContainerStore = defineStore('container', () => {
     findContainerById,
     findContainerByName,
     isContainerUpdating,
-    fetchContainersStats,
     startStatsWebSocket,
     stopStatsWebSocket,
   }
