@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/jianxcao/watch-docker/backend/internal/scanner"
 )
 
@@ -64,7 +65,7 @@ func (manager *StatsWebSocketManager) Run(ctx context.Context) {
 
 			// 通知 Docker 客户端有新连接
 			manager.docker.AddStatsConnection(ctx)
-			log.Printf("WebSocket 客户端已连接，当前连接数: %d", len(manager.clients))
+			logger.Logger.Info(fmt.Sprintf("WebSocket 客户端已连接，当前连接数: %d", len(manager.clients)))
 
 			// 如果有最新统计数据，立即发送给新客户端
 			if manager.latestStats != nil {
@@ -85,7 +86,7 @@ func (manager *StatsWebSocketManager) Run(ctx context.Context) {
 
 			// 通知 Docker 客户端连接已断开
 			manager.docker.RemoveStatsConnection()
-			log.Printf("WebSocket 客户端已断开，当前连接数: %d", len(manager.clients))
+			logger.Logger.Info(fmt.Sprintf("WebSocket 客户端已断开，当前连接数: %d", len(manager.clients)))
 
 		case <-ticker.C:
 			// 定期推送统计数据
@@ -98,7 +99,7 @@ func (manager *StatsWebSocketManager) Run(ctx context.Context) {
 			}
 
 		case <-ctx.Done():
-			log.Println("WebSocket 管理器停止")
+			logger.Logger.Info("WebSocket 管理器停止")
 			return
 		}
 	}
@@ -111,7 +112,7 @@ func (manager *StatsWebSocketManager) broadcastStats(ctx context.Context) {
 	// 使用scanner获取完整的容器状态信息
 	containerStatuses, err := manager.scanner.ScanOnce(ctx, cfg.Docker.IncludeStopped, cfg.Scan.Concurrency, true, false)
 	if err != nil {
-		log.Printf("获取容器状态失败: %v", err)
+		logger.Logger.Error(fmt.Sprintf("获取容器状态失败: %v", err))
 		return
 	}
 	if len(containerStatuses) == 0 {
@@ -126,7 +127,7 @@ func (manager *StatsWebSocketManager) broadcastStats(ctx context.Context) {
 
 		message, err := json.Marshal(response)
 		if err != nil {
-			log.Printf("序列化空容器数据失败: %v", err)
+			logger.Logger.Error(fmt.Sprintf("序列化空容器数据失败: %v", err))
 			return
 		}
 
@@ -147,7 +148,7 @@ func (manager *StatsWebSocketManager) broadcastStats(ctx context.Context) {
 	if len(runningContainerIDs) > 0 {
 		statsMap, err = manager.docker.GetContainersStats(ctx, runningContainerIDs)
 		if err != nil {
-			log.Printf("获取容器统计失败: %v", err)
+			logger.Logger.Error(fmt.Sprintf("获取容器统计失败: %v", err))
 			// 即使获取统计失败，也要发送容器状态信息
 			statsMap = make(map[string]*dockercli.ContainerStats)
 		}
@@ -175,7 +176,7 @@ func (manager *StatsWebSocketManager) broadcastStats(ctx context.Context) {
 	// 序列化为 JSON
 	message, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("序列化容器数据失败: %v", err)
+		logger.Logger.Error(fmt.Sprintf("序列化容器数据失败: %v", err))
 		return
 	}
 
@@ -212,7 +213,7 @@ func (manager *StatsWebSocketManager) broadcastMessage(message []byte) {
 func (manager *StatsWebSocketManager) HandleWebSocket(c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("WebSocket 升级失败: %v", err)
+		logger.Logger.Error(fmt.Sprintf("WebSocket 升级失败: %v", err))
 		return
 	}
 
@@ -249,7 +250,7 @@ func (c *Client) writePump() {
 			}
 
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("WebSocket 写入失败: %v", err)
+				logger.Logger.Error(fmt.Sprintf("WebSocket 写入失败: %v", err))
 				return
 			}
 
@@ -280,7 +281,7 @@ func (c *Client) readPump() {
 		_, _, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket 读取错误: %v", err)
+				logger.Logger.Error(fmt.Sprintf("WebSocket 读取错误: %v", err))
 			}
 			break
 		}

@@ -35,7 +35,7 @@ func main() {
 	if err != nil {
 		panic(fmt.Errorf("load config: %w", err))
 	}
-	log, err := logger.NewLogger(cfg.Logging.Level, "json", "")
+	log, err := logger.NewLogger(cfg.Logging.Level, "")
 	if err != nil {
 		panic(fmt.Errorf("init logger: %w", err))
 	}

@@ -16,7 +16,7 @@ var (
 )
 
 // NewLogger creates a new logger instance with dynamic level support
-func NewLogger(level string, format string, file string) (*zap.Logger, error) {
+func NewLogger(level string, file string) (*zap.Logger, error) {
 	// Parse log level
 	logLevel := zapcore.InfoLevel
 	switch level {
@@ -62,12 +62,7 @@ func NewLogger(level string, format string, file string) (*zap.Logger, error) {
 
 	jsonEncoder := zapcore.NewJSONEncoder(jsonEncoderConfig)
 	// Choose encoder based on format
-	var encoder zapcore.Encoder
-	if format == "console" {
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
-	} else {
-		encoder = jsonEncoder
-	}
+	encoder := zapcore.NewConsoleEncoder(encoderConfig)
 
 	// Create write syncer
 	var writeSyncer zapcore.WriteSyncer
