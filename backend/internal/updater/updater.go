@@ -244,6 +244,9 @@ func (u *Updater) finalCleanup(ctx context.Context, uctx *updateContext) {
 	}
 
 	// 删除旧容器
-	_ = u.docker.RemoveContainerWithVolumes(ctx, uctx.containerID, true)
+	err = u.docker.RemoveContainerWithVolumes(ctx, uctx.containerID, true)
+	if err != nil {
+		logger.Logger.Warn("删除旧容器失败，继续清理资源", zap.String("containerID", uctx.containerID), zap.Error(err))
+	}
 	logger.Logger.Info("容器更新完成", zap.String("containerName", uctx.oldName), zap.String("imageRef", uctx.imageRef))
 }

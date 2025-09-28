@@ -157,7 +157,7 @@ func (c *Client) RemoveContainerWithVolumes(ctx context.Context, id string, forc
 	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{
 		Force:         force,
 		RemoveVolumes: true,
-		RemoveLinks:   true, // 清理传统的容器链接（如果存在）
+		RemoveLinks:   false, // 清理传统的容器链接（如果存在）
 	})
 }
 
