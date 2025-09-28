@@ -325,16 +325,16 @@ func (c *Client) CleanupContainerResources(ctx context.Context, containerInfo co
 		_ = c.SafeRemoveImage(ctx, containerInfo.Image)
 	}
 
-	// 2. 清理自定义网络
-	if containerInfo.NetworkSettings != nil && containerInfo.NetworkSettings.Networks != nil {
-		var networkIDs []string
-		for _, netEndpoint := range containerInfo.NetworkSettings.Networks {
-			if netEndpoint.NetworkID != "" {
-				networkIDs = append(networkIDs, netEndpoint.NetworkID)
-			}
-		}
-		_ = c.SafeRemoveNetworks(ctx, networkIDs)
-	}
+	// // 2. 清理自定义网络 不清理网络
+	// if containerInfo.NetworkSettings != nil && containerInfo.NetworkSettings.Networks != nil {
+	// 	var networkIDs []string
+	// 	for _, netEndpoint := range containerInfo.NetworkSettings.Networks {
+	// 		if netEndpoint.NetworkID != "" {
+	// 			networkIDs = append(networkIDs, netEndpoint.NetworkID)
+	// 		}
+	// 	}
+	// 	_ = c.SafeRemoveNetworks(ctx, networkIDs)
+	// }
 
 	// 3. 清理匿名卷
 	if len(containerInfo.Mounts) > 0 {
