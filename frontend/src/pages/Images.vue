@@ -69,11 +69,16 @@
               <RefreshOutline />
             </template>
           </n-button>
-          <n-button @click="handleImportClick" :loading="imageStore.importing" circle size="tiny">
-            <template #icon>
-              <CloudUploadOutline />
+          <n-tooltip trigger="hover" :delay="500">
+            <template #trigger>
+              <n-button @click="handleImportClick" :loading="imageStore.importing" circle size="tiny">
+                <template #icon>
+                  <CloudUploadOutline />
+                </template>
+              </n-button>
             </template>
-          </n-button>
+            镜像导入
+          </n-tooltip>
         </n-space>
       </div>
     </Teleport>

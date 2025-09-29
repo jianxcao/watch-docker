@@ -193,15 +193,13 @@ func (c *Client) WaitContainerStopped(ctx context.Context, id string, maxWaitSec
 func (c *Client) PruneSystem(ctx context.Context) error {
 	// 清理悬挂的卷
 	volFilter := filters.NewArgs()
-	volFilter.Add("dangling", "true")
 	_, err := c.docker.VolumesPrune(ctx, volFilter)
 	if err != nil {
 		return err
 	}
 
-	// 清理悬挂的网络
+	// 清理未使用的网络（不支持dangling过滤器，使用空过滤器清理未使用的网络）
 	netFilter := filters.NewArgs()
-	netFilter.Add("dangling", "true")
 	_, err = c.docker.NetworksPrune(ctx, netFilter)
 	if err != nil {
 		return err
@@ -209,7 +207,6 @@ func (c *Client) PruneSystem(ctx context.Context) error {
 
 	// 清理悬挂的镜像
 	imgFilter := filters.NewArgs()
-	imgFilter.Add("dangling", "true")
 	_, err = c.docker.ImagesPrune(ctx, imgFilter)
 	return err
 }

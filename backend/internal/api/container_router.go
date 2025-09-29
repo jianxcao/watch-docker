@@ -26,6 +26,7 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.POST("/containers/:id/start", s.handleStartContainer())
 	protected.DELETE("/containers/:id", s.handleDeleteContainer())
 	protected.GET("/containers/:id/export", s.handleExportContainer())
+	protected.POST("/system/prune", s.handlePruneSystem())
 	protected.GET("/update/all", s.handleUpdateAll())
 }
 
@@ -299,4 +300,23 @@ func generateContainerFileName(container *container.InspectResponse) string {
 	}
 
 	return fmt.Sprintf("container_%s.tar", shortID)
+}
+
+// handlePruneSystem 清理悬挂的文件系统、网络、镜像等
+func (s *Server) handlePruneSystem() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+		defer cancel()
+
+		s.logger.Info("starting system prune")
+
+		if err := s.docker.PruneSystem(ctx); err != nil {
+			s.logger.Error("prune system failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "系统清理失败: "+err.Error()))
+			return
+		}
+
+		s.logger.Info("system prune completed successfully")
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true, "message": "系统清理完成"}))
+	}
 }

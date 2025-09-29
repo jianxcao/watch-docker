@@ -21,6 +21,7 @@ export const API_ENDPOINTS = {
 
   // 批量操作
   BATCH_UPDATE: '/updates/run',
+  PRUNE_SYSTEM: '/system/prune',
 
   // 镜像相关
   IMAGES: '/images',

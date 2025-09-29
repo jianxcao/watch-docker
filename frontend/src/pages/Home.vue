@@ -114,6 +114,20 @@
           清理悬空镜像 ({{ imageStore.danglingImages.length }})
         </n-button> -->
 
+        <n-tooltip trigger="hover" :delay="500">
+          <template #trigger>
+            <n-button type="warning" size="large" @click="handlePruneSystem" :loading="isPruning">
+              <template #icon>
+                <n-icon>
+                  <TrashBinOutline />
+                </n-icon>
+              </template>
+              系统清理
+            </n-button>
+          </template>
+          清理悬空镜像、网络和数据卷
+        </n-tooltip>
+
         <n-button type="primary" size="large" @click="handleRefreshAll" :loading="appStore.globalLoading">
           <template #icon>
             <n-icon>
@@ -167,19 +181,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useMessage } from 'naive-ui'
 import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
 import { useContainer } from '@/hooks/useContainer'
 import { useSettingStore } from '@/store/setting'
 import StatusBadge from '@/components/StatusBadge.vue'
+import { api } from '@/common/api'
 import dayjs from 'dayjs'
 import {
   LayersOutline,
   ArchiveOutline,
   CloudDownloadOutline,
   RefreshOutline,
+  TrashBinOutline,
 } from '@vicons/ionicons5'
 
 const appStore = useAppStore()
@@ -187,6 +204,10 @@ const containerStore = useContainerStore()
 const imageStore = useImageStore()
 const containerHooks = useContainer()
 const settingStore = useSettingStore()
+const message = useMessage()
+
+// 系统清理状态
+const isPruning = ref(false)
 
 // 版本信息
 // 版本信息
@@ -259,6 +280,28 @@ const handleRefreshAll = async () => {
     appStore.updateRefreshTime()
   } finally {
     appStore.setGlobalLoading(false)
+  }
+}
+
+// 系统清理处理函数
+const handlePruneSystem = async () => {
+  isPruning.value = true
+  try {
+    const data = await api.container.pruneSystem()
+    if (data.code === 0) {
+      message.success(data.data.message || '系统清理完成')
+      // 清理完成后刷新数据
+      await Promise.all([
+        containerStore.fetchContainers(),
+        imageStore.fetchImages(),
+      ])
+    } else {
+      message.error(data.msg || '系统清理失败')
+    }
+  } catch (error: any) {
+    message.error(error.message || '系统清理失败')
+  } finally {
+    isPruning.value = false
   }
 }
 

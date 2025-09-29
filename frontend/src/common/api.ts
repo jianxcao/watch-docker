@@ -56,6 +56,9 @@ export const containerApi = {
     axios.delete<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_DELETE(id), {
       params: { force },
     }),
+
+  // 系统清理
+  pruneSystem: () => axios.post<{ ok: boolean; message: string }>(API_ENDPOINTS.PRUNE_SYSTEM),
 }
 
 // 镜像相关API

@@ -57,29 +57,28 @@
       </n-spin>
     </div>
 
-    <!-- 悬浮操作按钮 -->
-    <div class="floating-actions">
-      <n-space vertical>
-        <!-- 批量更新按钮 -->
-        <n-button v-if="containerStore.updateableContainers.length > 0" type="primary" size="large" circle
-          @click="handleBatchUpdate" :loading="containerStore.batchUpdating" class="fab-button">
-          <template #icon>
-            <n-icon size="20">
-              <CloudDownloadOutline />
-            </n-icon>
-          </template>
-        </n-button>
+    <Teleport to="body">
+      <!-- 悬浮操作按钮 -->
+      <div class="floating-actions">
+        <!-- 批量更新提示 -->
+        <n-badge v-if="containerStore.updateableContainers.length > 0"
+          :value="containerStore.updateableContainers.length" class="update-badge" type="info">
+          <span></span>
+        </n-badge>
+        <n-space vertical class="relative">
+          <!-- 批量更新按钮 -->
+          <n-button v-if="containerStore.updateableContainers.length > 0" type="primary" size="large" circle
+            @click="handleBatchUpdate" :loading="containerStore.batchUpdating" class="fab-button">
+            <template #icon>
+              <n-icon size="20">
+                <CloudDownloadOutline />
+              </n-icon>
+            </template>
+          </n-button>
+        </n-space>
+      </div>
+    </Teleport>
 
-        <!-- 返回顶部按钮 -->
-        <n-back-top :bottom="80" />
-      </n-space>
-    </div>
-
-    <!-- 批量更新提示 -->
-    <n-badge v-if="containerStore.updateableContainers.length > 0" :value="containerStore.updateableContainers.length"
-      class="update-badge" type="info">
-      <span></span>
-    </n-badge>
 
     <Teleport to="#header" defer>
       <div class="welcome-card">
@@ -410,13 +409,13 @@ onMounted(async () => {
       grid-template-columns: repeat(4, minmax(1fr, 25%));
     }
   }
+}
 
-  .floating-actions {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: 100;
-  }
+.floating-actions {
+  position: fixed;
+  bottom: 40px;
+  right: 40px;
+  z-index: 100;
 
   .fab-button {
     box-shadow: 0 4px 12px rgba(24, 144, 255, 0.4);
@@ -427,12 +426,14 @@ onMounted(async () => {
   }
 
   .update-badge {
-    position: fixed;
-    bottom: 105px;
-    right: 35px;
+    position: absolute;
+    top: -1px;
+    right: 6px;
     z-index: 101;
   }
+
 }
+
 
 // 响应式调整
 @media (max-width: 768px) {
@@ -440,16 +441,11 @@ onMounted(async () => {
     .containers-grid {
       gap: 8px;
     }
+  }
 
-    .floating-actions {
-      bottom: 16px;
-      right: 16px;
-    }
-
-    .update-badge {
-      bottom: 71px;
-      right: 31px;
-    }
+  .floating-actions {
+    bottom: 16px;
+    right: 16px;
   }
 }
 
