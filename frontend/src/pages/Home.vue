@@ -70,7 +70,7 @@
         <n-space vertical>
           <n-descriptions :column="1" size="small">
             <n-descriptions-item label="版本">
-              <n-text>v{{ version }}</n-text>
+              <n-text>{{ version }}</n-text>
             </n-descriptions-item>
             <n-descriptions-item label="最后刷新">
               <n-text :depth="3">{{ lastRefreshText }}</n-text>
