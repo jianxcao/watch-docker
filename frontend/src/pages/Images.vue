@@ -71,7 +71,7 @@
           </n-button>
           <n-tooltip trigger="hover" :delay="500">
             <template #trigger>
-              <n-button @click="handleImportClick" :loading="imageStore.importing" circle size="tiny">
+              <n-button @click="showImportModal = true" circle size="tiny">
                 <template #icon>
                   <CloudUploadOutline />
                 </template>
@@ -83,8 +83,8 @@
       </div>
     </Teleport>
 
-    <!-- 隐藏的文件输入 -->
-    <input ref="fileInputRef" type="file" accept=".tar" style="display: none" @change="handleFileSelect" />
+    <!-- 镜像导入弹窗 -->
+    <ImageImportModal v-model:show="showImportModal" @success="handleImportSuccess" />
   </div>
 </template>
 
@@ -92,6 +92,7 @@
 import type { ImageInfo } from '@/common/types'
 import { renderIcon } from '@/common/utils'
 import ImageCard from '@/components/ImageCard.vue'
+import ImageImportModal from '@/components/ImageImportModal.vue'
 import { useImage } from '@/hooks/useImage'
 import { useResponsive } from '@/hooks/useResponsive'
 import { useContainerStore } from '@/store/container'
@@ -118,8 +119,8 @@ const imageHooks = useImage()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 const message = useMessage()
 
-// 文件输入引用
-const fileInputRef = ref<HTMLInputElement>()
+// 弹窗状态
+const showImportModal = ref(false)
 
 // 搜索关键词
 const searchKeyword = ref('')
@@ -263,30 +264,13 @@ const handleRefresh = async () => {
   await containerStore.fetchContainers()
 }
 
-// 处理导入按钮点击
-const handleImportClick = () => {
-  fileInputRef.value?.click()
-}
-
-// 处理文件选择
-const handleFileSelect = async (event: Event) => {
-  const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
-
-  if (!file) return
-
-  // 验证文件类型
-  if (!file.name.endsWith('.tar')) {
-    message.error('请选择 .tar 格式的镜像文件')
-    return
-  }
-
-  try {
-    await imageHooks.handleImport(file)
-  } finally {
-    // 清空文件输入，允许重复选择同一个文件
-    target.value = ''
-  }
+// 处理导入成功
+const handleImportSuccess = async () => {
+  // 刷新镜像列表
+  await imageStore.fetchImages()
+  // 刷新容器数据以确保使用状态是最新的
+  await containerStore.fetchContainers()
+  message.success('镜像导入成功')
 }
 
 // 页面初始化

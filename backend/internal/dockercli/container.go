@@ -10,6 +10,8 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"go.uber.org/zap"
 )
 
 type ContainerInfo struct {
@@ -193,21 +195,24 @@ func (c *Client) WaitContainerStopped(ctx context.Context, id string, maxWaitSec
 func (c *Client) PruneSystem(ctx context.Context) error {
 	// 清理悬挂的卷
 	volFilter := filters.NewArgs()
-	_, err := c.docker.VolumesPrune(ctx, volFilter)
+	res, err := c.docker.VolumesPrune(ctx, volFilter)
+	logger.Logger.Info("VolumesPrune", zap.Any("res", res))
 	if err != nil {
 		return err
 	}
 
 	// 清理未使用的网络（不支持dangling过滤器，使用空过滤器清理未使用的网络）
 	netFilter := filters.NewArgs()
-	_, err = c.docker.NetworksPrune(ctx, netFilter)
+	netRes, err := c.docker.NetworksPrune(ctx, netFilter)
+	logger.Logger.Info("NetworksPrune", zap.Any("res", netRes))
 	if err != nil {
 		return err
 	}
 
 	// 清理悬挂的镜像
-	imgFilter := filters.NewArgs()
-	_, err = c.docker.ImagesPrune(ctx, imgFilter)
+	imgFilter := filters.NewArgs(filters.Arg("dangling", "true"))
+	imgRes, err := c.docker.ImagesPrune(ctx, imgFilter)
+	logger.Logger.Info("ImagesPrune", zap.Any("res", imgRes))
 	return err
 }
 

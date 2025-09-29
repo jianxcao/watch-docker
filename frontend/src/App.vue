@@ -49,7 +49,7 @@ onMounted(async () => {
     imageStore.fetchImages(),
     containerStore.startStatsWebSocket(),
   ])
-  // imageStore.startImagesPolling()
+  imageStore.startImagesPolling()
 })
 
 onUnmounted(() => {
