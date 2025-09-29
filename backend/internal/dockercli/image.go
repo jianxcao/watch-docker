@@ -2,6 +2,8 @@ package dockercli
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 
 	"github.com/docker/docker/api/types/image"
@@ -58,15 +60,75 @@ func (c *Client) ExportImage(ctx context.Context, ref string) (io.ReadCloser, er
 	return c.docker.ImageSave(ctx, []string{ref})
 }
 
+type ImportImageResponse struct {
+	ErrorDetail *map[string]interface{} `json:"errorDetail"`
+	Stream      *string                 `json:"stream"`
+}
+
+func (c *Client) ImportImage(ctx context.Context, source io.Reader, repository string, tag string) error {
+	// 构建完整的镜像引用
+	var ref string
+	if tag != "" {
+		ref = repository + ":" + tag
+	} else {
+		ref = repository + ":latest"
+	}
+
+	importSource := image.ImportSource{
+		Source:     source,
+		SourceName: "-", // 表示从标准输入读取
+	}
+
+	options := image.ImportOptions{
+		Message: "Imported via watch-docker",
+	}
+
+	response, err := c.docker.ImageImport(ctx, importSource, ref, options)
+	if err != nil {
+		return err
+	}
+	defer response.Close()
+
+	// 读取流转换成字符串显示
+	body, err := io.ReadAll(response)
+	if err != nil {
+		return err
+	}
+	var importImageResponse ImportImageResponse
+	err = json.Unmarshal(body, &importImageResponse)
+	if err != nil {
+		return err
+	}
+	if importImageResponse.ErrorDetail != nil {
+		errorDetail := *importImageResponse.ErrorDetail
+		msg := errorDetail["message"].(string)
+		return fmt.Errorf("import image failed: %s", msg)
+	}
+	return nil
+}
+
 // ImportImage 从 tar 包流导入镜像
-func (c *Client) ImportImage(ctx context.Context, source io.Reader) error {
+func (c *Client) LoadImage(ctx context.Context, source io.Reader) error {
 	response, err := c.docker.ImageLoad(ctx, source, client.ImageLoadOption(client.ImageLoadWithQuiet(true)))
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
 
-	// 读取响应以确保完成加载
-	_, err = io.Copy(io.Discard, response.Body)
+	// 读取流转换成字符串显示
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	var importImageResponse ImportImageResponse
+	err = json.Unmarshal(body, &importImageResponse)
+	if err != nil {
+		return err
+	}
+	if importImageResponse.ErrorDetail != nil {
+		errorDetail := *importImageResponse.ErrorDetail
+		msg := errorDetail["message"].(string)
+		return fmt.Errorf("import image failed: %s", msg)
+	}
 	return err
 }

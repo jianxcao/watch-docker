@@ -211,7 +211,7 @@ func (s *Server) handleImportImage() gin.HandlerFunc {
 		ctx := c.Request.Context()
 
 		// 导入镜像
-		err = s.docker.ImportImage(ctx, file)
+		err = s.docker.LoadImage(ctx, file)
 		if err != nil {
 			s.logger.Error("import image failed",
 				zap.String("filename", header.Filename),
