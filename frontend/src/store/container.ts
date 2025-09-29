@@ -197,6 +197,34 @@ export const useContainerStore = defineStore('container', () => {
     statsWebSocket.disconnect()
   }
 
+  // 方法：导出容器
+  const exportContainer = async (id: string): Promise<boolean> => {
+    try {
+      // 获取当前的token
+      const { getToken } = await import('@/common/axiosConfig')
+      const token = getToken()
+
+      // 构建下载URL，将token作为查询参数
+      const baseUrl = '/api/v1'
+      const downloadUrl = `${baseUrl}/containers/${id}/export?token=${encodeURIComponent(
+        token
+      )}&_t=${Date.now()}`
+
+      // 使用window.open直接下载，浏览器会处理大文件和进度
+      const downloadWindow = window.open(downloadUrl, '_blank')
+
+      // 检查是否成功打开了下载窗口
+      if (!downloadWindow) {
+        throw new Error('浏览器阻止了弹窗，请允许弹窗后重试')
+      }
+
+      return true
+    } catch (error: any) {
+      console.error('导出容器失败:', error)
+      throw error
+    }
+  }
+
   return {
     // 状态
     containers,
@@ -225,6 +253,7 @@ export const useContainerStore = defineStore('container', () => {
     findContainerById,
     findContainerByName,
     isContainerUpdating,
+    exportContainer,
     startStatsWebSocket,
     stopStatsWebSocket,
     statsWebSocket,

@@ -133,7 +133,7 @@ export function useImage() {
     const displayName = getImageNameOnly(image)
 
     try {
-      await store.downloadImage(image.id, displayName)
+      await store.downloadImage(image.id)
       message.success(`镜像 ${displayName} 下载成功`)
     } catch (error: any) {
       message.error(`下载镜像失败: ${error.message}`)

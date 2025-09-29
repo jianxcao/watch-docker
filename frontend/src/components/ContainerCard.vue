@@ -154,7 +154,7 @@ import type { ContainerStatus } from '@/common/types'
 import { formatBytes, formatBytesPerSecond, formatPercent, formatTime } from '@/common/utils'
 import { useContainerStore } from '@/store/container'
 import { useSettingStore } from '@/store/setting'
-import { CloudDownloadOutline, CloudUploadOutline, PlayCircleOutline, StopCircleOutline, TimeOutline, TrashOutline } from '@vicons/ionicons5'
+import { CloudDownloadOutline, CloudUploadOutline, PlayCircleOutline, StopCircleOutline, TimeOutline, TrashOutline, DownloadOutline } from '@vicons/ionicons5'
 import dayjs from 'dayjs'
 import { NIcon, useThemeVars } from 'naive-ui'
 import { computed, h } from 'vue'
@@ -170,6 +170,7 @@ interface Emits {
   (e: 'start'): void
   (e: 'stop'): void
   (e: 'delete'): void
+  (e: 'export'): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -234,6 +235,13 @@ const dropdownOptions = computed(() => [
     disabled: props.loading
   },
   {
+    key: 'export',
+    label: '导出容器',
+    icon: () => h(NIcon, null, {
+      default: () => h(DownloadOutline)
+    })
+  },
+  {
     key: 'delete',
     label: '删除容器',
     icon: () => h(NIcon, {
@@ -253,6 +261,9 @@ const handleMenuSelect = (key: string) => {
       break
     case 'stop':
       emits('stop')
+      break
+    case 'export':
+      emits('export')
       break
     case 'delete':
       emits('delete')

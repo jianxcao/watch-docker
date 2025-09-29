@@ -2,6 +2,7 @@ package dockercli
 
 import (
 	"context"
+	"io"
 	"strings"
 	"time"
 
@@ -316,6 +317,11 @@ func (c *Client) SafeRemoveVolumes(ctx context.Context, volumeNames []string) er
 		}
 	}
 	return nil
+}
+
+// ExportContainer 导出容器为tar格式的文件流
+func (c *Client) ExportContainer(ctx context.Context, id string) (io.ReadCloser, error) {
+	return c.docker.ContainerExport(ctx, id)
 }
 
 // CleanupContainerResources 根据容器信息安全清理相关资源

@@ -51,7 +51,8 @@
         }">
           <ContainerCard v-for="container in filteredContainers" :key="container.id" :container="container"
             :loading="operationLoading" @start="() => handleStart(container)" @stop="() => handleStop(container)"
-            @update="() => handleUpdate(container)" @delete="() => handleDelete(container)" />
+            @update="() => handleUpdate(container)" @delete="() => handleDelete(container)"
+            @export="() => handleExport(container)" />
         </div>
       </n-spin>
     </div>
@@ -321,6 +322,11 @@ const handleDelete = async (container: ContainerStatus) => {
   } finally {
     operationLoading.value = false
   }
+}
+
+// 处理导出容器
+const handleExport = async (container: ContainerStatus) => {
+  await containerHooks.handleExport(container)
 }
 
 const handleBatchUpdate = async () => {

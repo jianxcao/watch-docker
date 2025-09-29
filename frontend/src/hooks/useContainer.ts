@@ -164,6 +164,16 @@ export function useContainer() {
     return running ? '运行中' : '已停止'
   }
 
+  // 导出容器
+  const handleExport = async (container: ContainerStatus) => {
+    try {
+      await store.exportContainer(container.id)
+      message.success(`容器 ${container.name} 导出成功`)
+    } catch (error: any) {
+      message.error(`导出容器失败: ${error.message}`)
+    }
+  }
+
   return {
     // 操作方法
     handleStart,
@@ -171,6 +181,7 @@ export function useContainer() {
     handleUpdate,
     handleDelete,
     handleBatchUpdate,
+    handleExport,
 
     // 工具方法
     getStatusColor,

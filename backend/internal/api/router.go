@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
@@ -75,6 +76,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.POST("/containers/:id/stop", s.handleStopContainer())
 		protected.POST("/containers/:id/start", s.handleStartContainer())
 		protected.DELETE("/containers/:id", s.handleDeleteContainer())
+		protected.GET("/containers/:id/export", s.handleExportContainer())
 		protected.GET("/images", s.handleListImages())
 		protected.DELETE("/images", s.handleDeleteImage())
 		protected.GET("/images/:id/download", s.handleDownloadImage())
@@ -287,6 +289,56 @@ func (s *Server) handleDeleteContainer() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true, "containers": statuses}))
+	}
+}
+
+// handleExportContainer 处理容器导出
+func (s *Server) handleExportContainer() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+		if containerID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "container id required"})
+			return
+		}
+
+		ctx := c.Request.Context()
+
+		// 获取容器信息以生成文件名
+		containerInfo, err := s.docker.InspectContainer(ctx, containerID)
+		if err != nil {
+			s.logger.Error("inspect container for export", zap.String("containerID", containerID), zap.Error(err))
+			c.JSON(http.StatusNotFound, gin.H{"error": "容器不存在: " + containerID})
+			return
+		}
+
+		s.logger.Info("exporting container", zap.String("containerID", containerID), zap.String("containerName", containerInfo.Name))
+
+		// 导出容器
+		reader, err := s.docker.ExportContainer(ctx, containerID)
+		if err != nil {
+			s.logger.Error("export container failed", zap.String("containerID", containerID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "导出容器失败: " + err.Error()})
+			return
+		}
+		defer reader.Close()
+
+		// 生成文件名
+		filename := generateContainerFileName(&containerInfo)
+
+		s.logger.Info("starting container export", zap.String("containerID", containerID), zap.String("filename", filename))
+
+		// 设置响应头
+		c.Header("Content-Type", "application/x-tar")
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		c.Header("Content-Transfer-Encoding", "binary")
+
+		// 流式传输文件
+		_, err = io.Copy(c.Writer, reader)
+		if err != nil {
+			s.logger.Error("copy container tar stream", zap.String("containerID", containerID), zap.Error(err))
+			return
+		}
+		s.logger.Info("container export completed", zap.String("containerID", containerID))
 	}
 }
 
@@ -669,4 +721,26 @@ func generateImageFileName(image *dockercli.ImageInfo) string {
 	}
 
 	return fmt.Sprintf("image_%s.tar", shortID)
+}
+
+// generateContainerFileName 根据容器信息生成导出文件名
+func generateContainerFileName(container *container.InspectResponse) string {
+	// 获取容器名称（去掉前缀斜杠）
+	containerName := strings.TrimPrefix(container.Name, "/")
+
+	if containerName != "" {
+		// 替换不合法的文件名字符
+		filename := strings.ReplaceAll(containerName, ":", "_")
+		filename = strings.ReplaceAll(filename, "/", "_")
+		filename = strings.ReplaceAll(filename, " ", "_")
+		return fmt.Sprintf("container_%s.tar", filename)
+	}
+
+	// 如果没有名称，使用容器 ID 的前12位
+	shortID := container.ID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+
+	return fmt.Sprintf("container_%s.tar", shortID)
 }
