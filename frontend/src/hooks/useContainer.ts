@@ -1,5 +1,5 @@
 import { useContainerStore } from '@/store/container'
-import { useMessage, useDialog } from 'naive-ui'
+import { useMessage, useDialog, NSpace } from 'naive-ui'
 import type { ContainerStatus } from '@/common/types'
 import { h, ref } from 'vue'
 import { NCheckbox } from 'naive-ui'
@@ -48,7 +48,7 @@ export function useContainer() {
     const d = dialog.warning({
       title: '确认删除容器',
       content: () =>
-        h('div', { class: 'flex flex-col gap-2' }, [
+        h(NSpace, { vertical: true }, () => [
           h('div', {}, `确定要删除容器 "${container.name}" 吗？此操作不可撤销。`),
           container.running
             ? h('div', { class: 'text-orange-500 text-sm' }, '注意：容器正在运行中')

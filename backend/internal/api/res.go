@@ -29,11 +29,6 @@ var (
 	CodeRegistryError = 50004
 )
 
-// NewErrorRes 返回标准错误响应，默认 code=1
-func NewErrorRes(msg string) *BaseRes {
-	return NewBaseRes(1, msg, nil)
-}
-
 // NewErrorResCode 返回带自定义错误码的响应
 func NewErrorResCode(code int, msg string) *BaseRes {
 	return NewBaseRes(code, msg, nil)

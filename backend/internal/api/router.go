@@ -80,6 +80,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.GET("/images", s.handleListImages())
 		protected.DELETE("/images", s.handleDeleteImage())
 		protected.GET("/images/:id/download", s.handleDownloadImage())
+		protected.POST("/images/import", s.handleImportImage())
 		protected.GET("/config", s.handleGetConfig())
 		protected.POST("/config", s.handleSaveConfig())
 		protected.GET("/logs", s.handleLogStream)
@@ -297,7 +298,7 @@ func (s *Server) handleExportContainer() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		containerID := c.Param("id")
 		if containerID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "container id required"})
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "container id required"))
 			return
 		}
 
@@ -307,7 +308,7 @@ func (s *Server) handleExportContainer() gin.HandlerFunc {
 		containerInfo, err := s.docker.InspectContainer(ctx, containerID)
 		if err != nil {
 			s.logger.Error("inspect container for export", zap.String("containerID", containerID), zap.Error(err))
-			c.JSON(http.StatusNotFound, gin.H{"error": "容器不存在: " + containerID})
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "容器不存在: "+containerID))
 			return
 		}
 
@@ -317,7 +318,7 @@ func (s *Server) handleExportContainer() gin.HandlerFunc {
 		reader, err := s.docker.ExportContainer(ctx, containerID)
 		if err != nil {
 			s.logger.Error("export container failed", zap.String("containerID", containerID), zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "导出容器失败: " + err.Error()})
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "导出容器失败: "+err.Error()))
 			return
 		}
 		defer reader.Close()
@@ -470,7 +471,7 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 		token, err := auth.GenerateToken(req.Username)
 		if err != nil {
 			s.logger.Error("generate token failed", zap.Error(err))
-			c.JSON(http.StatusOK, NewErrorRes("生成token失败"))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "生成token失败"))
 			return
 		}
 
@@ -596,7 +597,7 @@ func (s *Server) handleDownloadImage() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		imageID := c.Param("id")
 		if imageID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "image id required"})
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "image id required"))
 			return
 		}
 
@@ -606,7 +607,7 @@ func (s *Server) handleDownloadImage() gin.HandlerFunc {
 		images, err := s.docker.ListImages(ctx)
 		if err != nil {
 			s.logger.Error("list images for download", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取镜像信息失败"})
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "获取镜像信息失败"))
 			return
 		}
 
@@ -651,7 +652,7 @@ func (s *Server) handleDownloadImage() gin.HandlerFunc {
 
 		if targetImage == nil {
 			s.logger.Error("image not found", zap.String("requestedID", imageID), zap.Int("totalImages", len(images)))
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("镜像不存在: %s", imageID)})
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("镜像不存在: %s", imageID)))
 			return
 		}
 
@@ -672,7 +673,7 @@ func (s *Server) handleDownloadImage() gin.HandlerFunc {
 		reader, err := s.docker.ExportImage(ctx, exportRef)
 		if err != nil {
 			s.logger.Error("export image failed", zap.String("exportRef", exportRef), zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "导出镜像失败: " + err.Error()})
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "导出镜像失败: "+err.Error()))
 			return
 		}
 		defer reader.Close()
@@ -721,6 +722,45 @@ func generateImageFileName(image *dockercli.ImageInfo) string {
 	}
 
 	return fmt.Sprintf("image_%s.tar", shortID)
+}
+
+// handleImportImage 处理镜像导入
+func (s *Server) handleImportImage() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 解析multipart/form-data
+		file, header, err := c.Request.FormFile("file")
+		if err != nil {
+			s.logger.Error("get upload file", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "获取上传文件失败"))
+			return
+		}
+		defer file.Close()
+
+		// 验证文件类型（可选）
+		if header.Size == 0 {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "文件为空"))
+			return
+		}
+
+		s.logger.Info("starting image import",
+			zap.String("filename", header.Filename),
+			zap.Int64("size", header.Size))
+
+		ctx := c.Request.Context()
+
+		// 导入镜像
+		err = s.docker.ImportImage(ctx, file)
+		if err != nil {
+			s.logger.Error("import image failed",
+				zap.String("filename", header.Filename),
+				zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "导入镜像失败: "+err.Error()))
+			return
+		}
+
+		s.logger.Info("image import completed", zap.String("filename", header.Filename))
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"message": "镜像导入成功"}))
+	}
 }
 
 // generateContainerFileName 根据容器信息生成导出文件名

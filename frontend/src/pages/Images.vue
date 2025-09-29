@@ -63,16 +63,24 @@
             总大小 {{ imageStore.stats.formattedTotalSize }}，
           </n-text>
         </div>
-        <n-button @click="handleRefresh" :loading="imageStore.loading" circle size="tiny">
-          <template #icon>
-            <RefreshOutline />
-          </template>
-        </n-button>
+        <n-space size="small">
+          <n-button @click="handleRefresh" :loading="imageStore.loading" circle size="tiny">
+            <template #icon>
+              <RefreshOutline />
+            </template>
+          </n-button>
+          <n-button @click="handleImportClick" :loading="imageStore.importing" circle size="tiny">
+            <template #icon>
+              <CloudUploadOutline />
+            </template>
+          </n-button>
+        </n-space>
       </div>
     </Teleport>
+
+    <!-- 隐藏的文件输入 -->
+    <input ref="fileInputRef" type="file" accept=".tar" style="display: none" @change="handleFileSelect" />
   </div>
-
-
 </template>
 
 <script setup lang="ts">
@@ -88,6 +96,7 @@ import {
   CalendarOutline,
   CheckmarkCircleOutline,
   CloseCircleOutline,
+  CloudUploadOutline,
   FunnelOutline,
   RefreshOutline,
   ResizeOutline,
@@ -96,11 +105,16 @@ import {
   TextOutline,
 } from '@vicons/ionicons5'
 import { computed, onMounted, ref } from 'vue'
+import { useMessage } from 'naive-ui'
 
 const imageStore = useImageStore()
 const containerStore = useContainerStore()
 const imageHooks = useImage()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
+const message = useMessage()
+
+// 文件输入引用
+const fileInputRef = ref<HTMLInputElement>()
 
 // 搜索关键词
 const searchKeyword = ref('')
@@ -242,6 +256,32 @@ const handleRefresh = async () => {
   await imageHooks.handleRefresh()
   // 同时刷新容器数据以确保使用状态是最新的
   await containerStore.fetchContainers()
+}
+
+// 处理导入按钮点击
+const handleImportClick = () => {
+  fileInputRef.value?.click()
+}
+
+// 处理文件选择
+const handleFileSelect = async (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+
+  if (!file) return
+
+  // 验证文件类型
+  if (!file.name.endsWith('.tar')) {
+    message.error('请选择 .tar 格式的镜像文件')
+    return
+  }
+
+  try {
+    await imageHooks.handleImport(file)
+  } finally {
+    // 清空文件输入，允许重复选择同一个文件
+    target.value = ''
+  }
 }
 
 // 页面初始化

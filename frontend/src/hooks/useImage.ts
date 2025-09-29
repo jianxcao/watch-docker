@@ -39,11 +39,9 @@ export function useImage() {
 
     // 创建自定义对话框内容
     const content = () =>
-      h(
-        NSpace,
-        { vertical: true },
+      h(NSpace, { vertical: true }, () =>
         [
-          h(NText, {}, contentText),
+          h(NText, {}, () => contentText),
           // 只有在非悬空镜像时才显示强制删除选项
           !isDangling &&
             h(
@@ -54,7 +52,7 @@ export function useImage() {
                   forceDeleteRef.value = checked
                 },
               },
-              '强制删除'
+              () => '强制删除'
             ),
         ].filter(Boolean)
       )
@@ -137,6 +135,16 @@ export function useImage() {
       message.success(`镜像 ${displayName} 下载成功`)
     } catch (error: any) {
       message.error(`下载镜像失败: ${error.message}`)
+    }
+  }
+
+  // 导入镜像
+  const handleImport = async (file: File) => {
+    try {
+      await store.importImage(file)
+      message.success(`镜像 ${file.name} 导入成功`)
+    } catch (error: any) {
+      message.error(`导入镜像失败: ${error.message}`)
     }
   }
 
@@ -318,6 +326,7 @@ export function useImage() {
     handleDeleteDangling,
     handleRefresh,
     handleDownload,
+    handleImport,
 
     // 工具方法
     formatCreateTime,

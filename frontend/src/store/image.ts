@@ -9,6 +9,7 @@ export const useImageStore = defineStore('image', () => {
   const loading = ref(false)
   const deleting = ref(new Set<string>())
   const downloading = ref(new Set<string>())
+  const importing = ref(false)
 
   // 方法：检查镜像是否为悬空镜像（dangling image）
   const isDanglingImage = (image: ImageInfo): boolean => {
@@ -138,6 +139,28 @@ export const useImageStore = defineStore('image', () => {
     }
   }
 
+  // 方法：导入镜像
+  const importImage = async (file: File): Promise<boolean> => {
+    importing.value = true
+    try {
+      const response = await imageApi.importImage(file)
+      if (response.code === 0) {
+        await fetchImages() // 重新获取镜像列表
+        return true
+      } else {
+        throw new Error(response.msg || '导入失败')
+      }
+    } catch (error: any) {
+      console.error('导入镜像失败:', error)
+      if (error.response?.data?.error) {
+        throw new Error(error.response.data.error)
+      }
+      throw error
+    } finally {
+      importing.value = false
+    }
+  }
+
   // 方法：获取镜像的主要标签（用于显示）
   const getImageDisplayTag = (image: ImageInfo): string => {
     if (image.repoTags && image.repoTags.length > 0) {
@@ -170,6 +193,7 @@ export const useImageStore = defineStore('image', () => {
     loading,
     deleting,
     downloading,
+    importing,
 
     // 计算属性
     totalImages,
@@ -182,6 +206,7 @@ export const useImageStore = defineStore('image', () => {
     fetchImages,
     deleteImage,
     downloadImage,
+    importImage,
     findImageById,
     findImagesByTag,
     isImageDeleting,

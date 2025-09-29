@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
 )
 
 // ImageInfo 镜像基础信息（用于列表展示）
@@ -55,4 +56,17 @@ func (c *Client) RemoveImage(ctx context.Context, ref string, force bool, pruneC
 // ExportImage 导出镜像为 tar 包流
 func (c *Client) ExportImage(ctx context.Context, ref string) (io.ReadCloser, error) {
 	return c.docker.ImageSave(ctx, []string{ref})
+}
+
+// ImportImage 从 tar 包流导入镜像
+func (c *Client) ImportImage(ctx context.Context, source io.Reader) error {
+	response, err := c.docker.ImageLoad(ctx, source, client.ImageLoadOption(client.ImageLoadWithQuiet(true)))
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	// 读取响应以确保完成加载
+	_, err = io.Copy(io.Discard, response.Body)
+	return err
 }

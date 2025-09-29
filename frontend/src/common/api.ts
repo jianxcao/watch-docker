@@ -68,6 +68,17 @@ export const imageApi = {
     axios.delete<{ ok: boolean }>(API_ENDPOINTS.IMAGES, {
       data: { ref, force },
     }),
+
+  // 导入镜像
+  importImage: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return axios.post<{ success: boolean; message: string }>(API_ENDPOINTS.IMAGE_IMPORT, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+  },
 }
 
 // 配置相关API
