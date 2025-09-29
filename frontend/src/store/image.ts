@@ -8,6 +8,7 @@ export const useImageStore = defineStore('image', () => {
   const images = ref<ImageInfo[]>([])
   const loading = ref(false)
   const deleting = ref(new Set<string>())
+  const downloading = ref(new Set<string>())
 
   // 方法：检查镜像是否为悬空镜像（dangling image）
   const isDanglingImage = (image: ImageInfo): boolean => {
@@ -97,6 +98,46 @@ export const useImageStore = defineStore('image', () => {
     return deleting.value.has(ref)
   }
 
+  // 方法：检查镜像是否正在下载
+  const isImageDownloading = (ref: string) => {
+    return downloading.value.has(ref)
+  }
+
+  // 方法：下载镜像
+  const downloadImage = async (id: string): Promise<boolean> => {
+    downloading.value.add(id)
+    try {
+      // 获取当前的token
+      const { getToken } = await import('@/common/axiosConfig')
+      const token = getToken()
+
+      // 构建下载URL，将token作为查询参数
+      const baseUrl = '/api/v1'
+      const downloadUrl = `${baseUrl}/images/${id}/download?token=${encodeURIComponent(
+        token
+      )}&_t=${Date.now()}`
+
+      // 使用window.open直接下载，浏览器会处理大文件和进度
+      const downloadWindow = window.open(downloadUrl, '_blank')
+
+      // 检查是否成功打开了下载窗口
+      if (!downloadWindow) {
+        throw new Error('浏览器阻止了弹窗，请允许弹窗后重试')
+      }
+
+      // 设置一个短暂的延迟来清除下载状态
+      setTimeout(() => {
+        downloading.value.delete(id)
+      }, 1000)
+
+      return true
+    } catch (error: any) {
+      console.error('下载镜像失败:', error)
+      downloading.value.delete(id)
+      throw error
+    }
+  }
+
   // 方法：获取镜像的主要标签（用于显示）
   const getImageDisplayTag = (image: ImageInfo): string => {
     if (image.repoTags && image.repoTags.length > 0) {
@@ -128,6 +169,7 @@ export const useImageStore = defineStore('image', () => {
     normalImages,
     loading,
     deleting,
+    downloading,
 
     // 计算属性
     totalImages,
@@ -139,9 +181,11 @@ export const useImageStore = defineStore('image', () => {
     // 方法
     fetchImages,
     deleteImage,
+    downloadImage,
     findImageById,
     findImagesByTag,
     isImageDeleting,
+    isImageDownloading,
     getImageDisplayTag,
     getDisplayId,
     isDanglingImage,

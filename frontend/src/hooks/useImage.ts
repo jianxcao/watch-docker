@@ -128,6 +128,18 @@ export function useImage() {
     }
   }
 
+  // 下载镜像
+  const handleDownload = async (image: ImageInfo) => {
+    const displayName = getImageNameOnly(image)
+
+    try {
+      await store.downloadImage(image.id, displayName)
+      message.success(`镜像 ${displayName} 下载成功`)
+    } catch (error: any) {
+      message.error(`下载镜像失败: ${error.message}`)
+    }
+  }
+
   // 格式化创建时间
   const formatCreateTime = (timestamp: number): string => {
     const date = new Date(timestamp * 1000)
@@ -305,6 +317,7 @@ export function useImage() {
     handleDelete,
     handleDeleteDangling,
     handleRefresh,
+    handleDownload,
 
     // 工具方法
     formatCreateTime,

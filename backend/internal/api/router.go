@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -76,6 +77,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.DELETE("/containers/:id", s.handleDeleteContainer())
 		protected.GET("/images", s.handleListImages())
 		protected.DELETE("/images", s.handleDeleteImage())
+		protected.GET("/images/:id/download", s.handleDownloadImage())
 		protected.GET("/config", s.handleGetConfig())
 		protected.POST("/config", s.handleSaveConfig())
 		protected.GET("/logs", s.handleLogStream)
@@ -535,4 +537,136 @@ func (s *Server) handleUpdateAll() gin.HandlerFunc {
 		s.scheduler.RunScanAndUpdate(c.Request.Context())
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
 	}
+}
+
+// handleDownloadImage 处理镜像下载
+func (s *Server) handleDownloadImage() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		imageID := c.Param("id")
+		if imageID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "image id required"})
+			return
+		}
+
+		ctx := c.Request.Context()
+
+		// 获取镜像信息以生成文件名
+		images, err := s.docker.ListImages(ctx)
+		if err != nil {
+			s.logger.Error("list images for download", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取镜像信息失败"})
+			return
+		}
+
+		var targetImage *dockercli.ImageInfo
+		var imageRef string
+
+		// 先尝试完全匹配ID
+		for _, img := range images {
+			if img.ID == imageID {
+				targetImage = &img
+				imageRef = img.ID
+				break
+			}
+		}
+
+		// 如果没找到，尝试短ID匹配
+		if targetImage == nil {
+			for _, img := range images {
+				if strings.HasSuffix(img.ID, imageID) {
+					targetImage = &img
+					imageRef = img.ID
+					break
+				}
+			}
+		}
+
+		// 如果还没找到，尝试通过tag匹配
+		if targetImage == nil {
+			for _, img := range images {
+				for _, tag := range img.RepoTags {
+					if tag != "<none>:<none>" && strings.Contains(tag, imageID) {
+						targetImage = &img
+						imageRef = tag // 使用tag作为引用
+						break
+					}
+				}
+				if targetImage != nil {
+					break
+				}
+			}
+		}
+
+		if targetImage == nil {
+			s.logger.Error("image not found", zap.String("requestedID", imageID), zap.Int("totalImages", len(images)))
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("镜像不存在: %s", imageID)})
+			return
+		}
+
+		s.logger.Info("found target image", zap.String("requestedID", imageID), zap.String("actualID", targetImage.ID), zap.String("imageRef", imageRef), zap.Any("repoTags", targetImage.RepoTags))
+
+		// 导出镜像，优先使用有效的tag，然后使用ID
+		exportRef := imageRef
+		if len(targetImage.RepoTags) > 0 {
+			for _, tag := range targetImage.RepoTags {
+				if tag != "<none>:<none>" {
+					exportRef = tag
+					break
+				}
+			}
+		}
+
+		s.logger.Info("exporting image", zap.String("exportRef", exportRef))
+		reader, err := s.docker.ExportImage(ctx, exportRef)
+		if err != nil {
+			s.logger.Error("export image failed", zap.String("exportRef", exportRef), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "导出镜像失败: " + err.Error()})
+			return
+		}
+		defer reader.Close()
+
+		// 生成文件名
+		filename := generateImageFileName(targetImage)
+
+		s.logger.Info("starting image download", zap.String("imageID", imageID), zap.String("filename", filename))
+
+		// 设置响应头
+		c.Header("Content-Type", "application/x-tar")
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		c.Header("Content-Transfer-Encoding", "binary")
+
+		// 流式传输文件
+		_, err = io.Copy(c.Writer, reader)
+		if err != nil {
+			s.logger.Error("copy image tar stream", zap.String("imageID", imageID), zap.Error(err))
+			return
+		}
+
+		s.logger.Info("image download completed", zap.String("imageID", imageID))
+	}
+}
+
+// generateImageFileName 根据镜像信息生成下载文件名
+func generateImageFileName(image *dockercli.ImageInfo) string {
+	// 优先使用 repoTag
+	if len(image.RepoTags) > 0 {
+		for _, tag := range image.RepoTags {
+			if tag != "<none>:<none>" {
+				// 替换不合法的文件名字符
+				filename := strings.ReplaceAll(tag, ":", "_")
+				filename = strings.ReplaceAll(filename, "/", "_")
+				return fmt.Sprintf("%s.tar", filename)
+			}
+		}
+	}
+
+	// 如果没有有效标签，使用短ID
+	shortID := image.ID
+	if strings.HasPrefix(shortID, "sha256:") {
+		shortID = shortID[7:19]
+	} else if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+
+	return fmt.Sprintf("image_%s.tar", shortID)
 }

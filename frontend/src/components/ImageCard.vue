@@ -44,8 +44,17 @@
       </div>
     </div>
 
-    <!-- 删除按钮 -->
+    <!-- 操作按钮 -->
     <div class="card-footer">
+      <n-button @click="() => handleDownload()" ghost size="small" class="download-btn"
+        :loading="imageStore.isImageDownloading(image.id)">
+        <template #icon>
+          <n-icon>
+            <DownloadOutline />
+          </n-icon>
+        </template>
+        下载
+      </n-button>
       <n-button @click="() => handleDelete()" type="error" ghost size="small" class="delete-btn"
         :loading="imageStore.isImageDeleting(image.id)">
         <template #icon>
@@ -63,7 +72,7 @@
 import { useImageStore } from '@/store/image'
 import { useImage } from '@/hooks/useImage'
 import type { ImageInfo } from '@/common/types'
-import { TrashOutline } from '@vicons/ionicons5'
+import { TrashOutline, DownloadOutline } from '@vicons/ionicons5'
 import { formatBytes } from '@/common/utils'
 
 // 导入 SVG 图标
@@ -87,6 +96,11 @@ const imageStore = useImageStore()
 const imageHooks = useImage()
 
 
+
+// 下载处理函数
+const handleDownload = async () => {
+  await imageHooks.handleDownload(props.image)
+}
 
 // 删除处理函数
 const handleDelete = () => {
@@ -197,6 +211,15 @@ const handleDelete = () => {
     border-top: 1px solid var(--divider-color);
     display: flex;
     justify-content: flex-end;
+    gap: 8px;
+
+    .download-btn {
+      flex-shrink: 0;
+    }
+
+    .delete-btn {
+      flex-shrink: 0;
+    }
   }
 }
 </style>

@@ -51,3 +51,8 @@ func (c *Client) RemoveImage(ctx context.Context, ref string, force bool, pruneC
 	_, err := c.docker.ImageRemove(ctx, ref, image.RemoveOptions{Force: force, PruneChildren: pruneChildren})
 	return err
 }
+
+// ExportImage 导出镜像为 tar 包流
+func (c *Client) ExportImage(ctx context.Context, ref string) (io.ReadCloser, error) {
+	return c.docker.ImageSave(ctx, []string{ref})
+}

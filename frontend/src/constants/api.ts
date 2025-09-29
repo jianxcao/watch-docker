@@ -23,6 +23,7 @@ export const API_ENDPOINTS = {
 
   // 镜像相关
   IMAGES: '/images',
+  IMAGE_DOWNLOAD: (id: string) => `/images/${id}/download`,
 
   // 配置相关
   CONFIG: '/config',
