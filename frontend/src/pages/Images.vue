@@ -1,13 +1,36 @@
 <template>
   <div class="images-page">
     <!-- 页面头部 -->
-    <n-input v-model:value="searchKeyword" placeholder="搜索镜像标签或ID" style="width: 200px;" clearable>
-      <template #prefix>
-        <n-icon>
-          <SearchOutline />
-        </n-icon>
-      </template>
-    </n-input>
+    <n-space>
+      <!-- 过滤器菜单 -->
+      <n-dropdown :options="statusFilterMenuOptions" @select="handleFilterSelect">
+        <n-button circle size="small" :type="statusFilter ? 'primary' : 'default'">
+          <template #icon>
+            <n-icon>
+              <FunnelOutline />
+            </n-icon>
+          </template>
+        </n-button>
+      </n-dropdown>
+      <!-- 排序菜单 -->
+      <n-dropdown :options="sortMenuOptions" @select="handleSortSelect">
+        <n-button circle size="small" :type="isSortActive ? 'primary' : 'default'">
+          <template #icon>
+            <n-icon>
+              <SwapVerticalOutline />
+            </n-icon>
+          </template>
+        </n-button>
+      </n-dropdown>
+      <!-- 搜索 -->
+      <n-input v-model:value="searchKeyword" placeholder="搜索镜像标签或ID" style="width: 200px;" clearable>
+        <template #prefix>
+          <n-icon>
+            <SearchOutline />
+          </n-icon>
+        </template>
+      </n-input>
+    </n-space>
 
     <!-- 镜像列表 -->
     <div class="images-content">
@@ -53,17 +76,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
-import { useImageStore } from '@/store/image'
-import { useContainerStore } from '@/store/container'
+import type { ImageInfo } from '@/common/types'
+import { renderIcon } from '@/common/utils'
+import ImageCard from '@/components/ImageCard.vue'
 import { useImage } from '@/hooks/useImage'
 import { useResponsive } from '@/hooks/useResponsive'
-import type { ImageInfo } from '@/common/types'
-import ImageCard from '@/components/ImageCard.vue'
+import { useContainerStore } from '@/store/container'
+import { useImageStore } from '@/store/image'
 import {
-  SearchOutline,
+  AppsOutline,
+  CalendarOutline,
+  CheckmarkCircleOutline,
+  CloseCircleOutline,
+  FunnelOutline,
   RefreshOutline,
+  ResizeOutline,
+  SearchOutline,
+  SwapVerticalOutline,
+  TextOutline,
 } from '@vicons/ionicons5'
+import { computed, onMounted, ref } from 'vue'
 
 const imageStore = useImageStore()
 const containerStore = useContainerStore()
@@ -72,10 +104,75 @@ const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsiv
 
 // 搜索关键词
 const searchKeyword = ref('')
+const statusFilter = ref<string | null>(null)
+const sortBy = ref<string>('created') // 默认按创建时间排序
+const sortOrder = ref<'asc' | 'desc'>('desc') // 默认降序
 
-// 过滤后的镜像列表
+
+// 状态过滤菜单选项
+const statusFilterMenuOptions = computed(() => [
+  {
+    label: '全部',
+    key: null,
+    icon: renderIcon(AppsOutline)
+  },
+  {
+    label: '使用中',
+    key: 'in-use',
+    icon: renderIcon(CheckmarkCircleOutline)
+  },
+  {
+    label: '未使用',
+    key: 'unused',
+    icon: renderIcon(CloseCircleOutline)
+  },
+])
+
+// 判断排序按钮是否应该显示为主色（激活状态）
+const isSortActive = computed(() => {
+  // 如果不是默认排序设置（创建时间降序），则显示为激活状态
+  return sortBy.value !== 'created' || sortOrder.value !== 'desc'
+})
+
+// 排序菜单选项
+const sortMenuOptions = computed(() => [
+  {
+    label: `名称 ${sortBy.value === 'name' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
+    key: 'name',
+    icon: renderIcon(TextOutline)
+  },
+  {
+    label: `大小 ${sortBy.value === 'size' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
+    key: 'size',
+    icon: renderIcon(ResizeOutline)
+  },
+  {
+    label: `创建时间 ${sortBy.value === 'created' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
+    key: 'created',
+    icon: renderIcon(CalendarOutline)
+  },
+])
+
+// 处理过滤器菜单选择
+const handleFilterSelect = (key: string | null) => {
+  statusFilter.value = key
+}
+
+// 处理排序菜单选择
+const handleSortSelect = (key: string) => {
+  if (sortBy.value === key) {
+    // 如果选择的是相同字段，切换升序/降序
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    // 如果选择的是不同字段，设置新字段并默认为升序
+    sortBy.value = key
+    sortOrder.value = 'asc'
+  }
+}
+
+// 过滤和排序后的镜像列表
 const filteredImages = computed(() => {
-  let images = imageStore.normalImages
+  let images = [...imageStore.normalImages]
 
   // 搜索过滤
   if (searchKeyword.value) {
@@ -91,8 +188,44 @@ const filteredImages = computed(() => {
     })
   }
 
-  // 按创建时间排序（最新的在前）
-  return images.sort((a, b) => b.created - a.created)
+  // 状态过滤
+  if (statusFilter.value) {
+    images = images.filter(image => {
+      const isUse = imageHooks.isImageInUse(image)
+      console.debug('isUse', image.repoTags, isUse)
+      switch (statusFilter.value) {
+        case 'in-use':
+          return isUse
+        case 'unused':
+          return !isUse
+        default:
+          return false
+      }
+    })
+  }
+
+  // 排序
+  const sortedImages = images.sort((a, b) => {
+    let result = 0
+    switch (sortBy.value) {
+      case 'name':
+        const nameA = imageStore.getImageDisplayTag(a).toLowerCase()
+        const nameB = imageStore.getImageDisplayTag(b).toLowerCase()
+        result = nameA.localeCompare(nameB)
+        break
+      case 'size':
+        result = a.size - b.size
+        break
+      case 'created':
+        result = a.created - b.created
+        break
+      default:
+        return 0
+    }
+    // 根据排序方向调整结果
+    return sortOrder.value === 'asc' ? result : -result
+  })
+  return sortedImages
 })
 
 
