@@ -116,26 +116,25 @@
             <div class="stat-value">{{ formatBytes(stats.memoryUsage) }}</div>
           </div>
 
-          <div class="stat-status-item">
-            <div class="flex flex-row gap-2 items-center">
-              <div class="stat-header">
-                <n-icon size="12">
-                  <CloudDownloadOutline />
-                </n-icon>
-                <span>下载</span>
-              </div>
-              <div class="network-rate">{{ formatBytesPerSecond(stats.networkRxRate) }}</div>
+          <div class="stat-item">
+            <div class="stat-header">
+              <n-icon size="12">
+                <CloudDownloadOutline />
+              </n-icon>
+              <span>下载</span>
             </div>
-            <div class="flex flex-row gap-2 items-center">
-              <div class="stat-header">
-                <n-icon size="12">
-                  <CloudUploadOutline />
-                </n-icon>
-                <span>上传</span>
-              </div>
-              <div class="network-rate">{{ formatBytesPerSecond(stats.networkTxRate) }}</div>
-            </div>
+            <div class="network-rate">{{ formatBytesPerSecond(stats.networkRxRate) }}</div>
           </div>
+          <div class="stat-item">
+            <div class="stat-header">
+              <n-icon size="12">
+                <CloudUploadOutline />
+              </n-icon>
+              <span>上传</span>
+            </div>
+            <div class="network-rate">{{ formatBytesPerSecond(stats.networkTxRate) }}</div>
+          </div>
+
         </div>
       </div>
 
@@ -481,16 +480,10 @@ const handleMenuSelect = (key: string) => {
       gap: 8px;
       justify-content: center;
       align-items: flex-start;
-      flex: 0 0 33%;
+      flex: 0 0 25%;
     }
 
-    .stat-status-item {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      justify-content: space-between;
-      align-items: flex-start;
-      flex: 1 0 33%;
+    .stat-status {
 
       .time-value,
       .time-status,
