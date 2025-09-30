@@ -8,6 +8,8 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    '(feat': compose)
+    ComposeCard: typeof import('./src/components/ComposeCard.vue')['default']
     ConfigView: typeof import('./src/components/ConfigView.vue')['default']
     ContainerCard: typeof import('./src/components/ContainerCard.vue')['default']
     ContainerImportModal: typeof import('./src/components/ContainerImportModal.vue')['default']
@@ -64,6 +66,7 @@ declare module 'vue' {
     NUpload: typeof import('naive-ui')['NUpload']
     NUploadDragger: typeof import('naive-ui')['NUploadDragger']
     NVirtualList: typeof import('naive-ui')['NVirtualList']
+    ProjectStatusBadge: typeof import('./src/components/ProjectStatusBadge.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     RunningStatusBadge: typeof import('./src/components/RunningStatusBadge.vue')['default']

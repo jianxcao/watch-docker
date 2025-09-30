@@ -1,6 +1,6 @@
 import { API_ENDPOINTS } from '@/constants/api'
 import axios from './axiosConfig'
-import type { BatchUpdateResult, Config, ContainerStatus, ImageInfo } from './types'
+import type { BatchUpdateResult, ComposeProject, Config, ContainerStatus, ImageInfo } from './types'
 
 // 健康检查相关
 export const healthApi = {
@@ -101,6 +101,34 @@ export const configApi = {
   saveConfig: (config: Config) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONFIG, config),
 }
 
+// Compose 项目管理API
+export const composeApi = {
+  // 获取 Compose 项目列表
+  getProjects: () => axios.get<{ projects: ComposeProject[] }>('/compose'),
+
+  // 启动项目
+  startProject: (project: ComposeProject) => axios.post<{ ok: boolean }>(`/compose/start`, project),
+
+  // 停止项目
+  stopProject: (project: ComposeProject) => axios.post<{ ok: boolean }>(`/compose/stop`, project),
+
+  createProject: (project: ComposeProject) =>
+    axios.post<{ ok: boolean }>(`/compose/create`, project),
+  // 重新创建项目
+  restartProject: (project: ComposeProject) =>
+    axios.post<{ ok: boolean }>(`/compose/restart`, project),
+
+  // 删除项目
+  deleteProject: (project: ComposeProject) =>
+    axios.delete<{ ok: boolean }>(`/compose/delete`, {
+      data: project,
+    }),
+
+  // 获取项目日志
+  getProjectLogs: (name: string, lines = 100) =>
+    axios.get<{ logs: string }>(`/compose/${name}/logs`, { params: { lines } }),
+}
+
 // 导出所有API
 export const api = {
   health: healthApi,
@@ -108,6 +136,7 @@ export const api = {
   container: containerApi,
   image: imageApi,
   config: configApi,
+  compose: composeApi,
 }
 
 export default api

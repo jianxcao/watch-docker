@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
+	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
@@ -30,6 +31,7 @@ type Server struct {
 	updater        *updater.Updater
 	scheduler      *scheduler.Scheduler
 	wsStatsManager *StatsWebSocketManager
+	composeClient  *composecli.Client
 }
 
 func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler) *gin.Engine {
@@ -40,6 +42,13 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	// 创建 WebSocket 管理器
 	wsStatsManager := NewStatsWebSocketManager(docker, sc)
 
+	// 创建 Compose 客户端
+	cfg := config.Get()
+	var composeClient *composecli.Client
+	if cfg.Compose.Enabled {
+		composeClient = composecli.NewClient(docker.GetDockerClient(), cfg.Compose.ProjectPaths)
+	}
+
 	s := &Server{
 		logger:         logger,
 		docker:         docker,
@@ -48,6 +57,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		updater:        updater.New(docker),
 		scheduler:      sch,
 		wsStatsManager: wsStatsManager,
+		composeClient:  composeClient,
 	}
 
 	api := r.Group("/api/v1")
@@ -69,6 +79,11 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 
 		// 设置镜像相关路由
 		s.setupImageRoutes(protected)
+
+		// 设置 Compose 相关路由
+		if s.composeClient != nil {
+			s.setupComposeRoutes(protected)
+		}
 
 		// 其他路由
 		protected.GET("/config", s.handleGetConfig())

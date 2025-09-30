@@ -39,6 +39,11 @@ const router = createRouter({
           meta: { title: '镜像管理', requiresAuth: true, layoutClass: 'layout-images' },
         },
         {
+          path: '/compose',
+          component: () => import('@/pages/ComposeView.vue'),
+          meta: { title: 'Compose 项目', requiresAuth: true },
+        },
+        {
           path: '/settings',
           component: () => import('@/pages/SettingsView.vue'),
           meta: { title: '系统设置', requiresAuth: true, layoutClass: 'layout-settings' },

@@ -21,12 +21,13 @@ func NewSuccessRes(data interface{}) *BaseRes {
 var (
 	SUCCESS = 0
 	// 通用与细分错误码（可按需扩展）
-	CodeBadRequest    = 40000
-	CodeImageRequired = 40001
-	CodeScanFailed    = 50001
-	CodeUpdateFailed  = 50002
-	CodeDockerError   = 50003
-	CodeRegistryError = 50004
+	CodeBadRequest     = 40000
+	CodeImageRequired  = 40001
+	CodeScanFailed     = 50001
+	CodeUpdateFailed   = 50002
+	CodeDockerError    = 50003
+	CodeRegistryError  = 50004
+	CodeInvalidRequest = 50005
 )
 
 // NewErrorResCode 返回带自定义错误码的响应

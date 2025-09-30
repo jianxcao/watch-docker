@@ -58,7 +58,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
 import { useAuthStore } from '@/store/auth'
@@ -76,6 +76,7 @@ import {
   LogOutOutline,
   LogoGithub,
 } from '@vicons/ionicons5'
+import ComposeIcon from '@/assets/svg/compose.svg?component'
 import LogIcon from '@/assets/svg/log.svg?component'
 
 interface Props {
@@ -100,11 +101,12 @@ const version = computed(() => settingStore.systemInfo?.version)
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
-  if (path === '/') {return 'home'}
-  if (path === '/containers') {return 'containers'}
-  if (path === '/images') {return 'images'}
-  if (path === '/logs') {return 'logs'}
-  if (path === '/settings') {return 'settings'}
+  if (path === '/') { return 'home' }
+  if (path === '/containers') { return 'containers' }
+  if (path === '/images') { return 'images' }
+  if (path === '/compose') { return 'compose' }
+  if (path === '/logs') { return 'logs' }
+  if (path === '/settings') { return 'settings' }
   return 'home'
 })
 
@@ -130,6 +132,11 @@ const menuOptions = computed<MenuOption[]>(() => [
     icon: () => h(HomeOutline),
   },
   {
+    label: 'Compose 项目',
+    key: 'compose',
+    icon: () => h(ComposeIcon),
+  },
+  {
     label: '容器管理',
     key: 'containers',
     icon: () => h(LayersOutline),
@@ -139,6 +146,7 @@ const menuOptions = computed<MenuOption[]>(() => [
     key: 'images',
     icon: () => h(ArchiveOutline),
   },
+
   {
     label: '日志',
     key: 'logs',
@@ -162,6 +170,9 @@ const handleMenuSelect = (key: string) => {
       break
     case 'images':
       router.push('/images')
+      break
+    case 'compose':
+      router.push('/compose')
       break
     case 'logs':
       router.push('/logs')

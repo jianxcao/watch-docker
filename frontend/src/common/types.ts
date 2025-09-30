@@ -121,3 +121,58 @@ export type ContainerAction = 'start' | 'stop' | 'update' | 'delete'
 // 状态类型
 export type ContainerStatusType = 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error'
 export type ContainerState = 'running' | 'stopped' | 'paused' | 'restarting' | 'dead'
+
+// Compose 端口映射信息
+export interface ComposePortMapping {
+  hostPort: number
+  containerPort: number
+  protocol: string
+}
+
+// Compose 服务信息
+export interface ComposeService {
+  name: string
+  image: string
+  status: string
+  containerId: string
+  ports: ComposePortMapping[]
+  environment: Record<string, string>
+  dependsOn: string[]
+  replicas: number
+}
+
+// Compose 网络信息
+export interface ComposeNetwork {
+  name: string
+  driver: string
+  external: boolean
+}
+
+// Compose 卷信息
+export interface ComposeVolume {
+  name: string
+  driver: string
+  external: boolean
+}
+
+// Compose 项目信息
+export interface ComposeProject {
+  name: string
+  composeFile: string
+  status: ComposeProjectStatus
+  runningCount: number
+  exitedCount: number
+  createdCount: number
+}
+
+// Compose 操作类型
+export type ComposeAction = 'start' | 'stop' | 'restart' | 'delete' | 'create'
+
+// Compose 项目状态类型
+export type ComposeProjectStatus =
+  | 'running'
+  | 'exited'
+  | 'partial'
+  | 'draft'
+  | 'created_stack'
+  | 'unknown'
