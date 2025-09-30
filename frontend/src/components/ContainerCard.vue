@@ -203,13 +203,13 @@ const statusConfig = computed(() => {
 
 // 格式化创建时间
 const formatCreatedTime = (createdAt: string): string => {
-  if (!createdAt) {return '-'}
+  if (!createdAt) { return '-' }
   return dayjs(createdAt).format('YYYY-MM-DD HH:mm')
 }
 
 // 格式化端口映射
 const formatPorts = (ports: any[]): string => {
-  if (!ports || ports.length === 0) {return '-'}
+  if (!ports || ports.length === 0) { return '-' }
   // return ports
   //   .map((port) => {
   //     if (port.publicPort) {
@@ -481,7 +481,7 @@ const handleMenuSelect = (key: string) => {
       gap: 8px;
       justify-content: center;
       align-items: flex-start;
-      flex: 1;
+      flex: 0 0 33%;
     }
 
     .stat-status-item {
@@ -489,7 +489,8 @@ const handleMenuSelect = (key: string) => {
       flex-direction: column;
       gap: 8px;
       justify-content: space-between;
-      align-items: center;
+      align-items: flex-start;
+      flex: 1 0 33%;
 
       .time-value,
       .time-status,

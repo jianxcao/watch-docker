@@ -16,7 +16,7 @@
 <script setup lang="ts">
 import { darkTheme } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
-import { healthApi } from './common/api'
+
 import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
@@ -32,19 +32,9 @@ watchEffect(() => {
   document.body.setAttribute('data-theme', settingStore.setting.theme)
 })
 
-// 检查系统健康状态
-const checkHealth = async () => {
-  try {
-    await healthApi.health()
-    appStore.setSystemHealth('healthy')
-  } catch (error) {
-    appStore.setSystemHealth('unhealthy')
-    console.error('健康检查失败:', error)
-  }
-}
 
 onMounted(async () => {
-  await checkHealth()
+  await appStore.checkHealth()
   Promise.all([
     containerStore.fetchContainers(true, false),
     imageStore.fetchImages(),
@@ -61,7 +51,7 @@ onUnmounted(() => {
 
 async function refresh() {
   if (appStore.systemHealth === 'unhealthy') {
-    await checkHealth()
+    await appStore.checkHealth()
   }
   containerStore.fetchContainers(true, false)
   imageStore.fetchImages()

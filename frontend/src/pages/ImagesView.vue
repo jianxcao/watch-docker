@@ -112,13 +112,14 @@ import {
 } from '@vicons/ionicons5'
 import { computed, onMounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useAppStore } from '@/store/app'
 
 const imageStore = useImageStore()
 const containerStore = useContainerStore()
 const imageHooks = useImage()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 const message = useMessage()
-
+const appStore = useAppStore()
 // 弹窗状态
 const showImportModal = ref(false)
 
@@ -259,9 +260,12 @@ const handleDelete = async (image: ImageInfo) => {
 // }
 
 const handleRefresh = async () => {
+  if (appStore.systemHealth === 'unhealthy') {
+    await appStore.checkHealth()
+  }
   await imageHooks.handleRefresh()
   // 同时刷新容器数据以确保使用状态是最新的
-  await containerStore.fetchContainers()
+  await containerStore.fetchContainers(true, true)
 }
 
 // 处理导入成功

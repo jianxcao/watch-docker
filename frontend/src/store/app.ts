@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { healthApi } from '@/common/api'
 
 export const useAppStore = defineStore('app', () => {
   // 移动端抽屉菜单状态
@@ -39,6 +40,16 @@ export const useAppStore = defineStore('app', () => {
     globalLoading.value = loading
   }
 
+  const checkHealth = async () => {
+    try {
+      await healthApi.health()
+      setSystemHealth('healthy')
+    } catch (error) {
+      setSystemHealth('unhealthy')
+      console.error('健康检查失败:', error)
+    }
+  }
+
   return {
     // 状态
     drawerVisible,
@@ -52,5 +63,6 @@ export const useAppStore = defineStore('app', () => {
     setSystemHealth,
     updateRefreshTime,
     setGlobalLoading,
+    checkHealth,
   }
 })

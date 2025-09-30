@@ -143,10 +143,12 @@ import {
   TextOutline,
   RadioButtonOnOutline,
 } from '@vicons/ionicons5'
+import { useAppStore } from '@/store/app'
 
 const containerStore = useContainerStore()
 const containerHooks = useContainer()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
+const appStore = useAppStore()
 
 
 // 搜索和过滤
@@ -347,6 +349,12 @@ const handleBatchUpdate = async () => {
 }
 
 const handleRefresh = async () => {
+  if (appStore.systemHealth === 'unhealthy') {
+    await appStore.checkHealth()
+  }
+  if (!containerStore.statsWebSocket.isConnected) {
+    containerStore.startStatsWebSocket()
+  }
   await containerStore.fetchContainers(true, true)
 }
 
