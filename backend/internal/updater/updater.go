@@ -58,10 +58,16 @@ func (u *Updater) UpdateContainer(ctx context.Context, containerID string, image
 		return err
 	}
 
-	// 4. 启动新容器（带重试）
-	if err := u.startContainerWithRetry(ctx, uctx); err != nil {
-		u.rollbackOnStartFailure(ctx, uctx)
-		return err
+	// 4. 根据旧容器状态决定是否启动新容器
+	if uctx.wasRunning {
+		// 只有旧容器原来在运行时，才启动新容器
+		if err := u.startContainerWithRetry(ctx, uctx); err != nil {
+			u.rollbackOnStartFailure(ctx, uctx)
+			return err
+		}
+		logger.Logger.Info("新容器已启动（因为旧容器原来在运行）", zap.String("containerID", uctx.newID))
+	} else {
+		logger.Logger.Info("新容器已创建但未启动（因为旧容器原来是停止状态）", zap.String("containerID", uctx.newID))
 	}
 
 	// 5. 最终清理旧容器及相关资源
@@ -77,6 +83,7 @@ type updateContext struct {
 	oldName     string
 	backupName  string
 	newID       string
+	wasRunning  bool // 记录旧容器是否在运行状态
 }
 
 const maxRetries = 3
@@ -101,21 +108,32 @@ func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) 
 		return fmt.Errorf("inspect: %w", err)
 	}
 	uctx.oldInfo = oldInfo
-	logger.Logger.Info("旧容器详细信息与配置读取成功", zap.String("containerID", uctx.containerID))
 
-	// 停止旧容器
-	err = u.docker.StopContainer(ctx, uctx.containerID, 100)
-	if err != nil {
-		return fmt.Errorf("停止旧容器失败: %w", err)
-	}
-	logger.Logger.Info("旧容器停止成功", zap.String("containerID", uctx.containerID))
+	// 记录旧容器的运行状态
+	uctx.wasRunning = oldInfo.State.Running
+	logger.Logger.Info("旧容器详细信息与配置读取成功",
+		zap.String("containerID", uctx.containerID),
+		zap.Bool("wasRunning", uctx.wasRunning))
 
-	// 等待容器完全停止，确保文件系统完全释放
-	err = u.docker.WaitContainerStopped(ctx, uctx.containerID, 30)
-	if err != nil {
-		logger.Logger.Warn("等待容器停止超时，继续执行", zap.String("containerID", uctx.containerID), zap.Error(err))
+	// 如果旧容器在运行，则停止它
+	if uctx.wasRunning {
+		err = u.docker.StopContainer(ctx, uctx.containerID, 100)
+		if err != nil {
+			return fmt.Errorf("停止旧容器失败: %w", err)
+		}
+		logger.Logger.Info("旧容器停止成功", zap.String("containerID", uctx.containerID))
+	} else {
+		logger.Logger.Info("旧容器原本就是停止状态，无需停止", zap.String("containerID", uctx.containerID))
 	}
-	logger.Logger.Info("容器完全停止，文件系统已释放", zap.String("containerID", uctx.containerID))
+
+	// 等待容器完全停止，确保文件系统完全释放（只对原来运行的容器执行）
+	if uctx.wasRunning {
+		err = u.docker.WaitContainerStopped(ctx, uctx.containerID, 30)
+		if err != nil {
+			logger.Logger.Warn("等待容器停止超时，继续执行", zap.String("containerID", uctx.containerID), zap.Error(err))
+		}
+		logger.Logger.Info("容器完全停止，文件系统已释放", zap.String("containerID", uctx.containerID))
+	}
 
 	// 获取容器名称并重命名旧容器
 	uctx.oldName = oldInfo.Name
@@ -226,8 +244,11 @@ func (u *Updater) rollbackOnStartFailure(ctx context.Context, uctx *updateContex
 		_ = u.docker.RenameContainer(ctx, uctx.containerID, uctx.oldName)
 	}
 
-	// 重新启动旧容器
-	_ = u.docker.StartContainer(ctx, uctx.containerID)
+	// 根据原始状态决定是否重新启动旧容器
+	if uctx.wasRunning {
+		_ = u.docker.StartContainer(ctx, uctx.containerID)
+		logger.Logger.Info("已重新启动旧容器（因为原来在运行）", zap.String("containerID", uctx.containerID))
+	}
 }
 
 // finalCleanup 最终清理旧容器及相关资源
