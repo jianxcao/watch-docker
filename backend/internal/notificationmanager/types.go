@@ -21,7 +21,7 @@ type ContainerNotification struct {
 	ContainerID   string                `json:"container_id"`
 	ContainerName string                `json:"container_name"`
 	Image         string                `json:"image"`
-	CurrentDigest string                `json:"current_digest"`
+	CurrentDigest []string              `json:"current_digest"`
 	RemoteDigest  string                `json:"remote_digest"`
 	Timestamp     time.Time             `json:"timestamp"`
 	Error         string                `json:"error,omitempty"` // 只有在失败时才有

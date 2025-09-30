@@ -131,7 +131,7 @@ func (manager *StatsWebSocketManager) broadcastStats(ctx context.Context) {
 			logger.Logger.Error(fmt.Sprintf("序列化空容器数据失败: %v", err))
 			return
 		}
-		logger.Logger.Debug(fmt.Sprintf("获取容器数据准备发送: %s", string(message)))
+		// logger.Logger.Debug(fmt.Sprintf("获取容器数据准备发送: %s", string(message)))
 		manager.broadcastMessage(message)
 		return
 	}
@@ -199,7 +199,7 @@ func (manager *StatsWebSocketManager) broadcastMessage(message []byte) {
 	for _, client := range clients {
 		select {
 		case client.send <- message:
-			logger.Logger.Debug(fmt.Sprintf("broadcast 消息: %s", string(message)))
+			// logger.Logger.Debug(fmt.Sprintf("broadcast 消息: %s", string(message)))
 			// 发送成功
 		default:
 			logger.Logger.Warn("WebSocket 发送通道满了，该客户端可能已经断开或处理太慢")
@@ -251,7 +251,7 @@ func (c *Client) writePump() {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			logger.Logger.Debug(fmt.Sprintf("WebSocket 写入消息: %s", string(message)))
+			// logger.Logger.Debug(fmt.Sprintf("WebSocket 写入消息: %s", string(message)))
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				logger.Logger.Error(fmt.Sprintf("WebSocket 写入失败: %v", err))
 				return
@@ -259,7 +259,7 @@ func (c *Client) writePump() {
 
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			logger.Logger.Debug("WebSocket 写入心跳包")
+			// logger.Logger.Debug("WebSocket 写入心跳包")
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

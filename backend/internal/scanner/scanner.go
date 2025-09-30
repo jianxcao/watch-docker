@@ -17,7 +17,7 @@ type ContainerStatus struct {
 	Name          string                    `json:"name"`
 	Image         string                    `json:"image"`
 	Running       bool                      `json:"running"`
-	CurrentDigest string                    `json:"currentDigest"`
+	CurrentDigest []string                  `json:"currentDigest"`
 	RemoteDigest  string                    `json:"remoteDigest"`
 	Status        string                    `json:"status"` // UpToDate | UpdateAvailable | Skipped | Error
 	Skipped       bool                      `json:"skipped"`
@@ -102,7 +102,7 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				result[j.idx] = st
 				continue
 			}
-			st.CurrentDigest = firstDigest(ct.RepoDigests)
+			st.CurrentDigest = ct.RepoDigests
 			var indexDigest, childDigest string
 			var err error
 			if isHaveUpdate {
@@ -123,7 +123,7 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				chosen = childDigest
 			}
 			st.RemoteDigest = chosen
-			if st.CurrentDigest == "" || (st.RemoteDigest != "" && !strings.EqualFold(st.CurrentDigest, chosen)) {
+			if len(st.CurrentDigest) == 0 || (st.RemoteDigest != "" && !compareDigests(st.CurrentDigest, st.RemoteDigest)) {
 				st.Status = "UpdateAvailable"
 			} else {
 				st.Status = "UpToDate"
@@ -157,17 +157,12 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 	return result, nil
 }
 
-func firstDigest(digests []string) string {
-	for _, d := range digests {
-		if strings.Contains(d, "@sha256:") {
-			parts := strings.SplitN(d, "@", 2)
-			if len(parts) == 2 {
-				return parts[1]
-			}
-		}
-		if strings.HasPrefix(d, "sha256:") { // sometimes already digest
-			return d
+func compareDigests(currentDigests []string, remoteDigest string) bool {
+	for _, d := range currentDigests {
+		localDigest := strings.Split(d, "@")[1]
+		if localDigest == remoteDigest {
+			return true
 		}
 	}
-	return ""
+	return false
 }

@@ -37,8 +37,6 @@ export interface ContainerStatus {
   name: string
   image: string
   running: boolean
-  currentDigest: string
-  remoteDigest: string
   status: 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error' | ''
   skipped: boolean
   skipReason: string
