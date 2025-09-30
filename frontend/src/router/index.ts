@@ -26,27 +26,27 @@ const router = createRouter({
         {
           path: '/home',
           component: () => import('@/pages/HomeView.vue'),
-          meta: { title: '首页', requiresAuth: true },
+          meta: { title: '首页', requiresAuth: true, layoutClass: 'layout-home' },
         },
         {
           path: '/containers',
           component: () => import('@/pages/ContainersView.vue'),
-          meta: { title: '容器管理', requiresAuth: true },
+          meta: { title: '容器管理', requiresAuth: true, layoutClass: 'layout-containers' },
         },
         {
           path: '/images',
           component: () => import('@/pages/ImagesView.vue'),
-          meta: { title: '镜像管理', requiresAuth: true },
+          meta: { title: '镜像管理', requiresAuth: true, layoutClass: 'layout-images' },
         },
         {
           path: '/settings',
           component: () => import('@/pages/SettingsView.vue'),
-          meta: { title: '系统设置', requiresAuth: true },
+          meta: { title: '系统设置', requiresAuth: true, layoutClass: 'layout-settings' },
         },
         {
           path: '/logs',
           component: () => import('@/pages/LogsPageView.vue'),
-          meta: { title: '日志', requiresAuth: true },
+          meta: { title: '日志', requiresAuth: true, layoutClass: 'layout-logs' },
         },
       ],
     },

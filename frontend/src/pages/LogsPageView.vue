@@ -1,16 +1,22 @@
 <template>
   <div>
-    <div class="log-container" ref="containerRef">
-      <div v-for="log in logs" :key="log._k" class="log-line">
-        <div class="log-line-left">
-          <n-tag class="level-chip" size="small" :type="levelColor(log.level)" label>{{ log.level }}</n-tag>
-          <span class="timestamp">{{ log.time }}</span>
-        </div>
-        <span class="message">
-          <span>{{ log.msg }}</span>
-          <span>{{ _.omit(log, ['level', 'time', 'msg', '_k']) }}</span>
-        </span>
-      </div>
+    <div class="log-container" ref="containerRef" :style="{ height: containerHeight }">
+      <n-virtual-list ref="virtualListRef" class="virtual-log-list" :items="reversedLogs" :item-size="estimatedItemSize"
+        key-field="_k" item-resizable>
+        <template #default="{ item: log }">
+          <div class="log-line">
+            <div class="log-line-left">
+              <n-tag class="level-chip" size="small" :type="levelColor(log.level)" label>{{ log.level }}</n-tag>
+              <span class="timestamp">{{ log.time }}</span>
+            </div>
+            <span class="message">
+              <span>{{ log.msg }}</span>
+              <span v-if="Object.keys(_.omit(log, ['level', 'time', 'msg', '_k'])).length > 0">{{ _.omit(log, ['level',
+                'time', 'msg', '_k']) }}</span>
+            </span>
+          </div>
+        </template>
+      </n-virtual-list>
     </div>
 
     <Teleport to="#header" defer>
@@ -24,25 +30,48 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import * as _ from 'lodash-es'
 import { useSettingStore } from '@/store/setting'
 
-const token = computed(() => useSettingStore().getToken())
-
+const settingStore = useSettingStore()
+const token = computed(() => settingStore.getToken())
 
 interface LogEntry {
   level: string
   time: string
   msg: string
+  _k: number
   [key: string]: any
 }
 
 const logs = ref<LogEntry[]>([])
-let eventSource: EventSource | null = null
+const virtualListRef = ref()
 const containerRef = ref<HTMLDivElement | null>(null)
+const containerHeight = computed(() => `calc(100vh - ${settingStore.headerHeight + settingStore.safeArea.top + settingStore.safeArea.bottom + 18}px)`)
 
+// 估算的每个日志项高度（像素）
+const estimatedItemSize = 85
+
+// 反转日志顺序，使新日志显示在底部
+const reversedLogs = computed(() => [...logs.value].reverse())
+
+let eventSource: EventSource | null = null
 let nextId = 1
+
+// // 自动滚动到底部的函数
+// const scrollToBottom = async () => {
+//   await nextTick()
+//   if (virtualListRef.value && logs.value.length > 0) {
+//     // 滚动到最后一项（reversedLogs中的最后一项对应原logs的第一项）
+//     virtualListRef.value.scrollTo({ index: reversedLogs.value.length - 1, behavior: 'smooth' })
+//   }
+// }
+
+// // 监听日志变化，自动滚动到底部
+// watch(logs, () => {
+//   scrollToBottom()
+// }, { deep: true })
 
 
 
@@ -90,7 +119,13 @@ onBeforeUnmount(() => {
   }
 })
 </script>
-
+<style lang="less">
+.layout-logs {
+  .n-layout-scroll-container {
+    overflow: hidden;
+  }
+}
+</style>
 <style scoped lang="less">
 @import '@/styles/mix.less';
 
@@ -101,11 +136,11 @@ onBeforeUnmount(() => {
 }
 
 .log-container {
-  display: flex;
-  flex-direction: column-reverse;
-  overflow-y: auto;
-  overflow-x: hidden;
-  .scrollbar();
+  overflow: hidden;
+}
+
+.virtual-log-list {
+  height: 100%;
 }
 
 .log-line {

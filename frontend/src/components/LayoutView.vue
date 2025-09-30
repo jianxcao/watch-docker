@@ -7,7 +7,7 @@
     </n-layout-sider>
 
     <!-- 主内容区域 -->
-    <n-layout class="main-layout">
+    <n-layout class="main-layout" :class="layoutClass">
       <n-layout-header bordered class="header-wrap">
         <div class="header-content">
           <n-button text @click="appStore.toggleDrawer" v-if="isSmallScreen">
@@ -48,6 +48,9 @@ import { Moon as MoonIcon, Sunny as SunIcon, MenuOutline } from '@vicons/ionicon
 import { computed } from 'vue'
 import MobileDrawer from './MobileDrawer.vue'
 import SiderContent from './SiderContent.vue'
+const route = useRoute()
+
+const layoutClass = computed(() => route.meta.layoutClass)
 
 const appStore = useAppStore()
 const { isLargeScreen, isSmallScreen } = useResponsive()
