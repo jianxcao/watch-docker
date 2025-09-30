@@ -20,6 +20,7 @@ import { healthApi } from './common/api'
 import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
+import { sleep } from './common/utils'
 
 const settingStore = useSettingStore()
 const theme = computed(() => (settingStore.setting.theme === 'dark' ? darkTheme : null))
@@ -74,7 +75,10 @@ const visibility = useDocumentVisibility()
 watch(visibility, (newVal) => {
   console.debug('visibility', newVal)
   if (newVal === 'visible') {
-    refresh()
+    sleep(1000).then(() => {
+      console.debug('页面可见重新刷新')
+      refresh()
+    })
   }
 })
 </script>

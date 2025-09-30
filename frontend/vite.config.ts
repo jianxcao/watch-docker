@@ -14,6 +14,7 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       output: {
+        sourcemap: true,
         advancedChunks: {
           groups: [
             {
