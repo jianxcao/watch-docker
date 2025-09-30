@@ -203,13 +203,13 @@ const statusConfig = computed(() => {
 
 // 格式化创建时间
 const formatCreatedTime = (createdAt: string): string => {
-  if (!createdAt) return '-'
+  if (!createdAt) {return '-'}
   return dayjs(createdAt).format('YYYY-MM-DD HH:mm')
 }
 
 // 格式化端口映射
 const formatPorts = (ports: any[]): string => {
-  if (!ports || ports.length === 0) return '-'
+  if (!ports || ports.length === 0) {return '-'}
   // return ports
   //   .map((port) => {
   //     if (port.publicPort) {

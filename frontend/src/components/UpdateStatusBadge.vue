@@ -27,10 +27,10 @@ const props = defineProps<Props>()
 // 是否显示更新状态标签
 const shouldShowBadge = computed(() => {
   // 如果容器没有运行，不显示更新状态
-  if (!props.container.running) return false
+  if (!props.container.running) {return false}
 
   // 如果没有状态信息或状态为空，不显示
-  if (!props.container.status) return false
+  if (!props.container.status) {return false}
 
   return true
 })

@@ -7,7 +7,7 @@ const router = createRouter({
     {
       path: '/login',
       name: 'Login',
-      component: () => import('@/pages/Login.vue'),
+      component: () => import('@/pages/LoginView.vue'),
       meta: {
         title: '登录',
         requiresAuth: false,
@@ -16,7 +16,7 @@ const router = createRouter({
     },
     {
       path: '/',
-      component: () => import('@/components/Layout.vue'),
+      component: () => import('@/components/LayoutView.vue'),
       meta: { requiresAuth: true },
       children: [
         {
@@ -25,27 +25,27 @@ const router = createRouter({
         },
         {
           path: '/home',
-          component: () => import('@/pages/Home.vue'),
+          component: () => import('@/pages/HomeView.vue'),
           meta: { title: '首页', requiresAuth: true },
         },
         {
           path: '/containers',
-          component: () => import('@/pages/Containers.vue'),
+          component: () => import('@/pages/ContainersView.vue'),
           meta: { title: '容器管理', requiresAuth: true },
         },
         {
           path: '/images',
-          component: () => import('@/pages/Images.vue'),
+          component: () => import('@/pages/ImagesView.vue'),
           meta: { title: '镜像管理', requiresAuth: true },
         },
         {
           path: '/settings',
-          component: () => import('@/pages/Settings.vue'),
+          component: () => import('@/pages/SettingsView.vue'),
           meta: { title: '系统设置', requiresAuth: true },
         },
         {
           path: '/logs',
-          component: () => import('@/pages/LogsPage.vue'),
+          component: () => import('@/pages/LogsPageView.vue'),
           meta: { title: '日志', requiresAuth: true },
         },
       ],

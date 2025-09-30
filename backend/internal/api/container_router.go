@@ -26,6 +26,7 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.POST("/containers/:id/start", s.handleStartContainer())
 	protected.DELETE("/containers/:id", s.handleDeleteContainer())
 	protected.GET("/containers/:id/export", s.handleExportContainer())
+	protected.POST("/containers/import", s.handleImportContainer())
 	protected.POST("/system/prune", s.handlePruneSystem())
 	protected.GET("/update/all", s.handleUpdateAll())
 }
@@ -318,5 +319,55 @@ func (s *Server) handlePruneSystem() gin.HandlerFunc {
 
 		s.logger.Info("system prune completed successfully")
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true, "message": "系统清理完成"}))
+	}
+}
+
+// handleImportContainer 处理容器导入
+func (s *Server) handleImportContainer() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 解析multipart/form-data
+		file, header, err := c.Request.FormFile("file")
+		if err != nil {
+			s.logger.Error("get upload file", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "获取上传文件失败"))
+			return
+		}
+		defer file.Close()
+
+		// 验证文件类型（可选）
+		if header.Size == 0 {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "文件为空"))
+			return
+		}
+
+		// 获取导入参数
+		repository := c.DefaultPostForm("repository", "imported-container")
+		tag := c.DefaultPostForm("tag", "latest")
+
+		s.logger.Info("starting container import",
+			zap.String("filename", header.Filename),
+			zap.Int64("size", header.Size),
+			zap.String("repository", repository),
+			zap.String("tag", tag))
+
+		ctx := c.Request.Context()
+
+		// 导入容器（实际上是导入为镜像）
+		err = s.docker.ImportImage(ctx, file, repository, tag)
+		if err != nil {
+			s.logger.Error("import container failed",
+				zap.String("filename", header.Filename),
+				zap.String("repository", repository),
+				zap.String("tag", tag),
+				zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "导入容器失败: "+err.Error()))
+			return
+		}
+
+		s.logger.Info("container import completed",
+			zap.String("filename", header.Filename),
+			zap.String("repository", repository),
+			zap.String("tag", tag))
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"message": "容器导入成功"}))
 	}
 }

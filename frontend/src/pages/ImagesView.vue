@@ -269,7 +269,7 @@ const handleImportSuccess = async () => {
   // 刷新镜像列表
   await imageStore.fetchImages()
   // 刷新容器数据以确保使用状态是最新的
-  await containerStore.fetchContainers()
+  await containerStore.fetchContainers(true, false)
   message.success('镜像导入成功')
 }
 

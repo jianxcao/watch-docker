@@ -249,7 +249,7 @@ const systemHealthIcon = computed(() => {
 
 // 最后刷新时间
 const lastRefreshText = computed(() => {
-  if (!appStore.lastRefreshTime) return '从未'
+  if (!appStore.lastRefreshTime) {return '从未'}
   return dayjs(appStore.lastRefreshTime).format('MM-DD HH:mm:ss')
 })
 

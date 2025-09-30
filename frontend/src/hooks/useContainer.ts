@@ -120,7 +120,7 @@ export function useContainer() {
 
   // 获取容器状态颜色
   const getStatusColor = (container: ContainerStatus): string => {
-    if (!container.running) return 'warning'
+    if (!container.running) {return 'warning'}
 
     switch (container.status) {
       case 'UpToDate':
@@ -138,7 +138,7 @@ export function useContainer() {
 
   // 获取容器状态文本
   const getStatusText = (container: ContainerStatus): string => {
-    if (!container.running) return '已停止'
+    if (!container.running) {return '已停止'}
 
     switch (container.status) {
       case 'UpToDate':

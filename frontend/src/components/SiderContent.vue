@@ -100,11 +100,11 @@ const version = computed(() => settingStore.systemInfo?.version)
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
-  if (path === '/') return 'home'
-  if (path === '/containers') return 'containers'
-  if (path === '/images') return 'images'
-  if (path === '/logs') return 'logs'
-  if (path === '/settings') return 'settings'
+  if (path === '/') {return 'home'}
+  if (path === '/containers') {return 'containers'}
+  if (path === '/images') {return 'images'}
+  if (path === '/logs') {return 'logs'}
+  if (path === '/settings') {return 'settings'}
   return 'home'
 })
 

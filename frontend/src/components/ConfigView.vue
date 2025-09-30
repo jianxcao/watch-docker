@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useThemeVars, useMessage } from 'naive-ui';
-import { useSettingStore } from '@/store/setting';
+import { useThemeVars, useMessage } from 'naive-ui'
+import { useSettingStore } from '@/store/setting'
 window.$message = useMessage()
 const settingStore = useSettingStore()
 const theme = useThemeVars()

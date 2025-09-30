@@ -90,19 +90,31 @@
             {{ containerStore.stats.updateable }} 个可更新
           </n-text>
         </div>
-        <!-- 刷新按钮 -->
-        <n-button @click="handleRefresh" :loading="containerStore.loading" circle size="tiny">
-          <template #icon>
-            <n-icon>
-              <RefreshOutline />
-            </n-icon>
-          </template>
-        </n-button>
+        <div class="flex gap-2">
+          <!-- 导入按钮 -->
+          <n-button @click="showImportModal = true" circle size="tiny">
+            <template #icon>
+              <n-icon>
+                <CloudUploadOutline />
+              </n-icon>
+            </template>
+          </n-button>
+          <!-- 刷新按钮 -->
+          <n-button @click="handleRefresh" :loading="containerStore.loading" circle size="tiny">
+            <template #icon>
+              <n-icon>
+                <RefreshOutline />
+              </n-icon>
+            </template>
+          </n-button>
+        </div>
       </div>
     </Teleport>
+
+    <!-- 容器导入弹窗 -->
+    <ContainerImportModal v-model:show="showImportModal" @success="handleImportSuccess" />
+
   </div>
-
-
 </template>
 
 <script setup lang="ts">
@@ -112,6 +124,7 @@ import { useContainer } from '@/hooks/useContainer'
 import { useResponsive } from '@/hooks/useResponsive'
 import { renderIcon } from '@/common/utils'
 import ContainerCard from '@/components/ContainerCard.vue'
+import ContainerImportModal from '@/components/ContainerImportModal.vue'
 import type { ContainerStatus } from '@/common/types'
 import {
   SearchOutline,
@@ -142,6 +155,7 @@ const statusFilter = ref<string | null>(null)
 const sortBy = ref<string>('name') // 默认按名称排序
 const sortOrder = ref<'asc' | 'desc'>('asc') // 排序方向，默认升序
 const operationLoading = ref(false)
+const showImportModal = ref(false)
 
 // WebSocket 连接状态
 const wsConnectionState = computed(() => containerStore.wsConnectionState)
@@ -276,8 +290,8 @@ const filteredContainers = computed(() => {
       case 'status':
         // 按状态排序：运行中 > 已停止 > 其他
         const getStatusPriority = (container: any) => {
-          if (container.running) return 0
-          if (!container.running) return 1
+          if (container.running) { return 0 }
+          if (!container.running) { return 1 }
           return 2
         }
         result = getStatusPriority(a) - getStatusPriority(b)
@@ -334,6 +348,13 @@ const handleBatchUpdate = async () => {
 
 const handleRefresh = async () => {
   await containerStore.fetchContainers(true, true)
+}
+
+// 处理导入成功
+const handleImportSuccess = async () => {
+  showImportModal.value = false
+  // 刷新容器列表（这里会显示新导入的镜像）
+  await containerStore.fetchContainers(true, false)
 }
 
 // WebSocket 连接状态指示器

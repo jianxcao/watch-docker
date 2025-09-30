@@ -59,6 +59,14 @@ export const containerApi = {
 
   // 系统清理
   pruneSystem: () => axios.post<{ ok: boolean; message: string }>(API_ENDPOINTS.PRUNE_SYSTEM),
+
+  // 导入容器
+  importContainer: (formData: FormData) =>
+    axios.post<{ success: boolean; message: string }>(API_ENDPOINTS.CONTAINER_IMPORT, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    }),
 }
 
 // 镜像相关API
@@ -103,3 +111,7 @@ export const api = {
 }
 
 export default api
+
+// 单独导出常用的API函数，方便直接导入
+export const { importContainer } = containerApi
+export const { importImage } = imageApi

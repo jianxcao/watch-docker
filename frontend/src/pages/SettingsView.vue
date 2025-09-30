@@ -260,7 +260,7 @@ const removeAuth = (index: number) => {
 
 // 保存配置
 const handleSave = async () => {
-  if (saving.value) return
+  if (saving.value) {return}
 
   saving.value = true
   try {

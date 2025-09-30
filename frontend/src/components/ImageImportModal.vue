@@ -1,14 +1,9 @@
 <template>
-  <n-modal v-model:show="showModal" preset="dialog" title="导入镜像" style="width: 600px">
+  <n-modal v-model:show="showModal" :icon="getIcon()" preset="dialog"
+    style="padding: 12px; width: 90vw; max-width: 600px">
     <template #header>
-      <div class="modal-header">
-        <n-icon size="20" class="header-icon">
-          <CloudUploadOutline />
-        </n-icon>
-        <span>导入镜像</span>
-      </div>
+      <span>导入镜像</span>
     </template>
-
     <div class="import-content">
       <n-upload ref="uploadRef" :max="1" :file-list="fileList" :custom-request="handleCustomRequest" accept=".tar"
         :show-file-list="false" directory-dnd @update:file-list="handleFileListUpdate"
@@ -42,23 +37,11 @@
         </n-space>
       </div>
 
-      <!-- 上传结果 -->
-      <div v-if="uploadResult" class="upload-result">
-        <n-result :status="uploadResult.success ? 'success' : 'error'" :title="uploadResult.success ? '导入成功' : '导入失败'">
-          <template #footer>
-            <n-text depth="3">{{ uploadResult.message }}</n-text>
-          </template>
-        </n-result>
-      </div>
     </div>
-
     <template #action>
       <n-space justify="end">
         <n-button @click="handleCancel" :disabled="uploading">
           {{ uploading ? '上传中...' : '取消' }}
-        </n-button>
-        <n-button v-if="uploadResult?.success" type="primary" @click="handleConfirm">
-          确定
         </n-button>
       </n-space>
     </template>
@@ -66,55 +49,50 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { useMessage, type UploadCustomRequestOptions, type UploadFileInfo } from 'naive-ui'
+import { ref, watch } from 'vue'
+import { useMessage, useThemeVars, type UploadCustomRequestOptions, type UploadFileInfo } from 'naive-ui'
 import { CloudUploadOutline } from '@vicons/ionicons5'
-import { formatBytes } from '@/common/utils'
+import { renderIcon } from '@/common/utils'
+import { useXhrUpload } from '@/hooks/useXhrUpload'
+import { useSettingStore } from '@/store/setting'
 
-interface Props {
-  show: boolean
+const theme = useThemeVars()
+const settingStore = useSettingStore()
+
+const getIcon = () => {
+  return renderIcon(CloudUploadOutline, {
+    color: theme.value.primaryColor,
+    size: 20
+  })
 }
 
 interface Emits {
-  (e: 'update:show', show: boolean): void
   (e: 'success'): void
 }
 
-const props = defineProps<Props>()
+const showModal = defineModel<boolean>('show')
 const emit = defineEmits<Emits>()
 const message = useMessage()
-
-// 响应式状态
-const showModal = computed({
-  get: () => props.show,
-  set: (value) => emit('update:show', value)
-})
-
 const uploadRef = ref()
 const fileList = ref<UploadFileInfo[]>([])
-const uploading = ref(false)
-const uploadProgress = ref(0)
-const uploadedSize = ref(0)
-const totalSize = ref(0)
-const currentFileName = ref('')
-const uploadSpeed = ref('')
-const uploadResult = ref<{ success: boolean; message: string } | null>(null)
 
-// 重置状态
-const resetState = () => {
-  fileList.value = []
-  uploading.value = false
-  uploadProgress.value = 0
-  uploadedSize.value = 0
-  totalSize.value = 0
-  currentFileName.value = ''
-  uploadSpeed.value = ''
-  uploadResult.value = null
-}
+// 使用上传hooks
+const {
+  uploading,
+  uploadProgress,
+  uploadedSize,
+  totalSize,
+  currentFileName,
+  uploadSpeed,
+  resetState,
+  upload,
+  formatFileSize
+} = useXhrUpload()
 
 // 监听弹窗显示状态
-watch(() => props.show, (show) => {
+watch(showModal, (show) => {
   if (show) {
+    fileList.value = []
     resetState()
   }
 })
@@ -146,105 +124,33 @@ const handleBeforeUpload = (data: { file: UploadFileInfo }) => {
 
 // 自定义上传处理
 const handleCustomRequest = async (options: UploadCustomRequestOptions) => {
-  const { file, onProgress, onFinish, onError } = options
+  const { file, onFinish, onError } = options
 
   if (!file.file) {
     onError()
     return
   }
 
-  uploading.value = true
-  uploadResult.value = null
-  currentFileName.value = file.name || 'unknown'
-  totalSize.value = file.file.size
-
-  const startTime = Date.now()
-  let lastLoaded = 0
-  let lastTime = startTime
-
   try {
-    // 创建 FormData
-    const formData = new FormData()
-    formData.append('file', file.file)
-
-    // 创建 XMLHttpRequest 以便监听上传进度
-    const xhr = new XMLHttpRequest()
-
-    // 监听上传进度
-    xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) {
-        const progress = Math.round((event.loaded / event.total) * 100)
-        uploadProgress.value = progress
-        uploadedSize.value = event.loaded
-
-        // 计算上传速度
-        const currentTime = Date.now()
-        const timeDiff = currentTime - lastTime
-        if (timeDiff > 1000) { // 每秒更新一次速度
-          const sizeDiff = event.loaded - lastLoaded
-          const speedBps = sizeDiff / (timeDiff / 1000)
-          uploadSpeed.value = `${formatBytes(speedBps)}/s`
-          lastLoaded = event.loaded
-          lastTime = currentTime
-        }
-
-        onProgress({ percent: progress })
-      }
-    })
-
-    // 处理响应
-    xhr.addEventListener('load', () => {
-      if (xhr.status === 200) {
-        try {
-          const response = JSON.parse(xhr.responseText)
-          if (response.code === 0) {
-            uploadResult.value = { success: true, message: response.data?.message || '镜像导入成功' }
-            onFinish()
-            emit('success')
-          } else {
-            uploadResult.value = { success: false, message: response.msg || '导入失败' }
-            onError()
-          }
-        } catch (err) {
-          uploadResult.value = { success: false, message: '响应解析失败' }
-          onError()
-        }
-      } else {
-        uploadResult.value = { success: false, message: `上传失败 (${xhr.status})` }
+    await upload({
+      url: '/api/v1/images/import',
+      file: file.file,
+      getToken: () => settingStore.getToken(),
+      onSuccess: () => {
+        onFinish()
+        emit('success')
+        showModal.value = false
+      },
+      onError: () => {
         onError()
       }
-      uploading.value = false
     })
-
-    xhr.addEventListener('error', () => {
-      uploadResult.value = { success: false, message: '网络错误' }
-      uploading.value = false
-      onError()
-    })
-
-    // 获取认证token
-    const { getToken } = await import('@/common/axiosConfig')
-    const token = getToken()
-
-    // 发送请求
-    xhr.open('POST', '/api/v1/images/import')
-    if (token) {
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-    }
-    xhr.send(formData)
-
-  } catch (error: any) {
-    console.error('上传错误:', error)
-    uploadResult.value = { success: false, message: error.message || '上传失败' }
-    uploading.value = false
+  } catch (error) {
+    console.error('导入镜像失败:', error)
     onError()
   }
 }
 
-// 格式化文件大小
-const formatFileSize = (bytes: number): string => {
-  return formatBytes(bytes)
-}
 
 // 取消操作
 const handleCancel = () => {
@@ -252,24 +158,9 @@ const handleCancel = () => {
     showModal.value = false
   }
 }
-
-// 确认操作
-const handleConfirm = () => {
-  showModal.value = false
-}
 </script>
 
 <style scoped lang="less">
-.modal-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-
-  .header-icon {
-    color: var(--primary-color);
-  }
-}
-
 .import-content {
   .upload-area {
     text-align: center;
@@ -305,10 +196,6 @@ const handleConfirm = () => {
       text-align: center;
       margin-top: 8px;
     }
-  }
-
-  .upload-result {
-    margin-top: 24px;
   }
 }
 </style>

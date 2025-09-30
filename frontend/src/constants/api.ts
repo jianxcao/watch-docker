@@ -18,6 +18,7 @@ export const API_ENDPOINTS = {
   CONTAINER_STOP: (id: string) => `/containers/${id}/stop`,
   CONTAINER_DELETE: (id: string) => `/containers/${id}`,
   CONTAINER_EXPORT: (id: string) => `/containers/${id}/export`,
+  CONTAINER_IMPORT: '/containers/import',
 
   // 批量操作
   BATCH_UPDATE: '/updates/run',

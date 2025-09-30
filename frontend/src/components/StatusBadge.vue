@@ -34,7 +34,7 @@ const badgeType = computed(() => {
     return props.container.running ? 'success' : 'default'
   }
 
-  if (!props.container.running) return 'warning'
+  if (!props.container.running) {return 'warning'}
 
   switch (props.container.status) {
     case 'UpToDate':
@@ -56,7 +56,7 @@ const statusText = computed(() => {
     return props.container.running ? '运行中' : '已停止'
   }
 
-  if (!props.container.running) return '已停止'
+  if (!props.container.running) {return '已停止'}
 
   switch (props.container.status) {
     case 'UpToDate':
@@ -78,7 +78,7 @@ const statusIcon = computed(() => {
     return props.container.running ? PlayCircleOutline : StopCircleOutline
   }
 
-  if (!props.container.running) return MinusCircleOutline
+  if (!props.container.running) {return MinusCircleOutline}
 
   switch (props.container.status) {
     case 'UpToDate':
