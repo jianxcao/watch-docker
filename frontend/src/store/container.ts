@@ -1,8 +1,9 @@
 import { containerApi } from '@/common/api'
 import type { BatchUpdateResult, ContainerStatus } from '@/common/types'
-import { getGlobalStatsWebSocket, type ContainersCallback } from '@/hooks/useStatsWebSocket'
+import useStatsWebSocket from '@/hooks/useStatsWebSocket'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import statsEmitter from '@/evt/containerStats'
 
 export const useContainerStore = defineStore('container', () => {
   // 状态
@@ -12,7 +13,7 @@ export const useContainerStore = defineStore('container', () => {
   const batchUpdating = ref(false)
 
   // WebSocket 相关状态
-  const statsWebSocket = getGlobalStatsWebSocket()
+  const statsWebSocket = useStatsWebSocket()
   const wsConnected = computed(() => statsWebSocket.isConnected.value)
   const wsConnectionState = computed(() => statsWebSocket.connectionState.value)
 
@@ -177,25 +178,13 @@ export const useContainerStore = defineStore('container', () => {
   }
 
   // WebSocket 容器数据回调处理
-  const handleContainersUpdate: ContainersCallback = (newContainers: ContainerStatus[]) => {
+  const handleContainersUpdate = (newContainers: ContainerStatus[]) => {
     console.debug('WebSocket received containers update:', newContainers.length, 'containers')
     // 直接使用WebSocket接收到的完整容器数据，包括stats
     containers.value = newContainers
   }
 
-  // 方法：启动 WebSocket 统计监听
-  const startStatsWebSocket = () => {
-    console.debug('startStatsWebSocket')
-    statsWebSocket.addContainersCallback(handleContainersUpdate)
-    statsWebSocket.connect()
-  }
-
-  // 方法：停止 WebSocket 统计监听
-  const stopStatsWebSocket = () => {
-    console.debug('stopStatsWebSocket')
-    statsWebSocket.removeContainersCallback(handleContainersUpdate)
-    statsWebSocket.disconnect()
-  }
+  statsEmitter.on('containers', handleContainersUpdate)
 
   // 方法：导出容器
   const exportContainer = async (id: string): Promise<boolean> => {
@@ -254,8 +243,6 @@ export const useContainerStore = defineStore('container', () => {
     findContainerByName,
     isContainerUpdating,
     exportContainer,
-    startStatsWebSocket,
-    stopStatsWebSocket,
     statsWebSocket,
   }
 })

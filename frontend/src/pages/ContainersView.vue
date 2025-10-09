@@ -353,7 +353,7 @@ const handleRefresh = async () => {
     await appStore.checkHealth()
   }
   if (!containerStore.statsWebSocket.isConnected) {
-    containerStore.startStatsWebSocket()
+    containerStore.statsWebSocket.connect()
   }
   await containerStore.fetchContainers(true, true)
 }
@@ -385,7 +385,7 @@ const connectionStatusType = computed(() => {
 onMounted(async () => {
   containerStore.fetchContainers(true, true)
   // 启动 WebSocket 统计监听
-  containerStore.startStatsWebSocket()
+  containerStore.statsWebSocket.connect()
 })
 
 

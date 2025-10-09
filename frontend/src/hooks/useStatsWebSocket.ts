@@ -1,8 +1,8 @@
 import type { ContainerStats, ContainerStatus } from '@/common/types'
 import { useSettingStore } from '@/store/setting'
 import { useWebSocket } from '@vueuse/core'
-import { computed, ref } from 'vue'
-
+import { computed } from 'vue'
+import statsEmitter from '@/evt/containerStats'
 export interface StatsMessage {
   type: string
   data: {
@@ -12,20 +12,12 @@ export interface StatsMessage {
   timestamp: number
 }
 
-export type StatsCallback = (statsMap: Record<string, ContainerStats>) => void
-export type ContainersCallback = (containers: ContainerStatus[]) => void
-
 /**
  * 容器统计数据 WebSocket Composable
  * 基于 VueUse 的 useWebSocket 实现
  */
-export function useStatsWebSocket() {
+export default function useStatsWebSocket() {
   const settingStore = useSettingStore()
-
-  // 响应式状态
-  const statsData = ref<Record<string, ContainerStats>>({})
-  const containersData = ref<ContainerStatus[]>([])
-  const containersCallbacks = ref<Set<ContainersCallback>>(new Set())
 
   // 计算 WebSocket URL
   const wsUrl = computed(() => {
@@ -80,17 +72,7 @@ export function useStatsWebSocket() {
         const message: StatsMessage = JSON.parse(event.data)
 
         if (message.type === 'containers' && message.data.containers) {
-          // 更新容器数据
-          containersData.value = message.data.containers
-
-          // 通知所有容器回调函数
-          containersCallbacks.value.forEach((callback) => {
-            try {
-              callback(message.data.containers!)
-            } catch (error) {
-              console.error('容器数据回调执行失败:', error)
-            }
-          })
+          statsEmitter.emit('containers', message.data.containers)
         }
       } catch (error) {
         console.error('解析 WebSocket 消息失败:', error)
@@ -115,16 +97,6 @@ export function useStatsWebSocket() {
   // 是否已连接
   const isConnected = computed(() => status.value === 'OPEN')
 
-  // 添加容器数据回调
-  const addContainersCallback = (callback: ContainersCallback) => {
-    containersCallbacks.value.add(callback)
-  }
-
-  // 移除容器数据回调
-  const removeContainersCallback = (callback: ContainersCallback) => {
-    containersCallbacks.value.delete(callback)
-  }
-
   // 启动连接
   const connect = () => {
     if (isConnected.value) {
@@ -140,14 +112,15 @@ export function useStatsWebSocket() {
 
   // 断开连接
   const disconnect = () => {
-    containersCallbacks.value.clear()
     close()
   }
 
   // 重新连接
   const reconnect = () => {
     console.debug('reconnect')
-    disconnect()
+    if (status.value === 'OPEN') {
+      disconnect()
+    }
     setTimeout(() => {
       connect()
     }, 100)
@@ -158,39 +131,12 @@ export function useStatsWebSocket() {
     status,
     connectionState,
     isConnected,
-    statsData,
-    containersData,
     ws,
 
     // 方法
     connect,
     disconnect,
     reconnect,
-    addContainersCallback,
-    removeContainersCallback,
     send,
-  }
-}
-
-// 全局单例实例
-let globalStatsWebSocket: ReturnType<typeof useStatsWebSocket> | null = null
-
-/**
- * 获取全局 Stats WebSocket 实例
- */
-export function getGlobalStatsWebSocket() {
-  if (!globalStatsWebSocket) {
-    globalStatsWebSocket = useStatsWebSocket()
-  }
-  return globalStatsWebSocket
-}
-
-/**
- * 销毁全局 Stats WebSocket 实例
- */
-export function destroyGlobalStatsWebSocket() {
-  if (globalStatsWebSocket) {
-    globalStatsWebSocket.disconnect()
-    globalStatsWebSocket = null
   }
 }

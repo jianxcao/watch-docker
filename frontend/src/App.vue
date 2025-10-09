@@ -38,14 +38,14 @@ onMounted(async () => {
   Promise.all([
     containerStore.fetchContainers(true, false),
     imageStore.fetchImages(),
-    containerStore.startStatsWebSocket(),
+    containerStore.statsWebSocket.connect(),
   ])
   imageStore.startImagesPolling()
 })
 
 onUnmounted(() => {
   imageStore.stopImagesPolling()
-  containerStore.stopStatsWebSocket()
+  containerStore.statsWebSocket.disconnect()
 })
 
 
@@ -56,7 +56,7 @@ async function refresh() {
   containerStore.fetchContainers(true, false)
   imageStore.fetchImages()
   if (!containerStore.statsWebSocket.isConnected) {
-    containerStore.startStatsWebSocket()
+    containerStore.statsWebSocket.connect()
   }
 }
 
