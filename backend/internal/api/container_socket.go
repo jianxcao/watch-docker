@@ -54,7 +54,7 @@ func NewStatsWebSocketManager(docker *dockercli.Client, scanner *scanner.Scanner
 // Run 启动 WebSocket 管理器
 func (manager *StatsWebSocketManager) Run(ctx context.Context) {
 	logger.Logger.Info("WebSocket 管理器启动")
-	ticker := time.NewTicker(1100 * time.Millisecond)
+	ticker := time.NewTicker(2000 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {

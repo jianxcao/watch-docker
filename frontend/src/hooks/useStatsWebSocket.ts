@@ -25,7 +25,6 @@ export function useStatsWebSocket() {
   // 响应式状态
   const statsData = ref<Record<string, ContainerStats>>({})
   const containersData = ref<ContainerStatus[]>([])
-  const statsCallbacks = ref<Set<StatsCallback>>(new Set())
   const containersCallbacks = ref<Set<ContainersCallback>>(new Set())
 
   // 计算 WebSocket URL
@@ -43,14 +42,14 @@ export function useStatsWebSocket() {
   // 使用 VueUse 的 useWebSocket
   const { status, send, open, close, ws } = useWebSocket(wsUrl, {
     // 自动重连配置
-    // autoReconnect: {
-    //   retries: 5,
-    //   delay: 1000,
-    //   onFailed() {
-    //     console.error('WebSocket 重连失败，已达到最大重试次数')
-    //   },
-    // },
-    autoReconnect: false,
+    autoReconnect: {
+      retries: 5,
+      delay: 2000,
+      onFailed() {
+        console.error('WebSocket 重连失败，已达到最大重试次数')
+      },
+    },
+    // autoReconnect: false,
     // 心跳检测
     heartbeat: {
       message: 'ping',
@@ -92,36 +91,6 @@ export function useStatsWebSocket() {
               console.error('容器数据回调执行失败:', error)
             }
           })
-
-          // 为了向后兼容，提取stats数据并通知stats回调
-          const statsMap: Record<string, ContainerStats> = {}
-          message.data.containers.forEach((container) => {
-            if (container.stats) {
-              statsMap[container.id] = container.stats
-            }
-          })
-
-          if (Object.keys(statsMap).length > 0) {
-            statsData.value = statsMap
-            statsCallbacks.value.forEach((callback) => {
-              try {
-                callback(statsMap)
-              } catch (error) {
-                console.error('统计数据回调执行失败:', error)
-              }
-            })
-          }
-        } else if (message.type === 'stats' && message.data.stats) {
-          // 兼容旧的stats消息格式
-          statsData.value = message.data.stats
-
-          statsCallbacks.value.forEach((callback) => {
-            try {
-              callback(message.data.stats!)
-            } catch (error) {
-              console.error('统计数据回调执行失败:', error)
-            }
-          })
         }
       } catch (error) {
         console.error('解析 WebSocket 消息失败:', error)
@@ -145,16 +114,6 @@ export function useStatsWebSocket() {
 
   // 是否已连接
   const isConnected = computed(() => status.value === 'OPEN')
-
-  // 添加统计数据回调
-  const addStatsCallback = (callback: StatsCallback) => {
-    statsCallbacks.value.add(callback)
-  }
-
-  // 移除统计数据回调
-  const removeStatsCallback = (callback: StatsCallback) => {
-    statsCallbacks.value.delete(callback)
-  }
 
   // 添加容器数据回调
   const addContainersCallback = (callback: ContainersCallback) => {
@@ -181,7 +140,6 @@ export function useStatsWebSocket() {
 
   // 断开连接
   const disconnect = () => {
-    statsCallbacks.value.clear()
     containersCallbacks.value.clear()
     close()
   }
@@ -208,8 +166,6 @@ export function useStatsWebSocket() {
     connect,
     disconnect,
     reconnect,
-    addStatsCallback,
-    removeStatsCallback,
     addContainersCallback,
     removeContainersCallback,
     send,

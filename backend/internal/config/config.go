@@ -168,7 +168,7 @@ func defaults() *Config {
 	return &Config{
 		Server: ServerConfig{Addr: ":8080"},
 		Scan: ScanConfig{
-			Cron:               "",
+			Cron:               "0 0 */2 * * *",
 			Concurrency:        3,
 			CacheTTL:           DurationMinutes(10 * time.Minute),
 			IsUpdate:           true,
