@@ -20,6 +20,13 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
+	// 增加握手超时时间，Safari 需要更长的握手时间
+	HandshakeTimeout: 10 * time.Second,
+	// 增加读写缓冲区大小，提高兼容性
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
+	// 启用压缩，减少数据传输大小
+	EnableCompression: true,
 }
 
 // Client WebSocket 客户端连接
@@ -214,16 +221,27 @@ func (manager *StatsWebSocketManager) broadcastMessage(message []byte) {
 
 // HandleWebSocket 处理 WebSocket 连接
 func (manager *StatsWebSocketManager) HandleWebSocket(c *gin.Context) {
+	// 设置响应头，提高 Safari 兼容性
+	c.Writer.Header().Set("Sec-WebSocket-Version", "13")
+
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		logger.Logger.Error(fmt.Sprintf("WebSocket 升级失败: %v", err))
 		return
 	}
 
+	// 设置连接参数，提高 Safari 兼容性
+	conn.SetReadLimit(1024 * 1024) // 1MB
+	conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		return nil
+	})
+
 	// 创建客户端
 	client := &Client{
 		conn: conn,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, 512), // 增加缓冲区大小
 		hub:  manager,
 	}
 
@@ -237,7 +255,8 @@ func (manager *StatsWebSocketManager) HandleWebSocket(c *gin.Context) {
 
 // writePump 处理向 WebSocket 连接写入消息
 func (c *Client) writePump() {
-	ticker := time.NewTicker(54 * time.Second)
+	// Safari 建议使用 30 秒的心跳间隔
+	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
@@ -246,7 +265,8 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			// 增加写入超时时间，Safari 可能需要更长的处理时间
+			c.conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if !ok {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
@@ -258,9 +278,11 @@ func (c *Client) writePump() {
 			}
 
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			c.conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			// logger.Logger.Debug("WebSocket 写入心跳包")
+			// 发送 Ping 消息，Safari 会自动回复 Pong
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				logger.Logger.Warn(fmt.Sprintf("WebSocket Ping 发送失败: %v", err))
 				return
 			}
 		}
@@ -274,20 +296,25 @@ func (c *Client) readPump() {
 		c.conn.Close()
 	}()
 
-	c.conn.SetReadLimit(512)
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	// 增加读取限制和超时时间，提高 Safari 兼容性
+	c.conn.SetReadLimit(1024 * 1024) // 1MB
+	c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		// Safari 的 Pong 响应处理
+		c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		// logger.Logger.Debug("收到 Pong 响应")
 		return nil
 	})
 
 	for {
 		_, _, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 				logger.Logger.Warn(fmt.Sprintf("WebSocket 读取错误: %v", err))
 			}
 			break
 		}
+		// 收到任何消息都重置读取超时
+		c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 	}
 }

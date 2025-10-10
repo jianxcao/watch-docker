@@ -41,13 +41,9 @@ export default function useStatsWebSocket() {
         console.error('WebSocket 重连失败，已达到最大重试次数')
       },
     },
-    // autoReconnect: false,
-    // 心跳检测
-    heartbeat: {
-      message: 'ping',
-      interval: 30000, // 30秒心跳
-      pongTimeout: 5000, // 5秒等待pong响应
-    },
+    // Safari 兼容性：禁用客户端心跳，依赖服务端的 Ping/Pong 机制
+    // Safari 不太支持客户端主动发送的文本心跳消息
+    heartbeat: false,
     // 立即连接
     immediate: false,
     // URL变化时自动重连
@@ -55,12 +51,20 @@ export default function useStatsWebSocket() {
     // 页面卸载时自动关闭
     autoClose: true,
     // 连接成功回调
-    onConnected() {
+    onConnected(ws) {
       console.log('Stats WebSocket 连接已建立')
+      // Safari 兼容性：设置二进制类型
+      if (ws) {
+        ws.binaryType = 'arraybuffer'
+      }
     },
     // 连接断开回调
     onDisconnected(_, event) {
       console.log('Stats WebSocket 连接已断开:', event.code, event.reason)
+      // 1006 表示异常关闭，通常是网络问题或服务端问题
+      if (event.code === 1006) {
+        console.warn('WebSocket 异常关闭 (1006)，可能是网络问题或服务端问题')
+      }
     },
     // 连接错误回调
     onError(_, error) {
