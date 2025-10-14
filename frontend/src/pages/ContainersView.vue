@@ -23,7 +23,7 @@
         </n-button>
       </n-dropdown>
       <!-- 搜索 -->
-      <n-input v-model:value="searchKeyword" placeholder="搜索容器名称或镜像" style="width: 200px;" clearable>
+      <n-input v-model:value="searchKeyword" placeholder="名称、镜像或端口" clearable class="lg:w-[400px]!">
         <template #prefix>
           <n-icon>
             <SearchOutline />
@@ -250,10 +250,19 @@ const filteredContainers = computed(() => {
   // 搜索过滤
   if (searchKeyword.value) {
     const keyword = searchKeyword.value.toLowerCase()
-    containers = containers.filter(container =>
-      container.name.toLowerCase().includes(keyword) ||
-      container.image.toLowerCase().includes(keyword)
-    )
+    containers = containers.filter(container => {
+      // 搜索容器名称或镜像
+      const matchesNameOrImage =
+        container.name.toLowerCase().includes(keyword) ||
+        container.image.toLowerCase().includes(keyword)
+
+      // 搜索端口（支持搜索公共端口和私有端口）
+      const matchesPort = container.ports?.some(port =>
+        port.publicPort?.toString().includes(keyword) ||
+        port.privatePort?.toString().includes(keyword)
+      )
+      return matchesNameOrImage || matchesPort
+    })
   }
 
   // 状态过滤

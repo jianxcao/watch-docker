@@ -181,7 +181,18 @@ export const useContainerStore = defineStore('container', () => {
   const handleContainersUpdate = (newContainers: ContainerStatus[]) => {
     console.debug('WebSocket received containers update:', newContainers.length, 'containers')
     // 直接使用WebSocket接收到的完整容器数据，包括stats
-    containers.value = newContainers
+    const mapContainers = new Map<string, ContainerStatus>()
+    newContainers.forEach((container) => {
+      mapContainers.set(container.id, container)
+    })
+    const oldContainers = [...containers.value]
+    containers.value = oldContainers.map((container) => {
+      const newContainer = mapContainers.get(container.id)
+      if (newContainer) {
+        return newContainer
+      }
+      return container
+    })
   }
 
   statsEmitter.on('containers', handleContainersUpdate)
