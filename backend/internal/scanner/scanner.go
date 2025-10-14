@@ -21,6 +21,7 @@ type ContainerStatus struct {
 	RemoteDigest  string                    `json:"remoteDigest"`
 	Status        string                    `json:"status"` // UpToDate | UpdateAvailable | Skipped | Error
 	Skipped       bool                      `json:"skipped"`
+	SkippedUpdate bool                      `json:"skippedUpdate"`
 	SkipReason    string                    `json:"skipReason"`
 	Labels        map[string]string         `json:"labels"`
 	LastCheckedAt time.Time                 `json:"lastCheckedAt"`
@@ -101,6 +102,9 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				st.Status = "Skipped"
 				result[j.idx] = st
 				continue
+			}
+			if dec.SkippedUpdate {
+				st.SkippedUpdate = true
 			}
 			st.CurrentDigest = ct.RepoDigests
 			var indexDigest, childDigest string

@@ -160,21 +160,26 @@ func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
 		}
 	}
 
-	if !cfg.Scan.IsUpdate {
-		return
-	}
-
 	var updateStatuses []scanner.ContainerStatus = make([]scanner.ContainerStatus, 0)
 	for _, st := range statuses {
-		if st.Skipped || st.Status != "UpdateAvailable" {
+		if st.Skipped || st.SkippedUpdate || st.Status != "UpdateAvailable" {
 			continue
 		}
 		updateStatuses = append(updateStatuses, st)
 	}
 	if len(updateStatuses) == 0 {
-		s.logger.Info("没有需要更新的容器")
+		if cfg.Scan.IsUpdate {
+			s.logger.Info("没有需要更新的容器")
+		} else {
+			s.logger.Warn("没有需要更新的容器, 更新开关关闭")
+		}
 		return
 	}
+
+	if !cfg.Scan.IsUpdate {
+		return
+	}
+
 	s.logger.Info("开始执行批量更新任务")
 	for _, st := range updateStatuses {
 		uctx, cancel := context.WithTimeout(ctx, 10*time.Minute)

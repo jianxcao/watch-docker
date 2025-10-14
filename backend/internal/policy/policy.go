@@ -19,6 +19,8 @@ type Decision struct {
 	Reason string
 	// Force 为 true 时表示外部标记了强制更新（如 label），即便命中某些跳过条件也应继续
 	Force bool
+	// SkippedUpdate 表示此次应跳过更新动作， 但不跳过检测
+	SkippedUpdate bool
 }
 
 type Input struct {
@@ -52,6 +54,9 @@ func Evaluate(in Input) Decision {
 	// 1) 显式控制：label 强制跳过或强制更新
 	if val := strings.ToLower(in.Labels["watchdocker.skip"]); val == "true" {
 		return Decision{Skipped: true, Reason: "label skip"}
+	}
+	if val := strings.ToLower(in.Labels["watchdocker.skipUpdate"]); val == "true" {
+		return Decision{SkippedUpdate: true, Reason: "label skip update"}
 	}
 	// force update even if pinned
 	if val := strings.ToLower(in.Labels["watchdocker.force"]); val == "true" {

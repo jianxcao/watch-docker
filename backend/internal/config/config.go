@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -199,11 +200,13 @@ func Load(path string) (*Config, error) {
 	v.SetEnvPrefix("WATCH")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
-
-	if err := v.ReadInConfig(); err == nil {
+	err := v.ReadInConfig()
+	if err == nil {
 		if err := v.Unmarshal(&cfg); err != nil {
 			return nil, fmt.Errorf("unmarshal yaml: %w", err)
 		}
+	} else {
+		logger.Logger.Error("read config file failed", logger.ZapErr(err))
 	}
 
 	if err := validate(cfg); err != nil {
