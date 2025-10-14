@@ -149,10 +149,6 @@ labels:
 # 强制更新（即使是固定版本）
 labels:
   - "watchdocker.force=true"
-
-# 自定义更新策略
-labels:
-  - "watchdocker.policy=manual"
 ```
 
 ## 📚 API 文档
