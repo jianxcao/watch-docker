@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
-	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -206,7 +205,7 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("unmarshal yaml: %w", err)
 		}
 	} else {
-		logger.Logger.Error("read config file failed", logger.ZapErr(err))
+		fmt.Println("read config file failed", err)
 	}
 
 	if err := validate(cfg); err != nil {
