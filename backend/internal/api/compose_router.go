@@ -18,6 +18,7 @@ func (s *Server) setupComposeRoutes(protected *gin.RouterGroup) {
 	protected.POST("/compose/restart", s.handleRestartComposeProject())
 	protected.DELETE("/compose/delete", s.handleDeleteComposeProject())
 	protected.POST("/compose/create", s.handleCreateComposeProject())
+	protected.GET("/compose/logs/ws", s.handleComposeLogsWebSocket())
 }
 
 func (s *Server) handleListComposeProjects() gin.HandlerFunc {

@@ -1,7 +1,7 @@
-import { h } from 'vue'
 import { useDialog, useMessage } from 'naive-ui'
 import { useComposeStore } from '@/store/compose'
 import type { ComposeProject, ComposeAction } from '@/common/types'
+import ComposeLogsModal from '@/components/ComposeLogsModal.vue'
 
 export const useCompose = () => {
   const dialog = useDialog()
@@ -96,45 +96,6 @@ export const useCompose = () => {
     }
   }
 
-  // 查看项目日志
-  const handleViewLogs = async (project: ComposeProject, lines = 100) => {
-    try {
-      const logs = await composeStore.getProjectLogs(project.name, lines)
-
-      // 显示日志对话框
-      dialog.info({
-        title: `项目日志 - ${project.name}`,
-        content: () => {
-          return h(
-            'pre',
-            {
-              style: {
-                maxHeight: '400px',
-                overflow: 'auto',
-                background: '#1e1e1e',
-                color: '#d4d4d4',
-                padding: '16px',
-                borderRadius: '4px',
-                fontSize: '12px',
-                fontFamily: 'Monaco, Consolas, "Courier New", monospace',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-all',
-              },
-            },
-            logs || '暂无日志'
-          )
-        },
-        style: {
-          width: '80vw',
-          maxWidth: '800px',
-        },
-        positiveText: '关闭',
-      })
-    } catch (error) {
-      console.error('获取日志失败:', error)
-    }
-  }
-
   // 刷新项目列表
   const handleRefresh = async () => {
     try {
@@ -170,7 +131,6 @@ export const useCompose = () => {
     handleRestart,
     handleCreate,
     handleDelete,
-    handleViewLogs,
     handleRefresh,
 
     // 工具方法
@@ -178,5 +138,7 @@ export const useCompose = () => {
 
     // 通用操作
     executeAction,
+
+    ComposeLogsModal,
   }
 }

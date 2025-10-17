@@ -54,7 +54,7 @@
           'grid-cols-4': isDesktopLarge,
         }">
           <ComposeCard v-for="project in filteredProjects" :key="project.name" :project="project"
-            :loading="composeStore.isProjectOperating(project.name).value" />
+            :loading="composeStore.isProjectOperating(project.name).value" @log="() => handleViewLogs(project)" />
         </div>
       </n-spin>
     </div>
@@ -83,6 +83,9 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- 日志弹窗 -->
+    <ComposeLogsModal v-model:show="showLogsModal" :project="currentProject" />
   </div>
 </template>
 
@@ -91,6 +94,7 @@ import { useCompose } from '@/hooks/useCompose'
 import { useResponsive } from '@/hooks/useResponsive'
 import { useComposeStore } from '@/store/compose'
 import ComposeCard from '@/components/ComposeCard.vue'
+import ComposeLogsModal from '@/components/ComposeLogsModal.vue'
 import {
   AppsOutline,
   FunnelOutline,
@@ -106,6 +110,10 @@ import {
 import { computed, onMounted, ref } from 'vue'
 import { NIcon, type DropdownOption } from 'naive-ui'
 import { renderIcon } from '@/common/utils'
+import type { ComposeProject } from '@/common/types'
+const showLogsModal = ref(false)
+const currentProject = ref<ComposeProject | null>(null)
+
 
 const composeStore = useComposeStore()
 const {
@@ -118,6 +126,18 @@ const searchKeyword = ref('')
 const statusFilter = ref<string>('')
 const sortBy = ref<string>('name')
 const sortOrder = ref<'asc' | 'desc'>('asc')
+
+const handleViewLogs = (project: ComposeProject) => {
+  console.log('handleViewLogs', project)
+  currentProject.value = project
+  showLogsModal.value = true
+}
+
+watchEffect(() => {
+  if (!showLogsModal.value) {
+    currentProject.value = null
+  }
+})
 
 // 状态筛选菜单选项
 const statusFilterMenuOptions = computed<DropdownOption[]>(() => [

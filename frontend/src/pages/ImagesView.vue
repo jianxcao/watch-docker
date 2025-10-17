@@ -213,7 +213,7 @@ const filteredImages = computed(() => {
   if (statusFilter.value) {
     images = images.filter(image => {
       const isUse = imageHooks.isImageInUse(image)
-      console.debug('isUse', image.repoTags, isUse)
+      // console.debug('isUse', image.repoTags, isUse)
       switch (statusFilter.value) {
         case 'in-use':
           return isUse

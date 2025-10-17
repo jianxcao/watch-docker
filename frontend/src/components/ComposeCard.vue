@@ -128,7 +128,6 @@ const {
   handleStop,
   handleRestart,
   handleDelete,
-  handleViewLogs,
   handleCreate
 } = useCompose()
 
@@ -136,6 +135,8 @@ interface Props {
   project: ComposeProject
   loading?: boolean
 }
+
+const emit = defineEmits(["log"])
 
 const props = defineProps<Props>()
 const settingStore = useSettingStore()
@@ -224,8 +225,8 @@ const handleMenuSelect = (key: string) => {
     case 'delete':
       handleDelete(props.project)
       break
-    case 'logs':
-      handleViewLogs(props.project)
+    case 'view-logs':
+      emit("log")
       break
     case 'create':
       handleCreate(props.project)
@@ -293,6 +294,7 @@ const handleMenuSelect = (key: string) => {
       &.logo-created_stack {
         background: linear-gradient(135deg, rgba(225, 113, 0, 1) 0%, rgba(187, 77, 0, 1) 100%);
         box-shadow: 0px 4px 6px -4px rgba(254, 154, 0, 0.2), 0px 10px 15px -3px rgba(254, 154, 0, 0.2);
+
       }
     }
 
