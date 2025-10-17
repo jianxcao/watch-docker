@@ -28,16 +28,18 @@ import (
 func main() {
 
 	configPath := path.Join(conf.EnvCfg.CONFIG_PATH, conf.EnvCfg.CONFIG_FILE)
-
 	// init logger first
-
+	log, err := logger.NewLogger("info", "")
+	if err != nil {
+		panic(fmt.Errorf("init logger: %w", err))
+	}
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		panic(fmt.Errorf("load config: %w", err))
 	}
-	log, err := logger.NewLogger(cfg.Logging.Level, "")
-	if err != nil {
-		panic(fmt.Errorf("init logger: %w", err))
+	// set log level
+	if err := logger.SetLogLevel(cfg.Logging.Level); err != nil {
+		panic(fmt.Errorf("set log level: %w", err))
 	}
 	defer log.Sync() //nolint:errcheck
 	log.Info("starting watch-docker", zap.String("configPath", configPath))
