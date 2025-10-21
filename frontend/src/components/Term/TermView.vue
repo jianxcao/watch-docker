@@ -9,6 +9,7 @@ import '@xterm/xterm/css/xterm.css'
 import { onMounted, ref } from 'vue'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { FitAddon } from '@xterm/addon-fit'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { useTheme as useTermTheme } from './config'
 import { useSettingStore } from '@/store/setting'
@@ -55,6 +56,7 @@ let fitAddon: FitAddon | undefined = new FitAddon()
 let webLinksAddon: WebLinksAddon | undefined = new WebLinksAddon()
 let webglAddon: WebglAddon | undefined = new WebglAddon()
 let clipboardAddon: ClipboardAddon | undefined = new ClipboardAddon()
+let unicode11Addon: Unicode11Addon | undefined = new Unicode11Addon()
 // 初始化终端
 const initTerminal = () => {
   if (!terminalRef.value || isCleanedUp.value) {
@@ -74,13 +76,16 @@ const initTerminal = () => {
       // 优化触摸滚动体验
       smoothScrollDuration: 0, // 启用平滑滚动，提供惯性效果
       allowTransparency: true,
+      macOptionClickForcesSelection: true,
     },
     props.config,
+    {
+      allowProposedApi: true,
+    },
   )
 
   // 创建终端实例
   terminal.value = new Terminal(config)
-
   watchEffect(() => {
     if (terminal.value) {
       terminal.value.options.theme = termTheme
@@ -94,7 +99,9 @@ const initTerminal = () => {
   terminal.value.loadAddon(clipboardAddon!)
   terminal.value.loadAddon(webLinksAddon!)
   terminal.value.loadAddon(fitAddon!)
-
+  terminal.value.loadAddon(unicode11Addon!)
+  terminal.value.unicode.activeVersion = '11'
+  terminal.value?.textarea?.setAttribute('enterkeyhint', 'send')
   // 自适应大小
   if (props.autoFit) {
     fitAddon?.fit()
@@ -111,7 +118,6 @@ const initTerminal = () => {
     })
     resizeObserver.value.observe(terminalRef.value)
   }
-
   // 监听用户输入（用于交互式终端）
   if (!config.disableStdin) {
     terminal.value.onData((data) => {
@@ -222,6 +228,7 @@ const cleanup = () => {
     webLinksAddon = undefined
     webglAddon = undefined
     clipboardAddon = undefined
+    unicode11Addon = undefined
   } catch (error) {
     console.error('Failed to cleanup terminal:', error)
   }
@@ -263,7 +270,6 @@ defineExpose({
 
   :deep(.xterm-viewport) {
     .scrollbar();
-    z-index: 1200;
     // 启用硬件加速
     transform: translateZ(0);
     will-change: scroll-position;

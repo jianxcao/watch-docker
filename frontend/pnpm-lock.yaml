@@ -27,20 +27,23 @@ importers:
         specifier: ^13.9.0
         version: 13.9.0(vue@3.5.22(typescript@5.8.3))
       '@xterm/addon-clipboard':
-        specifier: ^0.1.0
-        version: 0.1.0(@xterm/xterm@5.5.0)
+        specifier: 0.2.0-beta.117
+        version: 0.2.0-beta.117(@xterm/xterm@5.6.0-beta.134)
       '@xterm/addon-fit':
-        specifier: ^0.10.0
-        version: 0.10.0(@xterm/xterm@5.5.0)
+        specifier: 0.11.0-beta.134
+        version: 0.11.0-beta.134(@xterm/xterm@5.6.0-beta.134)
+      '@xterm/addon-unicode11':
+        specifier: ^0.8.0
+        version: 0.8.0(@xterm/xterm@5.6.0-beta.134)
       '@xterm/addon-web-links':
         specifier: ^0.11.0
-        version: 0.11.0(@xterm/xterm@5.5.0)
+        version: 0.11.0(@xterm/xterm@5.6.0-beta.134)
       '@xterm/addon-webgl':
-        specifier: ^0.18.0
-        version: 0.18.0(@xterm/xterm@5.5.0)
+        specifier: 0.19.0-beta.134
+        version: 0.19.0-beta.134(@xterm/xterm@5.6.0-beta.134)
       '@xterm/xterm':
-        specifier: ^5.5.0
-        version: 5.5.0
+        specifier: 5.6.0-beta.134
+        version: 5.6.0-beta.134
       axios:
         specifier: ^1.12.2
         version: 1.12.2
@@ -124,7 +127,7 @@ importers:
         specifier: ^28.8.0
         version: 28.8.0(@babel/parser@7.28.4)(vue@3.5.22(typescript@5.8.3))
       vite:
-        specifier: npm:rolldown-vite@^7.1.19
+        specifier: npm:rolldown-vite@latest
         version: rolldown-vite@7.1.19(@types/node@24.9.1)(jiti@2.6.1)(less@4.4.2)(terser@5.44.0)
       vite-plugin-pwa:
         specifier: ^1.1.0
@@ -1359,13 +1362,18 @@ packages:
     peerDependencies:
       vue: ^3.5.0
 
-  '@xterm/addon-clipboard@0.1.0':
-    resolution: {integrity: sha512-zdoM7p53T5sv/HbRTyp4hY0kKmEQ3MZvAvEtiXqNIHc/JdpqwByCtsTaQF5DX2n4hYdXRPO4P/eOS0QEhX1nPw==}
+  '@xterm/addon-clipboard@0.2.0-beta.117':
+    resolution: {integrity: sha512-/d7qiUAwHmlDn1V+ZnR8EZRcSzpyuyATQ/3h0xhVn7zIPusEtj+Od3WRcu1grTO1AiUg+CUls6is5ILHMDXLRg==}
     peerDependencies:
-      '@xterm/xterm': ^5.4.0
+      '@xterm/xterm': ^5.6.0-beta.134
 
-  '@xterm/addon-fit@0.10.0':
-    resolution: {integrity: sha512-UFYkDm4HUahf2lnEyHvio51TNGiLK66mqP2JoATy7hRZeXaGMRDr00JiSF7m63vR5WKATF605yEggJKsw0JpMQ==}
+  '@xterm/addon-fit@0.11.0-beta.134':
+    resolution: {integrity: sha512-2P6ONdURsTWasNMfou6gjKtwgtEyQQDHyEwhx/q0SJqtkzyV5rWclGF3SXNI1eQq26okj1NonOIHXWDOSjfWJA==}
+    peerDependencies:
+      '@xterm/xterm': ^5.6.0-beta.134
+
+  '@xterm/addon-unicode11@0.8.0':
+    resolution: {integrity: sha512-LxinXu8SC4OmVa6FhgwsVCBZbr8WoSGzBl2+vqe8WcQ6hb1r6Gj9P99qTNdPiFPh4Ceiu2pC8xukZ6+2nnh49Q==}
     peerDependencies:
       '@xterm/xterm': ^5.0.0
 
@@ -1374,13 +1382,13 @@ packages:
     peerDependencies:
       '@xterm/xterm': ^5.0.0
 
-  '@xterm/addon-webgl@0.18.0':
-    resolution: {integrity: sha512-xCnfMBTI+/HKPdRnSOHaJDRqEpq2Ugy8LEj9GiY4J3zJObo3joylIFaMvzBwbYRg8zLtkO0KQaStCeSfoaI2/w==}
+  '@xterm/addon-webgl@0.19.0-beta.134':
+    resolution: {integrity: sha512-io8cTCZR1Q5Cm9efx8vTpTX70zmMecmeVDUAZBEkGGYGk5C3x67rHgiKrhJaw9q5VijtCwP8EnVyCtshOQyIfw==}
     peerDependencies:
-      '@xterm/xterm': ^5.0.0
+      '@xterm/xterm': ^5.6.0-beta.134
 
-  '@xterm/xterm@5.5.0':
-    resolution: {integrity: sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A==}
+  '@xterm/xterm@5.6.0-beta.134':
+    resolution: {integrity: sha512-giuhmXOqIjw7UIT++jqznzLVPc9bKJe1Hb/KxZCd+AQvonDQ+bNcW6gS6X5UPVL0IFGwVPPihNsK+5UtT96r+w==}
 
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
@@ -4754,24 +4762,28 @@ snapshots:
     dependencies:
       vue: 3.5.22(typescript@5.8.3)
 
-  '@xterm/addon-clipboard@0.1.0(@xterm/xterm@5.5.0)':
+  '@xterm/addon-clipboard@0.2.0-beta.117(@xterm/xterm@5.6.0-beta.134)':
     dependencies:
-      '@xterm/xterm': 5.5.0
+      '@xterm/xterm': 5.6.0-beta.134
       js-base64: 3.7.8
 
-  '@xterm/addon-fit@0.10.0(@xterm/xterm@5.5.0)':
+  '@xterm/addon-fit@0.11.0-beta.134(@xterm/xterm@5.6.0-beta.134)':
     dependencies:
-      '@xterm/xterm': 5.5.0
+      '@xterm/xterm': 5.6.0-beta.134
 
-  '@xterm/addon-web-links@0.11.0(@xterm/xterm@5.5.0)':
+  '@xterm/addon-unicode11@0.8.0(@xterm/xterm@5.6.0-beta.134)':
     dependencies:
-      '@xterm/xterm': 5.5.0
+      '@xterm/xterm': 5.6.0-beta.134
 
-  '@xterm/addon-webgl@0.18.0(@xterm/xterm@5.5.0)':
+  '@xterm/addon-web-links@0.11.0(@xterm/xterm@5.6.0-beta.134)':
     dependencies:
-      '@xterm/xterm': 5.5.0
+      '@xterm/xterm': 5.6.0-beta.134
 
-  '@xterm/xterm@5.5.0': {}
+  '@xterm/addon-webgl@0.19.0-beta.134(@xterm/xterm@5.6.0-beta.134)':
+    dependencies:
+      '@xterm/xterm': 5.6.0-beta.134
+
+  '@xterm/xterm@5.6.0-beta.134': {}
 
   acorn-jsx@5.3.2(acorn@8.15.0):
     dependencies:

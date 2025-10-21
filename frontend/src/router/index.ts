@@ -53,6 +53,11 @@ const router = createRouter({
           component: () => import('@/pages/LogsPageView.vue'),
           meta: { title: '日志', requiresAuth: true, layoutClass: 'layout-logs' },
         },
+        {
+          path: '/terminal',
+          component: () => import('@/pages/TerminalView.vue'),
+          meta: { title: '终端', requiresAuth: true, layoutClass: 'layout-terminal' },
+        },
       ],
     },
 

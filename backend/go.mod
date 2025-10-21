@@ -4,6 +4,7 @@ go 1.25.1
 
 require (
 	github.com/blang/semver/v4 v4.0.0
+	github.com/creack/pty v1.1.24
 	github.com/distribution/reference v0.6.0
 	github.com/docker/docker v28.4.0+incompatible
 	github.com/gin-gonic/gin v1.10.1

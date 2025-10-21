@@ -46,7 +46,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	cfg := config.Get()
 	var composeClient *composecli.Client
 	if cfg.Compose.Enabled {
-		composeClient = composecli.NewClient(docker.GetDockerClient(), cfg.Compose.ProjectPaths)
+		composeClient = composecli.NewClient(docker.GetDockerClient())
 	}
 
 	s := &Server{
@@ -89,6 +89,9 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.GET("/config", s.handleGetConfig())
 		protected.POST("/config", s.handleSaveConfig())
 		protected.GET("/logs", s.handleLogStream)
+
+		// Shell WebSocket
+		protected.GET("/shell", s.handleShellWebSocket())
 	}
 	s.setupStaticRoutes(r)
 
@@ -227,7 +230,8 @@ func (s *Server) handleLogout() gin.HandlerFunc {
 func (s *Server) handleAuthStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
-			"authEnabled": auth.IsAuthEnabled(),
+			"authEnabled":       auth.IsAuthEnabled(),
+			"isOpenDockerShell": conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
 		}))
 	}
 }

@@ -12,9 +12,12 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   build: {
     outDir: 'dist',
+    // 生成 sourcemap（包含第三方库）
+    sourcemap: true,
     rollupOptions: {
       output: {
-        sourcemap: true,
+        // 不忽略任何文件，让所有 sourcemap 都可见
+        sourcemapIgnoreList: () => false,
         advancedChunks: {
           groups: [
             {

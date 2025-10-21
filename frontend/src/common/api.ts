@@ -24,7 +24,8 @@ export const authApi = {
   logout: () => axios.post<{ message: string }>(API_ENDPOINTS.LOGOUT),
 
   // 检查身份验证状态
-  checkAuthStatus: () => axios.get<{ authEnabled: boolean }>(API_ENDPOINTS.AUTH_STATUS),
+  checkAuthStatus: () =>
+    axios.get<{ authEnabled: boolean; isOpenDockerShell: boolean }>(API_ENDPOINTS.AUTH_STATUS),
 
   // 获取系统信息
   getInfo: () => axios.get<any>(API_ENDPOINTS.INFO),

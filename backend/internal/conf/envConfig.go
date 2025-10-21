@@ -9,10 +9,12 @@ import (
 type EnvConfig struct {
 	CONFIG_PATH          string `default:"/config"`
 	CONFIG_FILE          string `default:"config.yaml"`
-	VERSION_WATCH_DOCKER string `default:"v0.0.4"`
+	VERSION_WATCH_DOCKER string `default:"v0.0.5"`
 	USER_NAME            string `default:"admin"`
 	USER_PASSWORD        string `default:"admin"`
 	STATIC_DIR           string `default:"/app/static"`
+	IS_OPEN_DOCKER_SHELL bool   `default:"false"`
+	APP_PATH             string `default:""`
 }
 
 func NewEnvConfig() *EnvConfig {

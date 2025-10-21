@@ -1,6 +1,6 @@
 services:
   watch-docker:
-    image: jianxcao/watch-docker:latest 
+    image: jianxcao/watch-docker:latest
     container_name: watch-docker
     hostname: watch-docker
     # 自己无法更新自己，会死求的
@@ -10,8 +10,12 @@ services:
       - "8080:8080"
     volumes:
       - /volume1/watch-docker:/config
+      # 放置 docker yaml文件的目录，必须左右 2 侧一样
+      - /volume1/docker:/volume1/docker
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
+      # 放置 docker yaml文件的目录
+      - APP_PATH=/volume1/docker
       - TZ=Asia/Shanghai
       - USER_NAME=admin
       - USER_PASSWORD=admin

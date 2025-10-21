@@ -126,14 +126,12 @@ type NotificationConfig struct {
 
 // ComposeConfig Docker Compose 相关配置
 // enabled: 是否启用 Compose 功能
-// projectPaths: 项目扫描路径
 // scanInterval: 扫描间隔(秒)
 // logLines: 默认日志行数
 type ComposeConfig struct {
-	Enabled      bool     `mapstructure:"enabled" json:"enabled"`
-	ProjectPaths []string `mapstructure:"projectPaths" json:"projectPaths"`
-	ScanInterval int      `mapstructure:"scanInterval" json:"scanInterval"`
-	LogLines     int      `mapstructure:"logLines" json:"logLines"`
+	Enabled      bool `mapstructure:"enabled" json:"enabled"`
+	ScanInterval int  `mapstructure:"scanInterval" json:"scanInterval"`
+	LogLines     int  `mapstructure:"logLines" json:"logLines"`
 }
 
 // Config 顶层配置聚合
@@ -200,7 +198,6 @@ func defaults() *Config {
 		Notify:  NotificationConfig{Method: http.MethodGet, IsEnable: true},
 		Compose: ComposeConfig{
 			Enabled:      true,
-			ProjectPaths: []string{},
 			ScanInterval: 30,
 			LogLines:     100,
 		},

@@ -11,54 +11,52 @@ import (
 	"strings"
 
 	"github.com/docker/docker/client"
+	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
 )
 
 type Client struct {
-	docker       *client.Client
-	projectPaths []string
+	docker *client.Client
 }
 
-func NewClient(docker *client.Client, projectPaths []string) *Client {
+func NewClient(docker *client.Client) *Client {
 	return &Client{
-		docker:       docker,
-		projectPaths: projectPaths,
+		docker: docker,
 	}
 }
 
 // ScanProjects 扫描发现 Compose 项目
 func (c *Client) ScanProjects(ctx context.Context) []ComposeProject {
 	var projects []ComposeProject
-	if len(c.projectPaths) == 0 {
+	appPath := conf.EnvCfg.APP_PATH
+	if appPath == "" {
 		return projects
 	}
-	for _, basePath := range c.projectPaths {
-		err := filepath.Walk(basePath, func(curPath string, info os.FileInfo, err error) error {
-			if err != nil {
-				logger.Logger.Error("扫描项目失败", logger.ZapErr(err))
-				return nil // 忽略错误，继续扫描
-			}
-
-			// 查找 compose 文件
-			if c.isComposeFile(info.Name()) {
-				logger.Logger.Debug("扫描到项目", zap.String("curPath", curPath), zap.String("name", path.Base(path.Dir(curPath))))
-				project := ComposeProject{
-					Name:         path.Base(path.Dir(curPath)),
-					ComposeFile:  curPath,
-					Status:       StatusDraft,
-					RunningCount: 0,
-					ExitedCount:  0,
-					CreatedCount: 0,
-				}
-				projects = append(projects, project)
-			}
-			return nil
-		})
+	err := filepath.Walk(appPath, func(curPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			logger.Logger.Error("扫描项目失败", logger.ZapErr(err))
-			return nil
+			return nil // 忽略错误，继续扫描
 		}
+
+		// 查找 compose 文件
+		if c.isComposeFile(info.Name()) {
+			logger.Logger.Debug("扫描到项目", zap.String("curPath", curPath), zap.String("name", path.Base(path.Dir(curPath))))
+			project := ComposeProject{
+				Name:         path.Base(path.Dir(curPath)),
+				ComposeFile:  curPath,
+				Status:       StatusDraft,
+				RunningCount: 0,
+				ExitedCount:  0,
+				CreatedCount: 0,
+			}
+			projects = append(projects, project)
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Logger.Error("扫描项目失败", logger.ZapErr(err))
+		return nil
 	}
 
 	return projects
@@ -151,6 +149,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]ComposeProject, error) {
 	var listOutput []ListOutput
 	err := json.Unmarshal([]byte(output), &listOutput)
 	if err != nil {
+		logger.Logger.Error("解析项目列表失败", zap.String("output", output), logger.ZapErr(err))
 		return nil, err
 	}
 	for _, item := range listOutput {

@@ -104,10 +104,21 @@ export const isTablet = (): boolean => {
   const isAndroidTablet = userAgent.includes('android') && !userAgent.includes('mobile')
   const isTabletUA = userAgent.includes('tablet')
 
+  // 检测 iPad 桌面模式：
+  // 当 iPad 开启"请求桌面网站"时，UA 会伪装成 Mac (MacIntel)
+  // 但 iPad 有触摸支持，真正的 Mac（不带触摸屏）没有
+  const isMacWithTouch =
+    navigator.platform === 'MacIntel' &&
+    navigator.maxTouchPoints > 0 &&
+    // 确保屏幕尺寸符合平板范围
+    window.innerWidth >= 768
+
   // 结合屏幕尺寸判断（可选）
   const hasTabletScreen = window.innerWidth >= 768 && window.innerWidth <= 1024
 
-  return isIPad || isAndroidTablet || isTabletUA || (hasTabletScreen && isMobile())
+  return (
+    isIPad || isMacWithTouch || isAndroidTablet || isTabletUA || (hasTabletScreen && isMobile())
+  )
 }
 
 // 检测是否为手机（排除平板）
