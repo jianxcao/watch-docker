@@ -94,12 +94,11 @@ const initTerminal = () => {
 
   // 挂载到 DOM
   terminal.value.open(terminalRef.value)
-
-  // terminal.value.loadAddon(webglAddon!)
   terminal.value.loadAddon(clipboardAddon!)
   terminal.value.loadAddon(webLinksAddon!)
   terminal.value.loadAddon(fitAddon!)
   terminal.value.loadAddon(unicode11Addon!)
+  terminal.value.loadAddon(webglAddon!)
   terminal.value.unicode.activeVersion = '11'
   terminal.value?.textarea?.setAttribute('enterkeyhint', 'send')
   // 自适应大小
@@ -149,7 +148,7 @@ const initTerminal = () => {
 }
 
 // 写入文本
-const write = (data: string) => {
+const write = (data: string | Uint8Array) => {
   terminal.value?.write(data)
 }
 
@@ -263,8 +262,6 @@ defineExpose({
 .term-wrapper {
   width: 100%;
   height: 100%;
-  // 优化滚动性能
-  -webkit-overflow-scrolling: touch;
   overflow: hidden;
   // 允许触摸滚动
 

@@ -1,10 +1,10 @@
 package composecli
 
 import (
-	"bufio"
 	"context"
 	"io"
 	"os/exec"
+	"strings"
 
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
@@ -31,8 +31,9 @@ type ExecDockerComposeStreamOptions struct {
 
 // ExecDockerComposeStreamResult 流式执行Docker Compose命令的结果
 type ExecDockerComposeStreamResult struct {
-	Reader io.ReadCloser // 可以从中读取命令输出的流
-	Error  error         // 启动命令时的错误
+	Reader   io.ReadCloser // 可以从中读取命令输出的流
+	Error    error         // 启动命令时的错误
+	ExitCode chan int      // 命令退出码（异步获取，命令执行完成后会发送）
 }
 
 // cmdReader 包装了reader和cmd，确保关闭reader时也能停止cmd
@@ -93,8 +94,11 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 	fullArgs := append([]string{"compose"}, options.Args...)
 	cmd := exec.CommandContext(cmdCtx, "docker", fullArgs...)
 	cmd.Dir = options.ExecPath
+	logger.Logger.Info("ExecuteDockerComposeCommandStream", zap.String("args", strings.Join(fullArgs, " ")))
 
-	result := &ExecDockerComposeStreamResult{}
+	result := &ExecDockerComposeStreamResult{
+		ExitCode: make(chan int, 1), // 缓冲通道，确保不会阻塞
+	}
 
 	// 创建管道用于数据传输
 	reader, writer := io.Pipe()
@@ -136,58 +140,95 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 			writer.Close()
 			// 确保命令被清理
 			cancel()
+			// 关闭退出码通道
+			close(result.ExitCode)
 		}()
 
 		// 创建通道来协调stdout和stderr的处理
 		done := make(chan error, 2)
 
-		// 处理stdout
+		// 处理stdout - 使用字节流复制保留原始格式
 		go func() {
 			defer func() { done <- nil }()
-			scanner := bufio.NewScanner(stdout)
-			for scanner.Scan() {
+			buffer := make([]byte, 1024)
+			for {
 				select {
 				case <-cmdCtx.Done():
 					return // 上下文已取消
 				default:
-					line := scanner.Text() + "\n"
-					if _, err := writer.Write([]byte(line)); err != nil {
-						return // 管道已关闭，reader端断开连接
+					n, err := stdout.Read(buffer)
+					if n > 0 {
+						// 直接写入，保留所有控制字符（\r, \n, ANSI等）
+						if _, writeErr := writer.Write(buffer[:n]); writeErr != nil {
+							return // 管道已关闭，reader端断开连接
+						}
+					}
+					if err != nil {
+						if err != io.EOF {
+							logger.Logger.Error("读取stdout失败", zap.Error(err))
+						}
+						return
 					}
 				}
 			}
 		}()
 
-		// 处理stderr
+		// 处理stderr - 使用字节流复制保留原始格式
 		go func() {
 			defer func() { done <- nil }()
-			scanner := bufio.NewScanner(stderr)
-			for scanner.Scan() {
+			buffer := make([]byte, 1024)
+			for {
 				select {
 				case <-cmdCtx.Done():
 					return // 上下文已取消
 				default:
-					line := scanner.Text() + "\n"
-					if _, err := writer.Write([]byte(line)); err != nil {
-						return // 管道已关闭，reader端断开连接
+					n, err := stderr.Read(buffer)
+					if n > 0 {
+						// 直接写入，保留所有控制字符（\r, \n, ANSI等）
+						if _, writeErr := writer.Write(buffer[:n]); writeErr != nil {
+							return // 管道已关闭，reader端断开连接
+						}
+					}
+					if err != nil {
+						if err != io.EOF {
+							logger.Logger.Error("读取stderr失败", zap.Error(err))
+						}
+						return
 					}
 				}
 			}
 		}()
 
-		// 等待两个流处理完成或上下文取消
-		go func() {
-			<-done
-			<-done
-		}()
+		// 等待两个流处理完成
+		<-done
+		<-done
 
-		// 等待命令完成或上下文取消
-		<-cmdCtx.Done()
-		// 上下文取消，尝试终止命令
-		if cmd.Process != nil {
-			cmd.Process.Kill()
+		// 等待命令完成并获取退出码
+		waitErr := cmd.Wait()
+		exitCode := 0
+
+		if waitErr != nil {
+			// 检查是否是退出码错误
+			if exitError, ok := waitErr.(*exec.ExitError); ok {
+				exitCode = exitError.ExitCode()
+				logger.Logger.Warn("命令执行失败",
+					zap.String("operation", options.OperationName),
+					zap.Int("exitCode", exitCode),
+					zap.Error(waitErr))
+			} else {
+				// 其他错误，设置退出码为 -1
+				exitCode = -1
+				logger.Logger.Error("命令等待失败",
+					zap.String("operation", options.OperationName),
+					zap.Error(waitErr))
+			}
+		} else {
+			logger.Logger.Info("命令执行成功",
+				zap.String("operation", options.OperationName))
 		}
-		cmd.Wait()
+
+		// 发送退出码
+		result.ExitCode <- exitCode
 	}()
 
 	return result

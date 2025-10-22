@@ -186,7 +186,7 @@ const menuOptions = computed<MenuOption[]>(
         key: 'logs',
         icon: () => h(LogIcon),
       },
-      authStore.isOpenDockerShell && {
+      settingStore.systemInfo?.isOpenDockerShell && {
         label: '终端',
         key: 'terminal',
         icon: () => h(TerminalOutline),

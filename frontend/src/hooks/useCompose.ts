@@ -12,7 +12,7 @@ export const useCompose = () => {
   const executeAction = async (
     project: ComposeProject,
     action: ComposeAction,
-    confirmMessage?: string
+    confirmMessage?: string,
   ) => {
     // 如果需要确认对话框
     if (confirmMessage) {
@@ -76,7 +76,7 @@ export const useCompose = () => {
       await executeAction(
         project,
         'create',
-        `确定要重新创建项目 "${project.name}" 吗？这将停止并删除所有容器，然后重新创建它们。`
+        `确定要重新创建项目 "${project.name}" 吗？这将停止并删除所有容器，然后重新创建它们。`,
       )
     } catch (error) {
       console.error('重新创建项目失败:', error)
@@ -86,11 +86,13 @@ export const useCompose = () => {
   // 删除项目
   const handleDelete = async (project: ComposeProject) => {
     try {
-      await executeAction(
-        project,
-        'delete',
-        `确定要删除项目 "${project.name}" 吗？这将停止并删除所有容器、网络和卷。此操作不可撤销！`
-      )
+      // 根据项目状态显示不同的删除提示
+      const confirmMessage =
+        project.status === 'draft' || project.status === 'created_stack'
+          ? `确定要删除项目 "${project.name}" 吗？这将删除该项目的配置文件（草稿）。此操作不可撤销！`
+          : `确定要删除项目 "${project.name}" 吗？这将停止并删除所有容器、网络和卷。此操作不可撤销！`
+
+      await executeAction(project, 'delete', confirmMessage)
     } catch (error) {
       console.error('删除项目失败:', error)
     }

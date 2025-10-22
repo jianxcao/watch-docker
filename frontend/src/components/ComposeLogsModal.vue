@@ -1,12 +1,28 @@
 <template>
-  <n-modal v-model:show="show" :icon="getIcon()" display-directive="if" preset="dialog" :title="title"
-    class="compose-logs-modal" :style="{
+  <n-modal
+    v-model:show="show"
+    :icon="getIcon()"
+    display-directive="if"
+    preset="dialog"
+    :title="title"
+    class="compose-logs-modal"
+    :style="{
       padding: '12px',
-      width: '90vw', maxWidth: '1200px', height: '80vh'
-    }" :mask-closable="false" :closable="true" @after-leave="handleClose">
-
+      width: '90vw',
+      maxWidth: '1200px',
+      height: '80vh',
+    }"
+    :mask-closable="false"
+    :closable="true"
+    @after-leave="handleClose"
+  >
     <div class="logs-container">
-      <Term ref="termRef" :config="termConfig" @ready="handleTermReady" height="calc(80vh - 42px)" />
+      <Term
+        ref="termRef"
+        :config="termConfig"
+        @ready="handleTermReady"
+        height="calc(80vh - 42px)"
+      />
     </div>
     <template #footer>
       <n-space justify="end">
@@ -65,13 +81,13 @@ const title = computed(() => {
 const getIcon = () => {
   return renderIcon(ComposeIcon, {
     color: theme.value.primaryColor,
-    size: 20
+    size: 20,
   })
 }
 
 // 终端配置（日志查看模式）
 const termConfig: TermConfig = {
-  disableStdin: true, // 禁用输入，仅用于日志查看
+  disableStdin: navigator.maxTouchPoints > 0,
   cursorBlink: false,
   fontSize: 13,
   scrollback: 1000,
@@ -171,6 +187,5 @@ watch(show, (newShow) => {
   .logs-container {
     background: #f8f9fa;
   }
-
 }
 </style>

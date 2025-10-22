@@ -14,9 +14,6 @@ export const useAuthStore = defineStore('auth', () => {
   // 身份验证是否启用
   const authEnabled = ref(false)
 
-  // 是否开启shell
-  const isOpenDockerShell = ref(false)
-
   // 登录加载状态
   const loginLoading = ref(false)
 
@@ -40,7 +37,6 @@ export const useAuthStore = defineStore('auth', () => {
       // 检查是否启用身份验证
       const authStatusRes = await authApi.checkAuthStatus()
       authEnabled.value = authStatusRes.data.authEnabled
-      isOpenDockerShell.value = authStatusRes.data.isOpenDockerShell
 
       // 如果启用了身份验证，检查当前token状态
       if (authEnabled.value) {
@@ -119,7 +115,6 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn,
     username,
     authEnabled,
-    isOpenDockerShell,
     loginLoading,
     checkingAuth,
 

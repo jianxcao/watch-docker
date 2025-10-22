@@ -3,16 +3,7 @@ import { ref, reactive } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { useThemeVars, type CustomThemeCommonVars, type ThemeCommonVars } from 'naive-ui'
 import { authApi } from '@/common/api'
-
-interface SystemInfo {
-  dockerVersion: string
-  dockerAPIVersion: string
-  dockerPlatform: string
-  dockerGitCommit: string
-  dockerGoVersion: string
-  dockerBuildTime: string
-  version: string
-}
+import type { SystemInfo } from '@/common/types'
 
 export const useSettingStore = defineStore('setting', () => {
   const setting = useStorage(
@@ -24,7 +15,7 @@ export const useSettingStore = defineStore('setting', () => {
       rememberUsername: false, // 改为只记住用户名
       token: '',
     },
-    localStorage
+    localStorage,
   )
 
   const currentUsername = ref(setting.value.rememberedUsername || '')

@@ -9,6 +9,8 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     ComposeCard: typeof import('./src/components/ComposeCard.vue')['default']
+    ComposeCreateModal: typeof import('./src/components/ComposeCreateModal.vue')['default']
+    ComposeCreateProgress: typeof import('./src/components/ComposeCreateProgress.vue')['default']
     ComposeLogsModal: typeof import('./src/components/ComposeLogsModal.vue')['default']
     ConfigView: typeof import('./src/components/ConfigView.vue')['default']
     ContainerCard: typeof import('./src/components/ContainerCard.vue')['default']
@@ -24,6 +26,7 @@ declare module 'vue' {
     NButton: typeof import('naive-ui')['NButton']
     NCard: typeof import('naive-ui')['NCard']
     NCheckbox: typeof import('naive-ui')['NCheckbox']
+    NCode: typeof import('naive-ui')['NCode']
     NConfigProvider: typeof import('naive-ui')['NConfigProvider']
     NDescriptions: typeof import('naive-ui')['NDescriptions']
     NDescriptionsItem: typeof import('naive-ui')['NDescriptionsItem']
@@ -73,5 +76,6 @@ declare module 'vue' {
     StatusBadge: typeof import('./src/components/StatusBadge.vue')['default']
     TermView: typeof import('./src/components/Term/TermView.vue')['default']
     UpdateStatusBadge: typeof import('./src/components/UpdateStatusBadge.vue')['default']
+    YamlEditor: typeof import('./src/components/YamlEditor/index.vue')['default']
   }
 }

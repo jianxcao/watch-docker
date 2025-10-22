@@ -40,8 +40,19 @@ const router = createRouter({
         },
         {
           path: '/compose',
+          name: 'compose',
           component: () => import('@/pages/ComposeView.vue'),
           meta: { title: 'Compose 项目', requiresAuth: true },
+        },
+        {
+          path: '/compose/create',
+          name: 'compose-create',
+          component: () => import('@/pages/ComposeCreateView.vue'),
+          meta: {
+            title: '创建 Compose 项目',
+            requiresAuth: true,
+            layoutClass: 'layout-compose-create',
+          },
         },
         {
           path: '/settings',

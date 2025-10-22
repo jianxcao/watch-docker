@@ -3,6 +3,7 @@ package composecli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path"
 	"path/filepath"
@@ -212,16 +213,36 @@ func (c *Client) RestartProject(ctx context.Context, composeFile string) error {
 }
 
 // DeleteProject 删除项目及其所有资源
-func (c *Client) DeleteProject(ctx context.Context, composeFile string) error {
+// 如果是 draft 状态，直接删除配置文件和目录
+// 如果是其他状态，先执行 docker-compose down，然后删除配置文件和目录
+func (c *Client) DeleteProject(ctx context.Context, composeFile string, status StackStatus) error {
 	projectPath := path.Dir(composeFile)
-	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
-		ExecPath:      projectPath,
-		Args:          []string{"down", "--volumes", "--remove-orphans"},
-		OperationName: "delete project",
-		NeedOutput:    true,
-	})
-	logger.Logger.Info("删除APP", zap.String("output", string(res.Output)))
-	return res.Error
+
+	// 如果不是 draft 状态，先执行 docker-compose down 清理容器、网络和卷
+	if status != StatusDraft {
+		res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
+			ExecPath:      projectPath,
+			Args:          []string{"down", "--volumes", "--remove-orphans"},
+			OperationName: "delete project",
+			NeedOutput:    true,
+		})
+		logger.Logger.Info("删除APP（Docker资源）", zap.String("output", string(res.Output)))
+		if res.Error != nil {
+			return res.Error
+		}
+	}
+
+	// 删除项目目录和配置文件
+	if err := os.RemoveAll(projectPath); err != nil {
+		logger.Logger.Error("删除项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
+		return errors.New("删除项目目录失败: " + err.Error())
+	}
+
+	logger.Logger.Info("删除项目成功",
+		zap.String("projectPath", projectPath),
+		zap.String("status", string(status)))
+
+	return nil
 }
 
 func (c *Client) CreateProject(ctx context.Context, composeFile string, isRuning bool, isBuild bool) error {
@@ -241,4 +262,47 @@ func (c *Client) CreateProject(ctx context.Context, composeFile string, isRuning
 	})
 	logger.Logger.Info("创建APP", zap.String("output", string(res.Output)))
 	return res.Error
+}
+
+// SaveNewProject 保存新的 Compose 项目（创建目录和 YAML 文件）
+func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent string, force bool) (string, error) {
+	appPath := conf.EnvCfg.APP_PATH
+	if appPath == "" {
+		return "", errors.New("APP_PATH 未设置，无法创建项目")
+	}
+
+	// 创建项目目录
+	projectPath := filepath.Join(appPath, name)
+	composeFile := filepath.Join(projectPath, "docker-compose.yml")
+
+	// 检查项目是否已存在
+	if stat, err := os.Stat(projectPath); err == nil && stat.IsDir() {
+		// 项目目录已存在
+		if !force {
+			logger.Logger.Warn("项目已存在，需要 force=true 才能覆盖", zap.String("path", projectPath))
+			return "", errors.New("项目已存在，如需覆盖请使用强制模式")
+		}
+		logger.Logger.Info("项目已存在，将覆盖 docker-compose.yml 文件", zap.String("path", projectPath))
+	} else {
+		// 项目目录不存在，创建目录
+		if err := os.MkdirAll(projectPath, 0755); err != nil {
+			logger.Logger.Error("创建项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
+			return "", errors.New("创建项目目录失败: " + err.Error())
+		}
+		logger.Logger.Info("创建项目目录成功", zap.String("path", projectPath))
+	}
+
+	// 写入 docker-compose.yml 文件（如果已存在会被覆盖）
+	if err := os.WriteFile(composeFile, []byte(yamlContent), 0644); err != nil {
+		logger.Logger.Error("写入 Compose 文件失败", zap.String("file", composeFile), logger.ZapErr(err))
+		return "", errors.New("写入 Compose 文件失败: " + err.Error())
+	}
+
+	logger.Logger.Info("项目文件保存成功",
+		zap.String("name", name),
+		zap.String("path", projectPath),
+		zap.String("composeFile", composeFile),
+		zap.Bool("force", force))
+
+	return composeFile, nil
 }

@@ -56,7 +56,7 @@ export const useComposeStore = defineStore('compose', () => {
   const executeProjectAction = async (
     project: ComposeProject,
     action: ComposeAction,
-    options?: { refreshAfter?: boolean }
+    options?: { refreshAfter?: boolean },
   ) => {
     const { refreshAfter = true } = options || {}
 
@@ -139,6 +139,23 @@ export const useComposeStore = defineStore('compose', () => {
     return executeProjectAction(app, 'create')
   }
 
+  // 保存新项目（创建目录和 YAML 文件）
+  const saveNewProject = async (name: string, yamlContent: string) => {
+    try {
+      const response = await composeApi.saveNewProject(name, yamlContent)
+      if (response.code === 0) {
+        message.success('项目保存成功')
+        return response.data
+      } else {
+        throw new Error(response.msg || '保存项目失败')
+      }
+    } catch (error) {
+      console.error('保存项目失败:', error)
+      message.error(`保存项目失败: ${(error as Error).message}`)
+      throw error
+    }
+  }
+
   // 获取项目日志
   const getProjectLogs = async (projectName: string, lines = 100) => {
     try {
@@ -187,6 +204,7 @@ export const useComposeStore = defineStore('compose', () => {
     restartProject,
     deleteProject,
     createProject,
+    saveNewProject,
     getProjectLogs,
     clearAll,
   }

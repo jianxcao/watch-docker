@@ -18,7 +18,9 @@ func (s *Server) setupComposeRoutes(protected *gin.RouterGroup) {
 	protected.POST("/compose/restart", s.handleRestartComposeProject())
 	protected.DELETE("/compose/delete", s.handleDeleteComposeProject())
 	protected.POST("/compose/create", s.handleCreateComposeProject())
+	protected.POST("/compose/new", s.handleSaveNewProject())
 	protected.GET("/compose/logs/ws", s.handleComposeLogsWebSocket())
+	protected.GET("/compose/create-and-up/ws", s.handleComposeCreateAndUpWebSocket())
 }
 
 func (s *Server) handleListComposeProjects() gin.HandlerFunc {
@@ -117,9 +119,11 @@ func (s *Server) handleDeleteComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.DeleteProject(ctx, project.ComposeFile); err != nil {
+		if err := s.composeClient.DeleteProject(ctx, project.ComposeFile, project.Status); err != nil {
 			s.logger.Error("delete compose project failed",
-				zap.String("project", project.ComposeFile), zap.Error(err))
+				zap.String("project", project.ComposeFile),
+				zap.String("status", string(project.Status)),
+				zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return
 		}
@@ -148,5 +152,36 @@ func (s *Server) handleCreateComposeProject() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+	}
+}
+
+func (s *Server) handleSaveNewProject() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Name        string `json:"name" binding:"required"`
+			YamlContent string `json:"yamlContent" binding:"required"`
+		}
+
+		if err := c.ShouldBindJSON(&req); err != nil {
+			s.logger.Error("bind new project request failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInvalidRequest, err.Error()))
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		defer cancel()
+
+		composeFile, err := s.composeClient.SaveNewProject(ctx, req.Name, req.YamlContent, false)
+		if err != nil {
+			s.logger.Error("save new project failed",
+				zap.String("name", req.Name), zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"ok":          true,
+			"composeFile": composeFile,
+		}))
 	}
 }

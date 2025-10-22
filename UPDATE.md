@@ -2,7 +2,7 @@
 
 ## v0.0.5
 
-- 增加 docker-compose 页面
+- 增加 docker-compose 页面，配置 compose 所在的目录，请看 readme 中的说明
 - 增加 shell 页面 `IS_OPEN_DOCKER_SHELL=true开启`
 
 ## v0.0.4

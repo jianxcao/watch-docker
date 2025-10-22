@@ -1,7 +1,9 @@
 <template>
-  <div class="compose-card" :data-theme="settingStore.setting.theme"
-    :class="['card-status-' + project.status, { 'card-updating': loading }]">
-
+  <div
+    class="compose-card"
+    :data-theme="settingStore.setting.theme"
+    :class="['card-status-' + project.status, { 'card-updating': loading }]"
+  >
     <div class="card-content">
       <!-- 项目头部信息 -->
       <div class="project-header">
@@ -42,7 +44,10 @@
                 </n-icon>
                 <span>{{ project.createdCount + project.runningCount + project.exitedCount }}</span>
               </div>
-              <div class="count-badge running-count" :class="{ 'has-running': project.runningCount > 0 }">
+              <div
+                class="count-badge running-count"
+                :class="{ 'has-running': project.runningCount > 0 }"
+              >
                 <span class="running-dot"></span>
                 <span>{{ project.runningCount }}</span>
               </div>
@@ -53,8 +58,12 @@
 
       <!-- 操作按钮区域 -->
       <div class="action-buttons">
-        <n-button v-if="project.status === 'exited' || project.status === 'partial'" text class="action-btn"
-          @click="handleMenuSelect('start')">
+        <n-button
+          v-if="project.status === 'exited' || project.status === 'partial'"
+          text
+          class="action-btn"
+          @click="handleMenuSelect('start')"
+        >
           <template #icon>
             <n-icon>
               <PlayOutline />
@@ -62,8 +71,12 @@
           </template>
           启动
         </n-button>
-        <n-button v-if="project.status === 'running' || project.status === 'partial'" text class="action-btn"
-          @click="handleMenuSelect('stop')">
+        <n-button
+          v-if="project.status === 'running' || project.status === 'partial'"
+          text
+          class="action-btn"
+          @click="handleMenuSelect('stop')"
+        >
           <template #icon>
             <n-icon>
               <StopOutline />
@@ -71,7 +84,12 @@
           </template>
           停止
         </n-button>
-        <n-button v-if="project.status === 'running'" text class="action-btn" @click="handleMenuSelect('restart')">
+        <n-button
+          v-if="project.status === 'running'"
+          text
+          class="action-btn"
+          @click="handleMenuSelect('restart')"
+        >
           <template #icon>
             <n-icon>
               <RefreshOutline />
@@ -79,8 +97,16 @@
           </template>
           重启
         </n-button>
-        <n-button v-if="project.status === 'unknown' || project.status === 'exited' || project.status === 'draft'" text
-          class="action-btn" @click="handleMenuSelect('create')">
+        <n-button
+          v-if="
+            project.status === 'unknown' ||
+            project.status === 'exited' ||
+            project.status === 'draft'
+          "
+          text
+          class="action-btn"
+          @click="handleMenuSelect('create')"
+        >
           <template #icon>
             <n-icon>
               <RefreshOutline />
@@ -103,10 +129,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import {
-  NIcon,
-  type DropdownOption
-} from 'naive-ui'
+import { NIcon, type DropdownOption } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
 import type { ComposeProject } from '@/common/types'
 
@@ -123,20 +146,14 @@ import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
 import { useCompose } from '@/hooks/useCompose'
 import { renderIcon } from '@/common/utils'
 
-const {
-  handleStart,
-  handleStop,
-  handleRestart,
-  handleDelete,
-  handleCreate
-} = useCompose()
+const { handleStart, handleStop, handleRestart, handleDelete, handleCreate } = useCompose()
 
 interface Props {
   project: ComposeProject
   loading?: boolean
 }
 
-const emit = defineEmits(["log"])
+const emit = defineEmits(['log'])
 
 const props = defineProps<Props>()
 const settingStore = useSettingStore()
@@ -164,7 +181,7 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
     options.push({
       label: '启动',
       key: 'start',
-      icon: renderIcon(PlayOutline)
+      icon: renderIcon(PlayOutline),
     })
   }
 
@@ -172,7 +189,7 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
     options.push({
       label: '停止',
       key: 'stop',
-      icon: renderIcon(StopOutline)
+      icon: renderIcon(StopOutline),
     })
   }
 
@@ -180,31 +197,33 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
     {
       label: '创建',
       key: 'create',
-      icon: renderIcon(RefreshOutline)
+      icon: renderIcon(RefreshOutline),
     },
     {
       type: 'divider',
-      key: 'divider1'
+      key: 'divider1',
     },
     {
       label: '日志',
       key: 'logs',
-      icon: renderIcon(LogIcon)
-    }
-  )
-  if (project.status !== 'draft' && project.status !== 'created_stack' && project.status !== 'unknown') {
-    options.push({
-      type: 'divider',
-      key: 'divider2'
+      icon: renderIcon(LogIcon),
     },
+  )
+  if (project.status !== 'unknown') {
+    options.push(
+      {
+        type: 'divider',
+        key: 'divider2',
+      },
       {
         label: '删除',
         key: 'delete',
         icon: renderIcon(TrashOutline),
         props: {
-          style: 'color: #ff4d4f'
-        }
-      })
+          style: 'color: #ff4d4f',
+        },
+      },
+    )
   }
 
   return options
@@ -226,7 +245,7 @@ const handleMenuSelect = (key: string) => {
       handleDelete(props.project)
       break
     case 'view-logs':
-      emit("log")
+      emit('log')
       break
     case 'create':
       handleCreate(props.project)
@@ -272,29 +291,36 @@ const handleMenuSelect = (key: string) => {
       justify-content: center;
       border: 1px solid rgba(69, 85, 108, 0.3);
       flex-shrink: 0;
-      box-shadow: 0px 4px 6px -4px rgba(0, 188, 125, 0.2), 0px 10px 15px -3px rgba(0, 188, 125, 0.2);
+      box-shadow:
+        0px 4px 6px -4px rgba(0, 188, 125, 0.2),
+        0px 10px 15px -3px rgba(0, 188, 125, 0.2);
 
       .logo-icon {
-        color: #FFFFFF;
+        color: #ffffff;
       }
 
       &.logo-running,
       &.logo-partial {
         background: linear-gradient(135deg, rgba(0, 153, 102, 1) 0%, rgba(0, 122, 85, 1) 100%);
-        box-shadow: 0px 4px 6px -4px rgba(0, 188, 125, 0.2), 0px 10px 15px -3px rgba(0, 188, 125, 0.2);
+        box-shadow:
+          0px 4px 6px -4px rgba(0, 188, 125, 0.2),
+          0px 10px 15px -3px rgba(0, 188, 125, 0.2);
       }
 
       &.logo-exited,
       &.logo-unknown {
         background: linear-gradient(135deg, rgba(49, 65, 88, 1) 0%, rgba(49, 65, 88, 0.5) 100%);
-        box-shadow: 0px 4px 6px -4px rgba(98, 116, 142, 0.1), 0px 10px 15px -3px rgba(98, 116, 142, 0.1);
+        box-shadow:
+          0px 4px 6px -4px rgba(98, 116, 142, 0.1),
+          0px 10px 15px -3px rgba(98, 116, 142, 0.1);
       }
 
       &.logo-draft,
       &.logo-created_stack {
         background: linear-gradient(135deg, rgba(225, 113, 0, 1) 0%, rgba(187, 77, 0, 1) 100%);
-        box-shadow: 0px 4px 6px -4px rgba(254, 154, 0, 0.2), 0px 10px 15px -3px rgba(254, 154, 0, 0.2);
-
+        box-shadow:
+          0px 4px 6px -4px rgba(254, 154, 0, 0.2),
+          0px 10px 15px -3px rgba(254, 154, 0, 0.2);
       }
     }
 
@@ -342,7 +368,9 @@ const handleMenuSelect = (key: string) => {
           font-size: 14px;
           line-height: 1.428;
           letter-spacing: -0.01em;
-          box-shadow: 0px 1px 2px -1px rgba(0, 0, 0, 0.1), 0px 1px 3px 0px rgba(0, 0, 0, 0.1);
+          box-shadow:
+            0px 1px 2px -1px rgba(0, 0, 0, 0.1),
+            0px 1px 3px 0px rgba(0, 0, 0, 0.1);
 
           .status-dot {
             width: 6px;
@@ -356,12 +384,12 @@ const handleMenuSelect = (key: string) => {
             border: 1px solid rgba(0, 188, 125, 0.2);
 
             .status-dot {
-              background: #00BC7D;
+              background: #00bc7d;
               opacity: 0.5;
             }
 
             .status-text {
-              color: #00D492;
+              color: #00d492;
             }
           }
 
@@ -373,11 +401,11 @@ const handleMenuSelect = (key: string) => {
             border: 1px solid rgba(98, 116, 142, 0.2);
 
             .status-dot {
-              background: #62748E;
+              background: #62748e;
             }
 
             .status-text {
-              color: #90A1B9;
+              color: #90a1b9;
             }
           }
 
@@ -386,11 +414,11 @@ const handleMenuSelect = (key: string) => {
             border: 1px solid rgba(254, 154, 0, 0.2);
 
             .status-dot {
-              background: #FE9A00;
+              background: #fe9a00;
             }
 
             .status-text {
-              color: #FFB900;
+              color: #ffb900;
             }
           }
         }
@@ -415,11 +443,11 @@ const handleMenuSelect = (key: string) => {
               border: 1px solid rgba(69, 85, 108, 0.3);
 
               .count-icon {
-                color: #90A1B9;
+                color: #90a1b9;
               }
 
               span {
-                color: #CAD5E2;
+                color: #cad5e2;
               }
             }
 
@@ -431,15 +459,17 @@ const handleMenuSelect = (key: string) => {
                 width: 6px;
                 height: 6px;
                 border-radius: 50%;
-                background: #00BC7D;
+                background: #00bc7d;
               }
 
               span {
-                color: #00D492;
+                color: #00d492;
               }
 
               &.has-running {
-                box-shadow: 0px 1px 2px -1px rgba(0, 188, 125, 0.5), 0px 1px 3px 0px rgba(0, 188, 125, 0.5);
+                box-shadow:
+                  0px 1px 2px -1px rgba(0, 188, 125, 0.5),
+                  0px 1px 3px 0px rgba(0, 188, 125, 0.5);
               }
             }
           }
@@ -460,7 +490,7 @@ const handleMenuSelect = (key: string) => {
       flex: 1;
       height: 56px;
       border-radius: 8px;
-      color: #90A1B9;
+      color: #90a1b9;
       font-size: 14px;
       font-weight: 500;
       line-height: 1.428;
@@ -473,7 +503,7 @@ const handleMenuSelect = (key: string) => {
 
       &:hover {
         background: rgba(49, 65, 88, 0.3);
-        color: #CAD5E2;
+        color: #cad5e2;
       }
 
       :deep(.n-button__icon) {
@@ -490,10 +520,9 @@ const handleMenuSelect = (key: string) => {
 
   .project-header {
     .project-logo {
-
       // 在浅色主题下，保持渐变背景但图标保持白色以确保对比度
       .logo-icon {
-        color: #FFFFFF;
+        color: #ffffff;
       }
 
       // 针对不同状态优化边框颜色
@@ -516,13 +545,12 @@ const handleMenuSelect = (key: string) => {
     .project-info {
       .project-title-row {
         .project-name {
-          color: #1E293B;
+          color: #1e293b;
         }
       }
 
       .project-meta {
         .status-badge {
-
           // 浅色主题下的状态标签优化
           &.status-running,
           &.status-partial {
@@ -530,7 +558,7 @@ const handleMenuSelect = (key: string) => {
             border-color: rgba(0, 188, 125, 0.3);
 
             .status-text {
-              color: #00875A;
+              color: #00875a;
             }
           }
 
@@ -549,7 +577,7 @@ const handleMenuSelect = (key: string) => {
             border-color: rgba(254, 154, 0, 0.3);
 
             .status-text {
-              color: #B76E00;
+              color: #b76e00;
             }
           }
         }
@@ -561,7 +589,7 @@ const handleMenuSelect = (key: string) => {
               border-color: rgba(148, 163, 184, 0.3);
 
               .count-icon {
-                color: #64748B;
+                color: #64748b;
               }
 
               span {
@@ -574,7 +602,7 @@ const handleMenuSelect = (key: string) => {
               border-color: rgba(0, 188, 125, 0.3);
 
               span {
-                color: #00875A;
+                color: #00875a;
               }
             }
           }
@@ -588,7 +616,7 @@ const handleMenuSelect = (key: string) => {
     background: rgba(241, 245, 249, 1);
 
     .action-btn {
-      color: #64748B;
+      color: #64748b;
 
       &:hover {
         background: rgba(226, 232, 240, 0.5);

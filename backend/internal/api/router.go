@@ -127,13 +127,15 @@ func (s *Server) handleGetInfo() gin.HandlerFunc {
 		envCfg := conf.EnvCfg
 
 		info := gin.H{
-			"dockerVersion":    dockerVersion.Version,
-			"dockerAPIVersion": dockerVersion.APIVersion,
-			"dockerPlatform":   dockerVersion.Platform,
-			"dockerGitCommit":  dockerVersion.GitCommit,
-			"dockerGoVersion":  dockerVersion.GoVersion,
-			"dockerBuildTime":  dockerVersion.BuildTime,
-			"version":          envCfg.VERSION_WATCH_DOCKER,
+			"dockerVersion":     dockerVersion.Version,
+			"dockerAPIVersion":  dockerVersion.APIVersion,
+			"dockerPlatform":    dockerVersion.Platform,
+			"dockerGitCommit":   dockerVersion.GitCommit,
+			"dockerGoVersion":   dockerVersion.GoVersion,
+			"dockerBuildTime":   dockerVersion.BuildTime,
+			"version":           envCfg.VERSION_WATCH_DOCKER,
+			"appPath":           envCfg.APP_PATH,
+			"isOpenDockerShell": conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
 		}
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"info": info}))
@@ -230,8 +232,7 @@ func (s *Server) handleLogout() gin.HandlerFunc {
 func (s *Server) handleAuthStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
-			"authEnabled":       auth.IsAuthEnabled(),
-			"isOpenDockerShell": conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
+			"authEnabled": auth.IsAuthEnabled(),
 		}))
 	}
 }

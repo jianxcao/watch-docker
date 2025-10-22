@@ -1,6 +1,13 @@
 import { API_ENDPOINTS } from '@/constants/api'
 import axios from './axiosConfig'
-import type { BatchUpdateResult, ComposeProject, Config, ContainerStatus, ImageInfo } from './types'
+import type {
+  BatchUpdateResult,
+  ComposeProject,
+  Config,
+  ContainerStatus,
+  ImageInfo,
+  SystemInfo,
+} from './types'
 
 // 健康检查相关
 export const healthApi = {
@@ -24,11 +31,10 @@ export const authApi = {
   logout: () => axios.post<{ message: string }>(API_ENDPOINTS.LOGOUT),
 
   // 检查身份验证状态
-  checkAuthStatus: () =>
-    axios.get<{ authEnabled: boolean; isOpenDockerShell: boolean }>(API_ENDPOINTS.AUTH_STATUS),
+  checkAuthStatus: () => axios.get<{ authEnabled: boolean }>(API_ENDPOINTS.AUTH_STATUS),
 
   // 获取系统信息
-  getInfo: () => axios.get<any>(API_ENDPOINTS.INFO),
+  getInfo: () => axios.get<{ info: SystemInfo }>(API_ENDPOINTS.INFO),
 }
 
 // 容器相关API
@@ -128,6 +134,10 @@ export const composeApi = {
   // 获取项目日志
   getProjectLogs: (name: string, lines = 100) =>
     axios.get<{ logs: string }>(`/compose/${name}/logs`, { params: { lines } }),
+
+  // 创建新项目（保存 YAML 文件）
+  saveNewProject: (name: string, yamlContent: string) =>
+    axios.post<{ ok: boolean; composeFile: string }>(`/compose/new`, { name, yamlContent }),
 }
 
 // 导出所有API

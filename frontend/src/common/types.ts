@@ -5,6 +5,18 @@ export interface BaseResponse<T = any> {
   data: T
 }
 
+// 系统信息类型
+export interface SystemInfo {
+  dockerVersion: string
+  dockerAPIVersion: string
+  dockerPlatform: string
+  dockerGitCommit: string
+  dockerGoVersion: string
+  dockerBuildTime: string
+  version: string
+  appPath: string
+  isOpenDockerShell: boolean
+}
 // 容器资源统计信息
 export interface ContainerStats {
   id: string

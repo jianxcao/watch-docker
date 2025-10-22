@@ -25,7 +25,12 @@
       </n-dropdown>
 
       <!-- 搜索框 -->
-      <n-input v-model:value="searchKeyword" placeholder="搜索项目名称或路径" style="width: 200px;" clearable>
+      <n-input
+        v-model:value="searchKeyword"
+        placeholder="搜索项目名称或路径"
+        style="width: 200px"
+        clearable
+      >
         <template #prefix>
           <n-icon>
             <SearchOutline />
@@ -47,14 +52,23 @@
         </div>
 
         <!-- 项目网格 -->
-        <div v-else class="compose-grid" :class="{
-          'grid-cols-1': isMobile,
-          'grid-cols-2': isTablet || isLaptop,
-          'grid-cols-3': isDesktop,
-          'grid-cols-4': isDesktopLarge,
-        }">
-          <ComposeCard v-for="project in filteredProjects" :key="project.name" :project="project"
-            :loading="composeStore.isProjectOperating(project.name).value" @log="() => handleViewLogs(project)" />
+        <div
+          v-else
+          class="compose-grid"
+          :class="{
+            'grid-cols-1': isMobile,
+            'grid-cols-2': isTablet || isLaptop,
+            'grid-cols-3': isDesktop,
+            'grid-cols-4': isDesktopLarge,
+          }"
+        >
+          <ComposeCard
+            v-for="project in filteredProjects"
+            :key="project.name"
+            :project="project"
+            :loading="composeStore.isProjectOperating(project.name).value"
+            @log="() => handleViewLogs(project)"
+          />
         </div>
       </n-spin>
     </div>
@@ -63,12 +77,9 @@
     <Teleport to="#header" defer>
       <div class="welcome-card">
         <div>
-          <n-h2 class="m-0 text-lg">
-            Compose 项目管理
-          </n-h2>
+          <n-h2 class="m-0 text-lg"> Compose 项目管理 </n-h2>
           <n-text depth="3" class="text-xs max-md:hidden">
-            共 {{ composeStore.stats.total }} 个项目，
-            {{ composeStore.stats.running }} 个运行中
+            共 {{ composeStore.stats.total }} 个项目， {{ composeStore.stats.running }} 个运行中
           </n-text>
         </div>
         <div class="flex gap-2">
@@ -77,6 +88,13 @@
             <template #icon>
               <n-icon>
                 <RefreshOutline />
+              </n-icon>
+            </template>
+          </n-button>
+          <n-button circle size="tiny" @click="handleAddProject">
+            <template #icon>
+              <n-icon>
+                <AddCircleOutline />
               </n-icon>
             </template>
           </n-button>
@@ -90,6 +108,7 @@
 </template>
 
 <script setup lang="ts">
+import { useRouter } from 'vue-router'
 import { useCompose } from '@/hooks/useCompose'
 import { useResponsive } from '@/hooks/useResponsive'
 import { useComposeStore } from '@/store/compose'
@@ -106,19 +125,19 @@ import {
   SwapVerticalOutline,
   TextOutline,
   WarningOutline,
+  AddCircleOutline,
 } from '@vicons/ionicons5'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watchEffect } from 'vue'
 import { NIcon, type DropdownOption } from 'naive-ui'
 import { renderIcon } from '@/common/utils'
 import type { ComposeProject } from '@/common/types'
+
+const router = useRouter()
 const showLogsModal = ref(false)
 const currentProject = ref<ComposeProject | null>(null)
 
-
 const composeStore = useComposeStore()
-const {
-  handleRefresh,
-} = useCompose()
+const { handleRefresh } = useCompose()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 
 // 响应式状态
@@ -133,6 +152,10 @@ const handleViewLogs = (project: ComposeProject) => {
   showLogsModal.value = true
 }
 
+const handleAddProject = () => {
+  router.push({ name: 'compose-create' })
+}
+
 watchEffect(() => {
   if (!showLogsModal.value) {
     currentProject.value = null
@@ -144,7 +167,7 @@ const statusFilterMenuOptions = computed<DropdownOption[]>(() => [
   {
     label: '全部状态',
     key: '',
-    icon: renderIcon(AppsOutline)
+    icon: renderIcon(AppsOutline),
   },
   {
     label: '运行中',
@@ -160,9 +183,8 @@ const statusFilterMenuOptions = computed<DropdownOption[]>(() => [
     label: '其他',
     key: 'other',
     icon: renderIcon(WarningOutline),
-  }
+  },
 ])
-
 
 const sortMenuOptions = computed(() => [
   {
@@ -186,7 +208,7 @@ const filteredProjects = computed(() => {
 
   // 状态筛选
   if (statusFilter.value) {
-    result = result.filter(project => {
+    result = result.filter((project) => {
       if (statusFilter.value === 'other') {
         return project.status !== 'running' && project.status !== 'exited'
       }
@@ -194,11 +216,10 @@ const filteredProjects = computed(() => {
     })
   }
 
-
   // 搜索筛选
   if (searchKeyword.value) {
     const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter(project => project.name.toLowerCase().includes(keyword))
+    result = result.filter((project) => project.name.toLowerCase().includes(keyword))
   }
 
   // 排序
@@ -247,7 +268,6 @@ onMounted(async () => {
     console.error('初始化 Compose 项目数据失败:', error)
   }
 })
-
 </script>
 
 <style scoped lang="less">
@@ -315,7 +335,7 @@ onMounted(async () => {
         flex-direction: column;
         align-items: stretch !important;
 
-        &>div:last-child {
+        & > div:last-child {
           .n-space {
             flex-wrap: wrap;
 
