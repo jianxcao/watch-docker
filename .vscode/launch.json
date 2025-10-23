@@ -11,7 +11,8 @@
                 "CONFIG_PATH": "./.config",
                 "STATIC_DIR": "${workspaceFolder}/frontend/dist",
                 "IS_OPEN_DOCKER_SHELL": "true",
-                "APP_PATH": "/Users/jianxiong.cao/Downloads/docker"
+                "APP_PATH": "/Users/jianxiong.cao/Downloads/docker",
+                "IS_SECONDARY_VERIFICATION": "false"
             },
             "cwd": "${workspaceFolder}/backend"
         }

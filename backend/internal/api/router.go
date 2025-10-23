@@ -17,6 +17,7 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/registry"
 	"github.com/jianxcao/watch-docker/backend/internal/scanner"
 	"github.com/jianxcao/watch-docker/backend/internal/scheduler"
+	"github.com/jianxcao/watch-docker/backend/internal/twofa"
 	"github.com/jianxcao/watch-docker/backend/internal/updater"
 
 	"github.com/gin-gonic/gin"
@@ -68,6 +69,21 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		api.POST("/logout", s.handleLogout())
 		api.GET("/auth/status", s.handleAuthStatus())
 		api.GET("/info", s.handleGetInfo())
+	}
+
+	// 二次验证相关路由（允许临时 token）
+	twofa := api.Group("/2fa")
+	twofa.Use(auth.TempTokenMiddleware())
+	{
+		twofa.GET("/status", s.handleTwoFAStatus())
+		twofa.POST("/setup/otp/init", s.handleOTPSetupInit())
+		twofa.POST("/setup/otp/verify", s.handleOTPSetupVerify())
+		twofa.POST("/setup/webauthn/begin", s.handleWebAuthnRegisterBegin())
+		twofa.POST("/setup/webauthn/finish", s.handleWebAuthnRegisterFinish())
+		twofa.POST("/verify/otp", s.handleVerifyOTP())
+		twofa.POST("/verify/webauthn/begin", s.handleWebAuthnLoginBegin())
+		twofa.POST("/verify/webauthn/finish", s.handleWebAuthnLoginFinish())
+		twofa.POST("/disable", s.handleDisableTwoFA())
 	}
 
 	// 需要身份验证的接口
@@ -127,15 +143,16 @@ func (s *Server) handleGetInfo() gin.HandlerFunc {
 		envCfg := conf.EnvCfg
 
 		info := gin.H{
-			"dockerVersion":     dockerVersion.Version,
-			"dockerAPIVersion":  dockerVersion.APIVersion,
-			"dockerPlatform":    dockerVersion.Platform,
-			"dockerGitCommit":   dockerVersion.GitCommit,
-			"dockerGoVersion":   dockerVersion.GoVersion,
-			"dockerBuildTime":   dockerVersion.BuildTime,
-			"version":           envCfg.VERSION_WATCH_DOCKER,
-			"appPath":           envCfg.APP_PATH,
-			"isOpenDockerShell": conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
+			"dockerVersion":                  dockerVersion.Version,
+			"dockerAPIVersion":               dockerVersion.APIVersion,
+			"dockerPlatform":                 dockerVersion.Platform,
+			"dockerGitCommit":                dockerVersion.GitCommit,
+			"dockerGoVersion":                dockerVersion.GoVersion,
+			"dockerBuildTime":                dockerVersion.BuildTime,
+			"version":                        envCfg.VERSION_WATCH_DOCKER,
+			"appPath":                        envCfg.APP_PATH,
+			"isOpenDockerShell":              conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
+			"isSecondaryVerificationEnabled": conf.EnvCfg.IS_SECONDARY_VERIFICATION,
 		}
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"info": info}))
@@ -204,7 +221,37 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 			return
 		}
 
-		// 生成 JWT token
+		// 检查是否启用二次验证
+		envCfg := conf.EnvCfg
+		if envCfg.IS_SECONDARY_VERIFICATION {
+			// 检查用户是否已设置二次验证
+			userConfig, err := twofa.GetUserConfig(req.Username)
+			if err != nil {
+				s.logger.Error("get user twofa config failed", zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取配置失败"))
+				return
+			}
+
+			// 生成临时 token
+			tempToken, err := auth.GenerateTempToken(req.Username)
+			if err != nil {
+				s.logger.Error("generate temp token failed", zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "生成token失败"))
+				return
+			}
+
+			s.logger.Info("user login, need 2fa", zap.String("username", req.Username), zap.Bool("isSetup", userConfig.IsSetup))
+			c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+				"needTwoFA": true,
+				"isSetup":   userConfig.IsSetup,
+				"method":    userConfig.Method,
+				"tempToken": tempToken,
+				"username":  req.Username,
+			}))
+			return
+		}
+
+		// 未启用二次验证，直接生成完整 token
 		token, err := auth.GenerateToken(req.Username)
 		if err != nil {
 			s.logger.Error("generate token failed", zap.Error(err))

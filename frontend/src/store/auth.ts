@@ -14,6 +14,12 @@ export const useAuthStore = defineStore('auth', () => {
   // 身份验证是否启用
   const authEnabled = ref(false)
 
+  // 二次验证状态
+  const twoFARequired = ref(false)
+  const twoFASetupRequired = ref(false)
+  const tempToken = ref('')
+  const twoFAMethod = ref('')
+
   // 登录加载状态
   const loginLoading = ref(false)
 
@@ -64,10 +70,31 @@ export const useAuthStore = defineStore('auth', () => {
     loginLoading.value = true
     try {
       const res = await authApi.login(loginUsername, password)
+
+      // 检查是否需要二次验证
+      if (res.data?.needTwoFA) {
+        twoFARequired.value = true
+        twoFASetupRequired.value = !res.data.isSetup
+        tempToken.value = res.data.tempToken || ''
+        twoFAMethod.value = res.data.method || ''
+        // 保存临时 token 到 setting store
+        settingStore.setTmpToken(res.data.tempToken || '')
+        settingStore.setCurrentUsername(res.data.username || loginUsername)
+
+        return {
+          success: true,
+          needTwoFA: true,
+          isSetup: res.data.isSetup,
+          method: res.data.method,
+        }
+      }
+
+      // 不需要二次验证，直接登录
       if (res.data?.token) {
         settingStore.setToken(res.data.token)
-        settingStore.setCurrentUsername(res.data.username)
+        settingStore.setCurrentUsername(res.data.username || loginUsername)
         isLoggedIn.value = true
+        twoFARequired.value = false
         return { success: true }
       } else {
         return { success: false, message: '登录失败' }
@@ -105,9 +132,22 @@ export const useAuthStore = defineStore('auth', () => {
     settingStore.clearToken()
     settingStore.clearCurrentUsername()
     isLoggedIn.value = false
+    twoFARequired.value = false
+    twoFASetupRequired.value = false
+    tempToken.value = ''
+    twoFAMethod.value = ''
     if (authEnabled.value) {
       navigateTo('/login')
     }
+  }
+
+  // 完成二次验证后设置完整 token
+  const completeTwoFA = (fullToken: string) => {
+    settingStore.setToken(fullToken)
+    isLoggedIn.value = true
+    twoFARequired.value = false
+    twoFASetupRequired.value = false
+    tempToken.value = ''
   }
 
   return {
@@ -117,6 +157,10 @@ export const useAuthStore = defineStore('auth', () => {
     authEnabled,
     loginLoading,
     checkingAuth,
+    twoFARequired,
+    twoFASetupRequired,
+    tempToken,
+    twoFAMethod,
 
     // 计算属性
     requiresAuth,
@@ -126,5 +170,6 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     logout,
     forceLogout,
+    completeTwoFA,
   }
 })

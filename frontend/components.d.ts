@@ -9,7 +9,6 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     ComposeCard: typeof import('./src/components/ComposeCard.vue')['default']
-    ComposeCreateModal: typeof import('./src/components/ComposeCreateModal.vue')['default']
     ComposeCreateProgress: typeof import('./src/components/ComposeCreateProgress.vue')['default']
     ComposeLogsModal: typeof import('./src/components/ComposeLogsModal.vue')['default']
     ConfigView: typeof import('./src/components/ConfigView.vue')['default']
@@ -26,7 +25,8 @@ declare module 'vue' {
     NButton: typeof import('naive-ui')['NButton']
     NCard: typeof import('naive-ui')['NCard']
     NCheckbox: typeof import('naive-ui')['NCheckbox']
-    NCode: typeof import('naive-ui')['NCode']
+    NCollapse: typeof import('naive-ui')['NCollapse']
+    NCollapseItem: typeof import('naive-ui')['NCollapseItem']
     NConfigProvider: typeof import('naive-ui')['NConfigProvider']
     NDescriptions: typeof import('naive-ui')['NDescriptions']
     NDescriptionsItem: typeof import('naive-ui')['NDescriptionsItem']
@@ -58,6 +58,8 @@ declare module 'vue' {
     NModalProvider: typeof import('naive-ui')['NModalProvider']
     NP: typeof import('naive-ui')['NP']
     NProgress: typeof import('naive-ui')['NProgress']
+    NRadio: typeof import('naive-ui')['NRadio']
+    NRadioGroup: typeof import('naive-ui')['NRadioGroup']
     NSelect: typeof import('naive-ui')['NSelect']
     NSpace: typeof import('naive-ui')['NSpace']
     NSpin: typeof import('naive-ui')['NSpin']
@@ -75,6 +77,8 @@ declare module 'vue' {
     SiderContent: typeof import('./src/components/SiderContent.vue')['default']
     StatusBadge: typeof import('./src/components/StatusBadge.vue')['default']
     TermView: typeof import('./src/components/Term/TermView.vue')['default']
+    TwoFASetup: typeof import('./src/components/TwoFASetup.vue')['default']
+    TwoFAVerify: typeof import('./src/components/TwoFAVerify.vue')['default']
     UpdateStatusBadge: typeof import('./src/components/UpdateStatusBadge.vue')['default']
     YamlEditor: typeof import('./src/components/YamlEditor/index.vue')['default']
   }

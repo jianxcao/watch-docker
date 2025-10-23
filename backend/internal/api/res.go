@@ -22,12 +22,14 @@ var (
 	SUCCESS = 0
 	// 通用与细分错误码（可按需扩展）
 	CodeBadRequest     = 40000
-	CodeImageRequired  = 40001
+	CodeUnauthorized   = 40001
+	CodeImageRequired  = 40002
 	CodeScanFailed     = 50001
 	CodeUpdateFailed   = 50002
 	CodeDockerError    = 50003
 	CodeRegistryError  = 50004
 	CodeInvalidRequest = 50005
+	CodeInternalError  = 50006
 )
 
 // NewErrorResCode 返回带自定义错误码的响应

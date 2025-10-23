@@ -134,6 +134,19 @@ type ComposeConfig struct {
 	LogLines     int  `mapstructure:"logLines" json:"logLines"`
 }
 
+// TwoFAUserConfig 用户二次验证配置
+type TwoFAUserConfig struct {
+	Method              string   `mapstructure:"method" json:"method"`
+	OTPSecret           string   `mapstructure:"otpSecret" json:"otpSecret,omitempty"`
+	WebAuthnCredentials []string `mapstructure:"webauthnCredentials" json:"webauthnCredentials,omitempty"` // Base64 编码的凭据
+	IsSetup             bool     `mapstructure:"isSetup" json:"isSetup"`
+}
+
+// TwoFAConfig 二次验证配置
+type TwoFAConfig struct {
+	Users map[string]TwoFAUserConfig `mapstructure:"users" json:"users"`
+}
+
 // Config 顶层配置聚合
 type Config struct {
 	Server   ServerConfig       `mapstructure:"server" json:"server"`
@@ -145,6 +158,7 @@ type Config struct {
 	Logging  LoggingConfig      `mapstructure:"logging" json:"logging"`
 	Notify   NotificationConfig `mapstructure:"notify" json:"notify"`
 	Compose  ComposeConfig      `mapstructure:"compose" json:"compose"`
+	TwoFA    TwoFAConfig        `mapstructure:"twofa" json:"twofa"`
 }
 
 var (
@@ -200,6 +214,9 @@ func defaults() *Config {
 			Enabled:      true,
 			ScanInterval: 30,
 			LogLines:     100,
+		},
+		TwoFA: TwoFAConfig{
+			Users: make(map[string]TwoFAUserConfig),
 		},
 	}
 }

@@ -4,23 +4,42 @@
       <!-- Logo 和标题 -->
       <div class="login-header">
         <img src="/logo.svg" alt="Watch Docker" class="logo" />
-        <div> <n-h2 class="app-title">Watch Docker</n-h2>
+        <div>
+          <n-h2 class="app-title">Watch Docker</n-h2>
           <span class="text-subtitle">容器版本监控与自动更新平台</span>
         </div>
       </div>
 
       <!-- 登录表单 -->
-      <n-card class="login-card" embedded>
-        <n-form ref="formRef" :model="loginForm" :rules="rules" label-placement="top"
-          require-mark-placement="right-hanging" size="large" :show-feedback="false" :show-label="false">
+      <n-card class="login-card" embedded v-if="!authStore.twoFARequired">
+        <n-form
+          ref="formRef"
+          :model="loginForm"
+          :rules="rules"
+          label-placement="top"
+          require-mark-placement="right-hanging"
+          size="large"
+          :show-feedback="false"
+          :show-label="false"
+        >
           <n-form-item label="用户名" path="username" class="pb-2">
-            <n-input v-model:value="loginForm.username" placeholder="请输入用户名" :disabled="loginLoading"
-              @keydown.enter="handleLogin" />
+            <n-input
+              v-model:value="loginForm.username"
+              placeholder="请输入用户名"
+              :disabled="loginLoading"
+              @keydown.enter="handleLogin"
+            />
           </n-form-item>
 
           <n-form-item label="密码" path="password" class="pb-2">
-            <n-input v-model:value="loginForm.password" type="password" placeholder="请输入密码" show-password-on="click"
-              :disabled="loginLoading" @keydown.enter="handleLogin" />
+            <n-input
+              v-model:value="loginForm.password"
+              type="password"
+              placeholder="请输入密码"
+              show-password-on="click"
+              :disabled="loginLoading"
+              @keydown.enter="handleLogin"
+            />
           </n-form-item>
 
           <n-form-item>
@@ -30,12 +49,27 @@
           </n-form-item>
 
           <n-form-item>
-            <n-button type="primary" block size="large" :loading="loginLoading" @click="handleLogin">
+            <n-button
+              type="primary"
+              block
+              size="large"
+              :loading="loginLoading"
+              @click="handleLogin"
+            >
               登录
             </n-button>
           </n-form-item>
         </n-form>
       </n-card>
+
+      <!-- 二次验证 -->
+      <div v-else>
+        <!-- 设置二次验证 -->
+        <TwoFASetup v-if="authStore.twoFASetupRequired" @success="handleTwoFASuccess" />
+
+        <!-- 验证二次验证 -->
+        <TwoFAVerify v-else :method="authStore.twoFAMethod" @success="handleTwoFASuccess" />
+      </div>
 
       <!-- 系统信息 -->
       <div class="system-info" v-if="settingStore.systemInfo">
@@ -56,6 +90,8 @@ import { useRouter } from 'vue-router'
 import { useMessage, type FormInst, type FormRules } from 'naive-ui'
 import { useAuthStore } from '@/store/auth'
 import { useSettingStore } from '@/store/setting'
+import TwoFASetup from '@/components/TwoFASetup.vue'
+import TwoFAVerify from '@/components/TwoFAVerify.vue'
 
 // 路由和消息
 const router = useRouter()
@@ -69,7 +105,7 @@ const settingStore = useSettingStore()
 const formRef = ref<FormInst | null>(null)
 const loginForm = ref({
   username: '',
-  password: ''
+  password: '',
 })
 
 // 响应式状态
@@ -81,13 +117,13 @@ const rules: FormRules = {
   username: {
     required: true,
     message: '请输入用户名',
-    trigger: ['input', 'blur']
+    trigger: ['input', 'blur'],
   },
   password: {
     required: true,
     message: '请输入密码',
-    trigger: ['input', 'blur']
-  }
+    trigger: ['input', 'blur'],
+  },
 }
 
 // 用户名操作（安全优化：不再保存密码）
@@ -107,14 +143,17 @@ const handleLogin = async () => {
     const result = await authStore.login(loginForm.value.username, loginForm.value.password)
 
     if (result.success) {
-      // 登录成功后保存用户名（根据用户选择）
-      settingStore.saveRememberedUsername(
-        loginForm.value.username,
-        rememberUsername.value
-      )
-      message.success('登录成功')
-      // 登录成功后跳转到主页
-      router.push('/')
+      // 保存用户名（根据用户选择）
+      settingStore.saveRememberedUsername(loginForm.value.username, rememberUsername.value)
+
+      // 检查是否需要二次验证
+      if (result.needTwoFA) {
+        message.info(result.isSetup ? '请完成二次验证' : '请设置二次验证')
+      } else {
+        message.success('登录成功')
+        // 登录成功后跳转到主页
+        router.push('/')
+      }
     } else {
       // 登录失败时，如果用户没有选择记住用户名，清除已保存的用户名
       if (!rememberUsername.value) {
@@ -131,6 +170,13 @@ const handleLogin = async () => {
   } finally {
     loginLoading.value = false
   }
+}
+
+// 二次验证成功
+const handleTwoFASuccess = (token: string) => {
+  authStore.completeTwoFA(token)
+  message.success('登录成功')
+  router.push('/')
 }
 
 // 监听记住用户名选项变化

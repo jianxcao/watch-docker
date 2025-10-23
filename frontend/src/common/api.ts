@@ -22,7 +22,14 @@ export const healthApi = {
 export const authApi = {
   // 登录
   login: (username: string, password: string) =>
-    axios.post<{ token: string; username: string }>(API_ENDPOINTS.LOGIN, {
+    axios.post<{
+      token?: string
+      username?: string
+      needTwoFA?: boolean
+      isSetup?: boolean
+      method?: string
+      tempToken?: string
+    }>(API_ENDPOINTS.LOGIN, {
       username,
       password,
     }),
@@ -140,6 +147,22 @@ export const composeApi = {
     axios.post<{ ok: boolean; composeFile: string }>(`/compose/new`, { name, yamlContent }),
 }
 
+// 二次验证 API
+export const twoFAApi = {
+  getStatus: () => axios.get('/2fa/status'),
+  setupOTPInit: () => axios.post('/2fa/setup/otp/init'),
+  setupOTPVerify: (code: string, secret: string) =>
+    axios.post('/2fa/setup/otp/verify', { code, secret }),
+  verifyOTP: (code: string) => axios.post('/2fa/verify/otp', { code }),
+  webauthnRegisterBegin: () => axios.post('/2fa/setup/webauthn/begin'),
+  webauthnRegisterFinish: (sessionData: string, response: any) =>
+    axios.post('/2fa/setup/webauthn/finish', { sessionData, response }),
+  webauthnLoginBegin: () => axios.post('/2fa/verify/webauthn/begin'),
+  webauthnLoginFinish: (sessionData: string, response: any) =>
+    axios.post('/2fa/verify/webauthn/finish', { sessionData, response }),
+  disable: () => axios.post('/2fa/disable'),
+}
+
 // 导出所有API
 export const api = {
   health: healthApi,
@@ -148,6 +171,7 @@ export const api = {
   image: imageApi,
   config: configApi,
   compose: composeApi,
+  twoFA: twoFAApi,
 }
 
 export default api

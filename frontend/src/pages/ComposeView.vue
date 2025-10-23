@@ -129,7 +129,7 @@ import {
 } from '@vicons/ionicons5'
 import { computed, onMounted, ref, watchEffect } from 'vue'
 import { NIcon, type DropdownOption } from 'naive-ui'
-import { renderIcon } from '@/common/utils'
+import { renderIcon, sleep } from '@/common/utils'
 import type { ComposeProject } from '@/common/types'
 
 const router = useRouter()
@@ -266,6 +266,15 @@ onMounted(async () => {
     await composeStore.fetchProjects()
   } catch (error) {
     console.error('初始化 Compose 项目数据失败:', error)
+  }
+})
+const visibility = useDocumentVisibility()
+
+watch(visibility, (newVal) => {
+  if (newVal === 'visible') {
+    sleep(1000).then(() => {
+      composeStore.fetchProjects()
+    })
   }
 })
 </script>

@@ -18,6 +18,8 @@ export const useSettingStore = defineStore('setting', () => {
     localStorage,
   )
 
+  const tmpToken = ref('')
+
   const currentUsername = ref(setting.value.rememberedUsername || '')
 
   const headerHeight = ref(56)
@@ -101,8 +103,12 @@ export const useSettingStore = defineStore('setting', () => {
     setting.value.token = token
   }
 
+  function setTmpToken(token: string) {
+    tmpToken.value = token
+  }
+
   function getToken() {
-    return setting.value.token
+    return setting.value.token || tmpToken.value
   }
 
   function clearToken() {
@@ -126,6 +132,7 @@ export const useSettingStore = defineStore('setting', () => {
     clearCurrentUsername,
     getRememberedUsername,
     setToken,
+    setTmpToken,
     getToken,
     clearToken,
   }
