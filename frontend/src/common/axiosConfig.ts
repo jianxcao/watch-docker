@@ -2,6 +2,7 @@ import { systemErrCode } from '@/constants/code'
 import { systemErrInfo } from '@/constants/msg'
 import axios from 'axios'
 import type { AxiosRequestConfig, CancelTokenSource } from 'axios'
+import router from '@/router'
 // format全局只有在应用初始化后才可以使用
 // import toast from './toast'
 export interface IResData<T = any> {
@@ -49,7 +50,7 @@ const detailLockKey = (config: IAxiosRequestConfig, promise: Promise<any>) => {
       },
       () => {
         lockUrl[lockKey] = []
-      }
+      },
     )
     config.source.cancel()
     return cur[0].promise
@@ -89,7 +90,7 @@ axios.interceptors.request.use(
   function (error) {
     console.log(error)
     return Promise.reject(error)
-  }
+  },
 )
 
 axios.interceptors.response.use(
@@ -103,11 +104,15 @@ axios.interceptors.response.use(
     if (status === 401 || status === 403) {
       // 导入并调用强制登出
       const { useAuthStore } = await import('@/store/auth')
-      const authStore = useAuthStore()
-      authStore.forceLogout()
+      if (router.currentRoute.value.path !== '/login') {
+        const authStore = useAuthStore()
+        authStore.forceLogout()
+        router.push('/login')
+        return
+      }
     }
     return Promise.reject(err)
-  }
+  },
 )
 
 axios.interceptors.response.use(async function (res) {

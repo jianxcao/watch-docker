@@ -7,6 +7,7 @@ import { fileURLToPath, URL } from 'node:url'
 import svgLoader from 'vite-svg-loader'
 import AutoImport from 'unplugin-auto-import/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -44,6 +45,7 @@ export default defineConfig({
     vue(),
     svgLoader(),
     Unocss(),
+    basicSsl(), // HTTPS 支持
     AutoImport({
       imports: ['vue', '@vueuse/core', 'vue-router', 'pinia'],
       dts: 'src/auto-imports.d.ts',
@@ -113,6 +115,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    // HTTPS 由 @vitejs/plugin-basic-ssl 插件自动启用
     headers: {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
@@ -124,6 +127,7 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
         ws: true, // 启用 WebSocket 代理
+        // 如果后端也是 HTTPS，请改为 https://localhost:8080
       },
     },
   },

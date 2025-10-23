@@ -16,6 +16,7 @@ export interface SystemInfo {
   version: string
   appPath: string
   isOpenDockerShell: boolean
+  isSecondaryVerificationEnabled?: boolean
 }
 // 容器资源统计信息
 export interface ContainerStats {
