@@ -82,7 +82,7 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 		if err != nil {
 			logger.Logger.Error("Failed to start PTY", zap.Error(err))
 			errMsg := fmt.Sprintf("启动终端失败: %v\r\n", err)
-			conn.WriteMessage(websocket.TextMessage, []byte(errMsg))
+			conn.WriteMessage(websocket.BinaryMessage, []byte(errMsg))
 			return
 		}
 		defer func() {

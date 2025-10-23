@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -190,12 +191,24 @@ func (s *Server) handleComposeCreateAndUpWebSocket() gin.HandlerFunc {
 }
 
 // sendWSMessage 发送 WebSocket 消息的辅助函数
+// 返回 error 以便调用者决定如何处理
 func sendWSMessage(conn *websocket.Conn, msgType, message string) error {
 	conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-	return conn.WriteJSON(map[string]string{
+	err := conn.WriteJSON(map[string]string{
 		"type":    msgType,
 		"message": message,
 	})
+	if err != nil {
+		// 区分连接关闭错误和其他写入错误
+		if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+			logger.Logger.Info("WebSocket connection already closed", zap.String("msgType", msgType))
+		} else if errors.Is(err, websocket.ErrCloseSent) {
+			logger.Logger.Info("WebSocket connection closed", zap.Error(err))
+		} else {
+			logger.Logger.Error("Failed to send WebSocket message", zap.String("msgType", msgType), zap.Error(err))
+		}
+	}
+	return err
 }
 
 // handleComposeLogsWebSocket 处理 Compose 项目日志的 WebSocket 连接
@@ -258,13 +271,37 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 		// 监听客户端消息（主要用于检测断开连接）
 		go func() {
 			defer cancel()
-			for {
-				if _, _, err := conn.ReadMessage(); err != nil {
-					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-						logger.Logger.Warn("WebSocket read error", zap.Error(err))
+			// 创建错误通道
+			readErr := make(chan error, 1)
+
+			// 启动读取 goroutine
+			go func() {
+				for {
+					if _, _, err := conn.ReadMessage(); err != nil {
+						logger.Logger.Info("WebSocket ReadMessage returned error",
+							zap.Error(err),
+							zap.Bool("isCloseError", websocket.IsCloseError(err,
+								websocket.CloseNormalClosure,
+								websocket.CloseGoingAway,
+								websocket.CloseAbnormalClosure)))
+						readErr <- err
+						return
 					}
-					return
 				}
+			}()
+
+			// 等待 ctx 取消或读取错误
+			select {
+			case <-ctx.Done():
+				logger.Logger.Info("WebSocket read goroutine: context cancelled")
+				return
+			case err := <-readErr:
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+					logger.Logger.Warn("WebSocket unexpected close error", zap.Error(err))
+				} else {
+					logger.Logger.Info("WebSocket closed normally", zap.Error(err))
+				}
+				return
 			}
 		}()
 
@@ -282,15 +319,14 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 			logger.Logger.Error("Failed to start compose logs stream", zap.Error(result.Error))
 			errMsg := fmt.Sprintf("启动日志流失败: %v\n", result.Error)
 			conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-			conn.WriteMessage(websocket.TextMessage, []byte(errMsg))
+			conn.WriteMessage(websocket.BinaryMessage, []byte(errMsg))
 			return
 		}
 		defer result.Reader.Close()
-
 		// 发送欢迎消息
 		welcomeMsg := fmt.Sprintf("\x1b[32m=== 连接到项目 %s 的日志流 ===\x1b[0m\r\n", projectName)
 		conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(welcomeMsg)); err != nil {
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte(welcomeMsg)); err != nil {
 			logger.Logger.Error("Failed to send welcome message", zap.Error(err))
 			return
 		}
@@ -299,30 +335,33 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 		// 使用字节块读取，保留 ANSI 颜色和控制字符
 		buffer := make([]byte, 4096) // 4KB 缓冲区
 		for {
-			select {
-			case <-ctx.Done():
-				logger.Logger.Info("Compose logs stream context cancelled")
-				return
-			default:
-				// 读取日志块
-				n, err := result.Reader.Read(buffer)
-				if n > 0 {
-					// 发送日志到 WebSocket（保留所有 ANSI 转义序列）
-					conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-					if err := conn.WriteMessage(websocket.TextMessage, buffer[:n]); err != nil {
+			// 读取日志块
+			// 注意：Read 会阻塞，但当 ctx 取消时，底层的 docker compose 进程会终止
+			// 导致 Read 返回 EOF 或其他错误，从而退出循环
+			n, err := result.Reader.Read(buffer)
+			if n > 0 {
+				// 发送日志到 WebSocket（使用 BinaryMessage 避免 UTF-8 验证问题）
+				conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+				if err := conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
+					// 判断是否是连接关闭错误
+					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+						logger.Logger.Info("WebSocket connection closed by client", zap.Error(err))
+					} else if errors.Is(err, websocket.ErrCloseSent) {
+						logger.Logger.Info("WebSocket connection closed", zap.Error(err))
+					} else {
 						logger.Logger.Error("Failed to write message to WebSocket", zap.Error(err))
-						return
 					}
-				}
-
-				if err != nil {
-					if err == io.EOF {
-						logger.Logger.Info("Compose logs stream ended")
-						return
-					}
-					logger.Logger.Error("Error reading compose logs", zap.Error(err))
 					return
 				}
+			}
+
+			if err != nil {
+				if err == io.EOF {
+					logger.Logger.Info("Compose logs stream ended")
+					return
+				}
+				logger.Logger.Error("Error reading compose logs", zap.Error(err))
+				return
 			}
 		}
 	}

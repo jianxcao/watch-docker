@@ -147,7 +147,6 @@ const sortBy = ref<string>('name')
 const sortOrder = ref<'asc' | 'desc'>('asc')
 
 const handleViewLogs = (project: ComposeProject) => {
-  console.log('handleViewLogs', project)
   currentProject.value = project
   showLogsModal.value = true
 }

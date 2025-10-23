@@ -272,7 +272,8 @@ func (c *Client) writePump() {
 				return
 			}
 			// logger.Logger.Debug(fmt.Sprintf("WebSocket 写入消息: %s", string(message)))
-			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			// 使用 BinaryMessage 避免 UTF-8 验证问题
+			if err := c.conn.WriteMessage(websocket.BinaryMessage, message); err != nil {
 				logger.Logger.Error(fmt.Sprintf("WebSocket 写入失败: %v", err))
 				return
 			}

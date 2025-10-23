@@ -73,7 +73,20 @@ export default function useStatsWebSocket() {
     // 消息接收回调
     onMessage(_, event) {
       try {
-        const message: StatsMessage = JSON.parse(event.data)
+        let dataStr: string
+        // 处理二进制消息
+        if (event.data instanceof ArrayBuffer) {
+          const decoder = new TextDecoder('utf-8')
+          dataStr = decoder.decode(event.data)
+        } else if (typeof event.data === 'string') {
+          // 兼容文本消息
+          dataStr = event.data
+        } else {
+          console.error('未知的消息类型:', typeof event.data)
+          return
+        }
+
+        const message: StatsMessage = JSON.parse(dataStr)
 
         if (message.type === 'containers' && message.data.containers) {
           statsEmitter.emit('containers', message.data.containers)

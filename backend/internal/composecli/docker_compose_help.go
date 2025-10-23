@@ -211,16 +211,35 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 			// 检查是否是退出码错误
 			if exitError, ok := waitErr.(*exec.ExitError); ok {
 				exitCode = exitError.ExitCode()
-				logger.Logger.Warn("命令执行失败",
-					zap.String("operation", options.OperationName),
-					zap.Int("exitCode", exitCode),
-					zap.Error(waitErr))
+
+				// 检查是否是因为 context 取消或信号导致的终止（这是正常的取消操作）
+				errMsg := waitErr.Error()
+				if strings.Contains(errMsg, "signal: killed") ||
+					strings.Contains(errMsg, "signal: terminated") ||
+					strings.Contains(errMsg, "signal: interrupt") {
+					logger.Logger.Info("命令被取消",
+						zap.String("operation", options.OperationName),
+						zap.String("reason", errMsg))
+				} else {
+					// 真正的命令执行失败
+					logger.Logger.Warn("命令执行失败",
+						zap.String("operation", options.OperationName),
+						zap.Int("exitCode", exitCode),
+						zap.Error(waitErr))
+				}
 			} else {
 				// 其他错误，设置退出码为 -1
 				exitCode = -1
-				logger.Logger.Error("命令等待失败",
-					zap.String("operation", options.OperationName),
-					zap.Error(waitErr))
+				// 同样检查是否是 context 取消
+				if ctx.Err() == context.Canceled {
+					logger.Logger.Info("命令被取消",
+						zap.String("operation", options.OperationName),
+						zap.Error(waitErr))
+				} else {
+					logger.Logger.Error("命令等待失败",
+						zap.String("operation", options.OperationName),
+						zap.Error(waitErr))
+				}
 			}
 		} else {
 			logger.Logger.Info("命令执行成功",
