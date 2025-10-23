@@ -1,6 +1,13 @@
 import { API_ENDPOINTS } from '@/constants/api'
 import axios from './axiosConfig'
-import type { BatchUpdateResult, Config, ContainerStatus, ImageInfo } from './types'
+import type {
+  BatchUpdateResult,
+  ComposeProject,
+  Config,
+  ContainerStatus,
+  ImageInfo,
+  SystemInfo,
+} from './types'
 
 // 健康检查相关
 export const healthApi = {
@@ -27,7 +34,7 @@ export const authApi = {
   checkAuthStatus: () => axios.get<{ authEnabled: boolean }>(API_ENDPOINTS.AUTH_STATUS),
 
   // 获取系统信息
-  getInfo: () => axios.get<any>(API_ENDPOINTS.INFO),
+  getInfo: () => axios.get<{ info: SystemInfo }>(API_ENDPOINTS.INFO),
 }
 
 // 容器相关API
@@ -101,6 +108,38 @@ export const configApi = {
   saveConfig: (config: Config) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONFIG, config),
 }
 
+// Compose 项目管理API
+export const composeApi = {
+  // 获取 Compose 项目列表
+  getProjects: () => axios.get<{ projects: ComposeProject[] }>('/compose'),
+
+  // 启动项目
+  startProject: (project: ComposeProject) => axios.post<{ ok: boolean }>(`/compose/start`, project),
+
+  // 停止项目
+  stopProject: (project: ComposeProject) => axios.post<{ ok: boolean }>(`/compose/stop`, project),
+
+  createProject: (project: ComposeProject) =>
+    axios.post<{ ok: boolean }>(`/compose/create`, project),
+  // 重新创建项目
+  restartProject: (project: ComposeProject) =>
+    axios.post<{ ok: boolean }>(`/compose/restart`, project),
+
+  // 删除项目
+  deleteProject: (project: ComposeProject) =>
+    axios.delete<{ ok: boolean }>(`/compose/delete`, {
+      data: project,
+    }),
+
+  // 获取项目日志
+  getProjectLogs: (name: string, lines = 100) =>
+    axios.get<{ logs: string }>(`/compose/${name}/logs`, { params: { lines } }),
+
+  // 创建新项目（保存 YAML 文件）
+  saveNewProject: (name: string, yamlContent: string) =>
+    axios.post<{ ok: boolean; composeFile: string }>(`/compose/new`, { name, yamlContent }),
+}
+
 // 导出所有API
 export const api = {
   health: healthApi,
@@ -108,6 +147,7 @@ export const api = {
   container: containerApi,
   image: imageApi,
   config: configApi,
+  compose: composeApi,
 }
 
 export default api

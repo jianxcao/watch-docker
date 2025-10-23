@@ -9,7 +9,9 @@
             "program": "${workspaceFolder}/backend/cmd/watch-docker/main.go",
             "env": {
                 "CONFIG_PATH": "./.config",
-                "STATIC_DIR": "${workspaceFolder}/frontend/dist"
+                "STATIC_DIR": "${workspaceFolder}/frontend/dist",
+                "IS_OPEN_DOCKER_SHELL": "true",
+                "APP_PATH": "/Users/jianxiong.cao/Downloads/docker"
             },
             "cwd": "${workspaceFolder}/backend"
         }

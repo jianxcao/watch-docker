@@ -124,6 +124,16 @@ type NotificationConfig struct {
 	IsEnable bool   `mapstructure:"isEnable" json:"isEnable"`
 }
 
+// ComposeConfig Docker Compose 相关配置
+// enabled: 是否启用 Compose 功能
+// scanInterval: 扫描间隔(秒)
+// logLines: 默认日志行数
+type ComposeConfig struct {
+	Enabled      bool `mapstructure:"enabled" json:"enabled"`
+	ScanInterval int  `mapstructure:"scanInterval" json:"scanInterval"`
+	LogLines     int  `mapstructure:"logLines" json:"logLines"`
+}
+
 // Config 顶层配置聚合
 type Config struct {
 	Server   ServerConfig       `mapstructure:"server" json:"server"`
@@ -134,6 +144,7 @@ type Config struct {
 	Proxy    ProxyConfig        `mapstructure:"proxy" json:"proxy"`
 	Logging  LoggingConfig      `mapstructure:"logging" json:"logging"`
 	Notify   NotificationConfig `mapstructure:"notify" json:"notify"`
+	Compose  ComposeConfig      `mapstructure:"compose" json:"compose"`
 }
 
 var (
@@ -185,6 +196,11 @@ func defaults() *Config {
 		Proxy:   ProxyConfig{}, // 默认不使用代理
 		Logging: LoggingConfig{Level: "info"},
 		Notify:  NotificationConfig{Method: http.MethodGet, IsEnable: true},
+		Compose: ComposeConfig{
+			Enabled:      true,
+			ScanInterval: 30,
+			LogLines:     100,
+		},
 	}
 }
 

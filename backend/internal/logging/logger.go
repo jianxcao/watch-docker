@@ -136,3 +136,7 @@ func ZapField(key string, val interface{}) zap.Field {
 func ZapErr(err error) zap.Field {
 	return zap.Error(err)
 }
+
+func ZapString(key, val string) zap.Field {
+	return zap.String(key, val)
+}

@@ -4,12 +4,17 @@
     <div class="sider-header">
       <n-space align="center">
         <img src="/logo.svg" alt="Logo" class="logo" />
-        <n-h3 style="margin: 0;">Watch Docker</n-h3>
+        <n-h3 style="margin: 0">Watch Docker</n-h3>
       </n-space>
     </div>
 
     <!-- 菜单 -->
-    <n-menu :value="activeKey" :options="menuOptions" @update:value="handleMenuSelect" class="sider-menu" />
+    <n-menu
+      :value="activeKey"
+      :options="menuOptions"
+      @update:value="handleMenuSelect"
+      class="sider-menu"
+    />
 
     <!-- 用户信息（如果启用了身份验证） -->
     <div v-if="authStore.authEnabled && authStore.isLoggedIn" class="user-info">
@@ -36,15 +41,26 @@
         <n-tag :type="healthStatus === 'healthy' ? 'success' : 'error'" size="small">
           {{ healthText }}
         </n-tag>
-        <n-text depth="3" style="font-size: 12px;">
+        <n-text depth="3" style="font-size: 12px">
           {{ version }}
         </n-text>
       </div>
       <div class="footer-actions">
-        <n-icon @click="handleGithubClick" class="cursor-pointer" title="访问 GitHub 仓库" size="20">
+        <n-icon
+          @click="handleGithubClick"
+          class="cursor-pointer"
+          title="访问 GitHub 仓库"
+          size="20"
+        >
           <LogoGithub />
         </n-icon>
-        <n-icon @click="handleRefresh" :loading="appStore.globalLoading" class="cursor-pointer" title="刷新数据" size="20">
+        <n-icon
+          @click="handleRefresh"
+          :loading="appStore.globalLoading"
+          class="cursor-pointer"
+          title="刷新数据"
+          size="20"
+        >
           <template v-if="appStore.globalLoading">
             <RefreshOutline class="rotating" />
           </template>
@@ -58,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
 import { useAuthStore } from '@/store/auth'
@@ -75,7 +91,9 @@ import {
   RefreshOutline,
   LogOutOutline,
   LogoGithub,
+  TerminalOutline,
 } from '@vicons/ionicons5'
+import ComposeIcon from '@/assets/svg/compose.svg?component'
 import LogIcon from '@/assets/svg/log.svg?component'
 
 interface Props {
@@ -100,11 +118,27 @@ const version = computed(() => settingStore.systemInfo?.version)
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
-  if (path === '/') {return 'home'}
-  if (path === '/containers') {return 'containers'}
-  if (path === '/images') {return 'images'}
-  if (path === '/logs') {return 'logs'}
-  if (path === '/settings') {return 'settings'}
+  if (path === '/') {
+    return 'home'
+  }
+  if (path === '/containers') {
+    return 'containers'
+  }
+  if (path === '/images') {
+    return 'images'
+  }
+  if (path === '/compose') {
+    return 'compose'
+  }
+  if (path === '/logs') {
+    return 'logs'
+  }
+  if (path === '/terminal') {
+    return 'terminal'
+  }
+  if (path === '/settings') {
+    return 'settings'
+  }
   return 'home'
 })
 
@@ -123,33 +157,47 @@ const healthText = computed(() => {
 })
 
 // 菜单配置
-const menuOptions = computed<MenuOption[]>(() => [
-  {
-    label: '首页',
-    key: 'home',
-    icon: () => h(HomeOutline),
-  },
-  {
-    label: '容器管理',
-    key: 'containers',
-    icon: () => h(LayersOutline),
-  },
-  {
-    label: '镜像管理',
-    key: 'images',
-    icon: () => h(ArchiveOutline),
-  },
-  {
-    label: '日志',
-    key: 'logs',
-    icon: () => h(LogIcon),
-  },
-  {
-    label: '系统设置',
-    key: 'settings',
-    icon: () => h(SettingsOutline),
-  },
-])
+const menuOptions = computed<MenuOption[]>(
+  () =>
+    [
+      {
+        label: '首页',
+        key: 'home',
+        icon: () => h(HomeOutline),
+      },
+      {
+        label: 'Compose 项目',
+        key: 'compose',
+        icon: () => h(ComposeIcon),
+      },
+      {
+        label: '容器管理',
+        key: 'containers',
+        icon: () => h(LayersOutline),
+      },
+      {
+        label: '镜像管理',
+        key: 'images',
+        icon: () => h(ArchiveOutline),
+      },
+
+      {
+        label: '日志',
+        key: 'logs',
+        icon: () => h(LogIcon),
+      },
+      settingStore.systemInfo?.isOpenDockerShell && {
+        label: '终端',
+        key: 'terminal',
+        icon: () => h(TerminalOutline),
+      },
+      {
+        label: '系统设置',
+        key: 'settings',
+        icon: () => h(SettingsOutline),
+      },
+    ].filter(Boolean) as MenuOption[],
+)
 
 // 处理菜单选择
 const handleMenuSelect = (key: string) => {
@@ -163,8 +211,14 @@ const handleMenuSelect = (key: string) => {
     case 'images':
       router.push('/images')
       break
+    case 'compose':
+      router.push('/compose')
+      break
     case 'logs':
       router.push('/logs')
+      break
+    case 'terminal':
+      router.push('/terminal')
       break
     case 'settings':
       router.push('/settings')
@@ -188,10 +242,7 @@ const handleRefresh = async () => {
       await imageStore.fetchImages()
     } else {
       // 首页刷新所有数据
-      await Promise.all([
-        containerStore.fetchContainers(false, true),
-        imageStore.fetchImages(),
-      ])
+      await Promise.all([containerStore.fetchContainers(false, true), imageStore.fetchImages()])
     }
     appStore.updateRefreshTime()
   } catch (error) {
@@ -220,7 +271,6 @@ const handleGithubClick = () => {
 onMounted(() => {
   settingStore.fetchSystemInfo()
 })
-
 </script>
 
 <style scoped lang="less">

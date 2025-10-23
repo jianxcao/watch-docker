@@ -39,6 +39,22 @@ const router = createRouter({
           meta: { title: '镜像管理', requiresAuth: true, layoutClass: 'layout-images' },
         },
         {
+          path: '/compose',
+          name: 'compose',
+          component: () => import('@/pages/ComposeView.vue'),
+          meta: { title: 'Compose 项目', requiresAuth: true },
+        },
+        {
+          path: '/compose/create',
+          name: 'compose-create',
+          component: () => import('@/pages/ComposeCreateView.vue'),
+          meta: {
+            title: '创建 Compose 项目',
+            requiresAuth: true,
+            layoutClass: 'layout-compose-create',
+          },
+        },
+        {
           path: '/settings',
           component: () => import('@/pages/SettingsView.vue'),
           meta: { title: '系统设置', requiresAuth: true, layoutClass: 'layout-settings' },
@@ -47,6 +63,11 @@ const router = createRouter({
           path: '/logs',
           component: () => import('@/pages/LogsPageView.vue'),
           meta: { title: '日志', requiresAuth: true, layoutClass: 'layout-logs' },
+        },
+        {
+          path: '/terminal',
+          component: () => import('@/pages/TerminalView.vue'),
+          meta: { title: '终端', requiresAuth: true, layoutClass: 'layout-terminal' },
         },
       ],
     },

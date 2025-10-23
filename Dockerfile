@@ -48,6 +48,10 @@ FROM alpine:latest
 # 安装ca-certificates、timezone数据、wget (用于健康检查)、gosu和shadow-utils
 RUN apk --no-cache add ca-certificates tzdata wget gosu shadow
 RUN apk add --no-cache dumb-init
+
+# 安装 Docker CLI 和 Docker Compose
+RUN apk add --no-cache docker-cli docker-cli-compose
+
 # 设置时区
 ENV TZ=Asia/Shanghai
 

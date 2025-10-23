@@ -48,6 +48,11 @@ func (c *Client) Close() error {
 	return c.docker.Close()
 }
 
+// GetDockerClient 返回底层的 Docker 客户端，供其他模块使用
+func (c *Client) GetDockerClient() *client.Client {
+	return c.docker
+}
+
 // AddStatsConnection 添加统计 WebSocket 连接
 func (c *Client) AddStatsConnection(ctx context.Context) {
 	c.statsManager.AddConnection(ctx)

@@ -1,0 +1,8 @@
+dist
+dist-ssr
+dev-dist
+coverage
+node_modules
+*.md
+pnpm-lock.yaml
+
