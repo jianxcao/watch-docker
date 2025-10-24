@@ -226,9 +226,6 @@ func (h *StreamHub[T]) startStreamSource() {
 	}
 	defer reader.Close()
 
-	// 发送欢迎消息
-	h.broadcastRaw([]byte("\x1b[32m=== 已连接到数据流 ===\x1b[0m\r\n"))
-
 	// 简单的读取循环
 	for {
 		select {
@@ -251,7 +248,6 @@ func (h *StreamHub[T]) startStreamSource() {
 				if err == io.EOF {
 					logger.Logger.Info("数据源已结束",
 						zap.String("key", h.key))
-					h.broadcastRaw([]byte("\r\n\x1b[33m=== 数据流已结束 ===\x1b[0m\r\n"))
 				} else {
 					// 其他错误才是真正的错误
 					logger.Logger.Error("读取数据源出错",

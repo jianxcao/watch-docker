@@ -5,15 +5,82 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/jianxcao/watch-docker/backend/internal/twofa"
 	"go.uber.org/zap"
 )
+
+// extractRPIDAndOrigin 从请求中提取 RPID（域名）和 Origin
+// 返回值：rpid (不含端口的主机名), origin (完整的 origin URL)
+// 支持反向代理，优先从 X-Forwarded-Host 等代理头获取真实域名
+func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
+	// 从请求头获取前端的 origin（浏览器自动设置，通常是准确的）
+	origin = c.GetHeader("Origin")
+	if origin == "" {
+		// 回退方案：构造 origin
+		// 优先使用代理转发的真实主机名
+		host := c.GetHeader("X-Forwarded-Host")
+		if host == "" {
+			host = c.GetHeader("X-Original-Host")
+		}
+		if host == "" {
+			host = c.Request.Host
+		}
+
+		// 判断协议（优先使用代理转发的协议）
+		scheme := c.GetHeader("X-Forwarded-Proto")
+		if scheme == "" {
+			scheme = "https" // 默认使用 https
+		}
+
+		origin = scheme + "://" + host
+	}
+
+	// 提取主机名作为 RPID（去掉端口）
+	// 优先从代理头获取真实主机名
+	host := c.GetHeader("X-Forwarded-Host")
+	if host == "" {
+		host = c.GetHeader("X-Original-Host")
+	}
+	if host == "" {
+		host = c.Request.Host
+	}
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.TrimPrefix(host, "https://")
+
+	logger.Logger.Info("host", zap.String("host", host))
+
+	// 去掉端口号
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	rpid = host
+
+	return rpid, origin
+}
+
+// isAllowedDomain 检查域名是否在白名单中
+func isAllowedDomain(domain string) bool {
+	allowedDomainsStr := conf.EnvCfg.TWOFA_ALLOWED_DOMAINS
+	if allowedDomainsStr == "" {
+		return true // 空白名单表示允许所有域名
+	}
+
+	allowedDomains := strings.Split(allowedDomainsStr, ",")
+	for _, allowed := range allowedDomains {
+		if strings.TrimSpace(allowed) == domain {
+			return true
+		}
+	}
+	return false
+}
 
 // handleTwoFAStatus 获取二次验证状态
 func (s *Server) handleTwoFAStatus() gin.HandlerFunc {
@@ -31,11 +98,22 @@ func (s *Server) handleTwoFAStatus() gin.HandlerFunc {
 			return
 		}
 
+		// 提取 RPID（用于 WebAuthn 检查）
+		rpid, _ := extractRPIDAndOrigin(c)
+
+		// 检查当前域名/方法是否已设置
+		isSetup, err := twofa.IsUserSetupForMethod(username.(string), userConfig.Method, rpid)
+		if err != nil {
+			s.logger.Error("check user setup status failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查设置状态失败"))
+			return
+		}
+
 		// 二次验证是否启用由 IS_SECONDARY_VERIFICATION 环境变量控制
 		envCfg := conf.EnvCfg
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"enabled": envCfg.IS_SECONDARY_VERIFICATION,
-			"isSetup": userConfig.IsSetup,
+			"isSetup": isSetup,
 			"method":  userConfig.Method,
 		}))
 	}
@@ -164,8 +242,15 @@ func (s *Server) handleVerifyOTP() gin.HandlerFunc {
 			return
 		}
 
-		if !userConfig.IsSetup || userConfig.Method != twofa.MethodOTP {
+		// 检查用户是否选择了 OTP 方法
+		if userConfig.Method != twofa.MethodOTP {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "未设置OTP"))
+			return
+		}
+
+		// 检查 OTP 密钥是否已设置
+		if userConfig.OTPSecret == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "OTP密钥未设置"))
 			return
 		}
 
@@ -206,37 +291,34 @@ func (s *Server) handleWebAuthnRegisterBegin() gin.HandlerFunc {
 			return
 		}
 
-		// 从请求头获取前端的 origin
-		origin := c.GetHeader("Origin")
-		if origin == "" {
-			// 回退方案：使用 Referer 或构造默认值
-			origin = "https://" + c.Request.Host
-		}
+		// 提取 RPID 和 Origin
+		rpid, origin := extractRPIDAndOrigin(c)
 
-		// 提取主机名（去掉端口）作为 RPID
-		host := c.Request.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+		// 检查域名白名单
+		if !isAllowedDomain(rpid) {
+			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
+			return
 		}
 
 		// 获取 WebAuthn 服务
-		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", host, origin)
+		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", rpid, origin)
 		if err != nil {
 			s.logger.Error("create webauthn service failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "创建WebAuthn服务失败"))
 			return
 		}
 
-		// 获取用户现有凭据
-		userConfig, err := twofa.GetUserConfig(username.(string))
+		// 获取用户在当前域名下的现有凭据
+		credentials, err := twofa.GetUserCredentialsForRPID(username.(string), rpid)
 		if err != nil {
-			s.logger.Error("get user twofa config failed", zap.Error(err))
-			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取配置失败"))
+			s.logger.Error("get user credentials for rpid failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取凭据失败"))
 			return
 		}
 
 		// 开始注册
-		options, session, err := webAuthnService.BeginRegistration(username.(string), userConfig.WebAuthnCredentials)
+		options, session, err := webAuthnService.BeginRegistration(username.(string), credentials)
 		if err != nil {
 			s.logger.Error("begin webauthn registration failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "开始注册失败"))
@@ -274,21 +356,18 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 从请求头获取前端的 origin
-		origin := c.GetHeader("Origin")
-		if origin == "" {
-			// 回退方案：使用 Referer 或构造默认值
-			origin = "https://" + c.Request.Host
-		}
+		// 提取 RPID 和 Origin
+		rpid, origin := extractRPIDAndOrigin(c)
 
-		// 提取主机名（去掉端口）作为 RPID
-		host := c.Request.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+		// 检查域名白名单
+		if !isAllowedDomain(rpid) {
+			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
+			return
 		}
 
 		// 获取 WebAuthn 服务
-		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", host, origin)
+		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", rpid, origin)
 		if err != nil {
 			s.logger.Error("create webauthn service failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "创建WebAuthn服务失败"))
@@ -311,7 +390,23 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户现有凭据
+		// 获取用户在当前域名下的现有凭据
+		credentials, err := twofa.GetUserCredentialsForRPID(username.(string), rpid)
+		if err != nil {
+			s.logger.Error("get user credentials for rpid failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取凭据失败"))
+			return
+		}
+
+		// 完成注册
+		credential, err := webAuthnService.FinishRegistration(username.(string), credentials, sessionData, parsedResponse)
+		if err != nil {
+			s.logger.Error("finish webauthn registration failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "完成注册失败"))
+			return
+		}
+
+		// 获取用户完整配置
 		userConfig, err := twofa.GetUserConfig(username.(string))
 		if err != nil {
 			s.logger.Error("get user twofa config failed", zap.Error(err))
@@ -319,17 +414,12 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 完成注册
-		credential, err := webAuthnService.FinishRegistration(username.(string), userConfig.WebAuthnCredentials, sessionData, parsedResponse)
-		if err != nil {
-			s.logger.Error("finish webauthn registration failed", zap.Error(err))
-			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "完成注册失败"))
-			return
-		}
-
-		// 保存凭据
+		// 保存凭据（包含 RPID）
 		userConfig.Method = twofa.MethodWebAuthn
-		userConfig.WebAuthnCredentials = append(userConfig.WebAuthnCredentials, *credential)
+		userConfig.WebAuthnCredentials = append(userConfig.WebAuthnCredentials, twofa.WebAuthnCredentialWithRPID{
+			Credential: *credential,
+			RPID:       rpid,
+		})
 		userConfig.IsSetup = true
 
 		if err := twofa.SaveUserConfig(username.(string), userConfig); err != nil {
@@ -369,21 +459,18 @@ func (s *Server) handleWebAuthnLoginBegin() gin.HandlerFunc {
 			return
 		}
 
-		// 从请求头获取前端的 origin
-		origin := c.GetHeader("Origin")
-		if origin == "" {
-			// 回退方案：使用 Referer 或构造默认值
-			origin = "https://" + c.Request.Host
-		}
+		// 提取 RPID 和 Origin
+		rpid, origin := extractRPIDAndOrigin(c)
 
-		// 提取主机名（去掉端口）作为 RPID
-		host := c.Request.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+		// 检查域名白名单
+		if !isAllowedDomain(rpid) {
+			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
+			return
 		}
 
 		// 获取 WebAuthn 服务
-		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", host, origin)
+		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", rpid, origin)
 		if err != nil {
 			s.logger.Error("create webauthn service failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "创建WebAuthn服务失败"))
@@ -398,13 +485,27 @@ func (s *Server) handleWebAuthnLoginBegin() gin.HandlerFunc {
 			return
 		}
 
-		if !userConfig.IsSetup || userConfig.Method != twofa.MethodWebAuthn {
+		// 检查用户是否选择了 WebAuthn 方法
+		if userConfig.Method != twofa.MethodWebAuthn {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "未设置WebAuthn"))
 			return
 		}
 
+		// 获取用户在当前域名下的凭据
+		credentials, err := twofa.GetUserCredentialsForRPID(username.(string), rpid)
+		if err != nil {
+			s.logger.Error("get user credentials for rpid failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取凭据失败"))
+			return
+		}
+
+		if len(credentials) == 0 {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "当前域名未注册WebAuthn凭据"))
+			return
+		}
+
 		// 开始验证
-		options, session, err := webAuthnService.BeginLogin(username.(string), userConfig.WebAuthnCredentials)
+		options, session, err := webAuthnService.BeginLogin(username.(string), credentials)
 		if err != nil {
 			s.logger.Error("begin webauthn login failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "开始验证失败"))
@@ -441,21 +542,18 @@ func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 从请求头获取前端的 origin
-		origin := c.GetHeader("Origin")
-		if origin == "" {
-			// 回退方案：使用 Referer 或构造默认值
-			origin = "https://" + c.Request.Host
-		}
+		// 提取 RPID 和 Origin
+		rpid, origin := extractRPIDAndOrigin(c)
 
-		// 提取主机名（去掉端口）作为 RPID
-		host := c.Request.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+		// 检查域名白名单
+		if !isAllowedDomain(rpid) {
+			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
+			return
 		}
 
 		// 获取 WebAuthn 服务
-		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", host, origin)
+		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", rpid, origin)
 		if err != nil {
 			s.logger.Error("create webauthn service failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "创建WebAuthn服务失败"))
@@ -478,16 +576,21 @@ func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户配置
-		userConfig, err := twofa.GetUserConfig(username.(string))
+		// 获取用户在当前域名下的凭据
+		credentials, err := twofa.GetUserCredentialsForRPID(username.(string), rpid)
 		if err != nil {
-			s.logger.Error("get user twofa config failed", zap.Error(err))
-			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取配置失败"))
+			s.logger.Error("get user credentials for rpid failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取凭据失败"))
+			return
+		}
+
+		if len(credentials) == 0 {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "当前域名未注册WebAuthn凭据"))
 			return
 		}
 
 		// 完成验证
-		_, err = webAuthnService.FinishLogin(username.(string), userConfig.WebAuthnCredentials, sessionData, parsedResponse)
+		_, err = webAuthnService.FinishLogin(username.(string), credentials, sessionData, parsedResponse)
 		if err != nil {
 			s.logger.Error("finish webauthn login failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "验证失败"))

@@ -228,6 +228,17 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 				return
 			}
 
+			// 提取 RPID（用于 WebAuthn 检查）
+			rpid, _ := extractRPIDAndOrigin(c)
+
+			// 检查当前域名/方法是否已设置
+			isSetup, err := twofa.IsUserSetupForMethod(req.Username, userConfig.Method, rpid)
+			if err != nil {
+				s.logger.Error("check user setup status failed", zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查设置状态失败"))
+				return
+			}
+
 			// 生成临时 token
 			tempToken, err := auth.GenerateTempToken(req.Username)
 			if err != nil {
@@ -236,10 +247,10 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 				return
 			}
 
-			s.logger.Info("user login, need 2fa", zap.String("username", req.Username), zap.Bool("isSetup", userConfig.IsSetup))
+			s.logger.Info("user login, need 2fa", zap.String("username", req.Username), zap.Bool("isSetup", isSetup), zap.String("method", string(userConfig.Method)), zap.String("rpid", rpid))
 			c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 				"needTwoFA": true,
-				"isSetup":   userConfig.IsSetup,
+				"isSetup":   isSetup,
 				"method":    userConfig.Method,
 				"tempToken": tempToken,
 				"username":  req.Username,

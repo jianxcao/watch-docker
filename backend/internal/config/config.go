@@ -139,7 +139,6 @@ type TwoFAUserConfig struct {
 	Method              string   `mapstructure:"method" json:"method"`
 	OTPSecret           string   `mapstructure:"otpSecret" json:"otpSecret,omitempty"`
 	WebAuthnCredentials []string `mapstructure:"webauthnCredentials" json:"webauthnCredentials,omitempty"` // Base64 编码的凭据
-	IsSetup             bool     `mapstructure:"isSetup" json:"isSetup"`
 }
 
 // TwoFAConfig 二次验证配置
@@ -149,16 +148,16 @@ type TwoFAConfig struct {
 
 // Config 顶层配置聚合
 type Config struct {
-	Server   ServerConfig       `mapstructure:"server" json:"server"`
-	Docker   DockerConfig       `mapstructure:"docker" json:"docker"`
-	Scan     ScanConfig         `mapstructure:"scan" json:"scan"`
-	Policy   PolicyConfig       `mapstructure:"policy" json:"policy"`
-	Registry RegistryConfig     `mapstructure:"registry" json:"registry"`
-	Proxy    ProxyConfig        `mapstructure:"proxy" json:"proxy"`
-	Logging  LoggingConfig      `mapstructure:"logging" json:"logging"`
-	Notify   NotificationConfig `mapstructure:"notify" json:"notify"`
-	Compose  ComposeConfig      `mapstructure:"compose" json:"compose"`
-	TwoFA    TwoFAConfig        `mapstructure:"twofa" json:"twofa"`
+	Server      ServerConfig       `mapstructure:"server" json:"server"`
+	Docker      DockerConfig       `mapstructure:"docker" json:"docker"`
+	Scan        ScanConfig         `mapstructure:"scan" json:"scan"`
+	Policy      PolicyConfig       `mapstructure:"policy" json:"policy"`
+	Registry    RegistryConfig     `mapstructure:"registry" json:"registry"`
+	Proxy       ProxyConfig        `mapstructure:"proxy" json:"proxy"`
+	Logging     LoggingConfig      `mapstructure:"logging" json:"logging"`
+	Notify      NotificationConfig `mapstructure:"notify" json:"notify"`
+	Compose     ComposeConfig      `mapstructure:"compose" json:"compose"`
+	TwoFAConfig TwoFAConfig        `mapstructure:"twofaConfig" json:"twofaConfig"`
 }
 
 var (
@@ -215,7 +214,7 @@ func defaults() *Config {
 			ScanInterval: 30,
 			LogLines:     100,
 		},
-		TwoFA: TwoFAConfig{
+		TwoFAConfig: TwoFAConfig{
 			Users: make(map[string]TwoFAUserConfig),
 		},
 	}

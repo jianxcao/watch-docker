@@ -13,7 +13,7 @@ import (
 func GetUserConfig(username string) (*UserTwoFAConfig, error) {
 	cfg := config.Get()
 
-	userCfg, exists := cfg.TwoFA.Users[username]
+	userCfg, exists := cfg.TwoFAConfig.Users[username]
 	if !exists {
 		return &UserTwoFAConfig{
 			IsSetup: false,
@@ -24,12 +24,11 @@ func GetUserConfig(username string) (*UserTwoFAConfig, error) {
 	result := &UserTwoFAConfig{
 		Method:    TwoFAMethod(userCfg.Method),
 		OTPSecret: userCfg.OTPSecret,
-		IsSetup:   userCfg.IsSetup,
 	}
 
 	// 反序列化 WebAuthn 凭据（从 base64 字符串）
 	if len(userCfg.WebAuthnCredentials) > 0 {
-		result.WebAuthnCredentials = make([]webauthn.Credential, 0, len(userCfg.WebAuthnCredentials))
+		result.WebAuthnCredentials = make([]WebAuthnCredentialWithRPID, 0, len(userCfg.WebAuthnCredentials))
 		for _, credStr := range userCfg.WebAuthnCredentials {
 			// Base64 解码
 			credData, err := base64.StdEncoding.DecodeString(credStr)
@@ -37,12 +36,12 @@ func GetUserConfig(username string) (*UserTwoFAConfig, error) {
 				return nil, fmt.Errorf("decode base64 credential: %w", err)
 			}
 
-			// JSON 反序列化
-			var cred webauthn.Credential
-			if err := json.Unmarshal(credData, &cred); err != nil {
-				return nil, fmt.Errorf("unmarshal webauthn credential: %w", err)
+			// JSON 反序列化（新格式：包含 RPID）
+			var credWithRPID WebAuthnCredentialWithRPID
+			if err := json.Unmarshal(credData, &credWithRPID); err != nil {
+				continue
 			}
-			result.WebAuthnCredentials = append(result.WebAuthnCredentials, cred)
+			result.WebAuthnCredentials = append(result.WebAuthnCredentials, credWithRPID)
 		}
 	}
 
@@ -57,9 +56,9 @@ func SaveUserConfig(username string, userConfig *UserTwoFAConfig) error {
 	var credStrings []string
 	if len(userConfig.WebAuthnCredentials) > 0 {
 		credStrings = make([]string, 0, len(userConfig.WebAuthnCredentials))
-		for _, cred := range userConfig.WebAuthnCredentials {
-			// JSON 序列化
-			data, err := json.Marshal(cred)
+		for _, credWithRPID := range userConfig.WebAuthnCredentials {
+			// JSON 序列化（包含 RPID）
+			data, err := json.Marshal(credWithRPID)
 			if err != nil {
 				return fmt.Errorf("marshal webauthn credential: %w", err)
 			}
@@ -74,16 +73,15 @@ func SaveUserConfig(username string, userConfig *UserTwoFAConfig) error {
 		Method:              string(userConfig.Method),
 		OTPSecret:           userConfig.OTPSecret,
 		WebAuthnCredentials: credStrings,
-		IsSetup:             userConfig.IsSetup,
 	}
 
 	// 初始化 Users map（如果需要）
-	if cfg.TwoFA.Users == nil {
-		cfg.TwoFA.Users = make(map[string]config.TwoFAUserConfig)
+	if cfg.TwoFAConfig.Users == nil {
+		cfg.TwoFAConfig.Users = make(map[string]config.TwoFAUserConfig)
 	}
 
 	// 保存到配置
-	cfg.TwoFA.Users[username] = configUserCfg
+	cfg.TwoFAConfig.Users[username] = configUserCfg
 
 	// 保存配置文件
 	config.SetGlobal(cfg)
@@ -99,4 +97,52 @@ func IsUserSetup(username string) (bool, error) {
 	}
 
 	return userConfig.IsSetup, nil
+}
+
+// GetUserCredentialsForRPID 获取用户在特定域名下的 WebAuthn 凭据
+func GetUserCredentialsForRPID(username, rpid string) ([]webauthn.Credential, error) {
+	userConfig, err := GetUserConfig(username)
+	if err != nil {
+		return nil, err
+	}
+
+	var credentials []webauthn.Credential
+	for _, credWithRPID := range userConfig.WebAuthnCredentials {
+		if credWithRPID.RPID == rpid {
+			credentials = append(credentials, credWithRPID.Credential)
+		}
+	}
+
+	return credentials, nil
+}
+
+// IsUserSetupForMethod 检查用户是否为特定方法和域名设置了二次验证
+// 对于 OTP：rpid 参数被忽略，检查 OTPSecret 是否非空
+// 对于 WebAuthn：检查指定 rpid 是否有凭据
+func IsUserSetupForMethod(username string, method TwoFAMethod, rpid string) (bool, error) {
+	userConfig, err := GetUserConfig(username)
+	if err != nil {
+		return false, err
+	}
+
+	// 如果用户配置的方法与查询的方法不匹配，返回 false
+	if userConfig.Method != method {
+		return false, nil
+	}
+
+	switch method {
+	case MethodOTP:
+		// OTP 检查密钥是否非空
+		return userConfig.OTPSecret != "", nil
+	case MethodWebAuthn:
+		// WebAuthn 检查当前域名是否有凭据
+		for _, credWithRPID := range userConfig.WebAuthnCredentials {
+			if credWithRPID.RPID == rpid {
+				return true, nil
+			}
+		}
+		return false, nil
+	default:
+		return false, nil
+	}
 }

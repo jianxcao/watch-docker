@@ -7,7 +7,7 @@ import { fileURLToPath, URL } from 'node:url'
 import svgLoader from 'vite-svg-loader'
 import AutoImport from 'unplugin-auto-import/vite'
 import { VitePWA } from 'vite-plugin-pwa'
-import basicSsl from '@vitejs/plugin-basic-ssl'
+// import basicSsl from '@vitejs/plugin-basic-ssl'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -45,7 +45,7 @@ export default defineConfig({
     vue(),
     svgLoader(),
     Unocss(),
-    basicSsl(), // HTTPS 支持
+    // basicSsl(), // HTTPS 支持
     AutoImport({
       imports: ['vue', '@vueuse/core', 'vue-router', 'pinia'],
       dts: 'src/auto-imports.d.ts',
