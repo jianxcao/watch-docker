@@ -12,7 +12,7 @@
                 "STATIC_DIR": "${workspaceFolder}/frontend/dist",
                 "IS_OPEN_DOCKER_SHELL": "true",
                 "APP_PATH": "${env:HOME}/Downloads/docker",
-                "IS_SECONDARY_VERIFICATION": "false"
+                "IS_SECONDARY_VERIFICATION": "true"
             },
             "cwd": "${workspaceFolder}/backend"
         }

@@ -9,13 +9,14 @@ import (
 type EnvConfig struct {
 	CONFIG_PATH               string `default:"/config"`
 	CONFIG_FILE               string `default:"config.yaml"`
-	VERSION_WATCH_DOCKER      string `default:"v0.0.7"`
+	VERSION_WATCH_DOCKER      string `default:"v0.0.8"`
 	USER_NAME                 string `default:"admin"`
 	USER_PASSWORD             string `default:"admin"`
 	STATIC_DIR                string `default:"/app/static"`
 	IS_OPEN_DOCKER_SHELL      bool   `default:"false"`
 	APP_PATH                  string `default:""`
 	IS_SECONDARY_VERIFICATION bool   `default:"false"`
+	TWOFA_ALLOWED_DOMAINS     string `default:""` // 逗号分隔的域名白名单，空值表示允许所有域名
 }
 
 func NewEnvConfig() *EnvConfig {

@@ -10,12 +10,18 @@ const (
 	MethodWebAuthn TwoFAMethod = "webauthn"
 )
 
+// WebAuthnCredentialWithRPID WebAuthn 凭据及其绑定的域名
+type WebAuthnCredentialWithRPID struct {
+	Credential webauthn.Credential `json:"credential" yaml:"credential"`
+	RPID       string              `json:"rpid" yaml:"rpid"` // 注册时的域名
+}
+
 // UserTwoFAConfig 用户二次验证配置
 type UserTwoFAConfig struct {
-	Method              TwoFAMethod           `json:"method" yaml:"method"`
-	OTPSecret           string                `json:"otpSecret,omitempty" yaml:"otpSecret,omitempty"`
-	WebAuthnCredentials []webauthn.Credential `json:"webauthnCredentials,omitempty" yaml:"webauthnCredentials,omitempty"`
-	IsSetup             bool                  `json:"isSetup" yaml:"isSetup"`
+	Method              TwoFAMethod                  `json:"method" yaml:"method"`
+	OTPSecret           string                       `json:"otpSecret,omitempty" yaml:"otpSecret,omitempty"` // 所有域名共用
+	WebAuthnCredentials []WebAuthnCredentialWithRPID `json:"webauthnCredentials,omitempty" yaml:"webauthnCredentials,omitempty"`
+	IsSetup             bool                         `json:"isSetup" yaml:"isSetup"`
 }
 
 // TwoFAConfig 二次验证总配置

@@ -7,10 +7,16 @@ import { fileURLToPath, URL } from 'node:url'
 import svgLoader from 'vite-svg-loader'
 import AutoImport from 'unplugin-auto-import/vite'
 import { VitePWA } from 'vite-plugin-pwa'
-import basicSsl from '@vitejs/plugin-basic-ssl'
+// import basicSsl from '@vitejs/plugin-basic-ssl'
+
+// 读取 package.json 中的版本号
+import packageJson from './package.json'
 
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(packageJson.version),
+  },
   build: {
     outDir: 'dist',
     // 生成 sourcemap（包含第三方库）
@@ -45,7 +51,7 @@ export default defineConfig({
     vue(),
     svgLoader(),
     Unocss(),
-    basicSsl(), // HTTPS 支持
+    // basicSsl(), // HTTPS 支持
     AutoImport({
       imports: ['vue', '@vueuse/core', 'vue-router', 'pinia'],
       dts: 'src/auto-imports.d.ts',
