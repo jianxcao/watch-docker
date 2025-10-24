@@ -14,12 +14,16 @@ services:
       - /volume1/docker:/volume1/docker
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      # 放置 docker yaml文件的目录
-      - APP_PATH=/volume1/docker
       - TZ=Asia/Shanghai
       - USER_NAME=admin
       - USER_PASSWORD=admin
       - PUID=0
       - PGID=0
       - UMASK=0000
+      # 是否开启 shell 功能，危险操作
+      - IS_OPEN_DOCKER_SHELL=false
+        # 放置 docker yaml文件的目录，注意是所有docker 的目录，不是 watch-docker 的目录
+      - APP_PATH=/volume1/docker
+      # 是否开启二次验证
+      - IS_SECONDARY_VERIFICATION=false
     restart: unless-stopped

@@ -47,11 +47,16 @@ func (cr *cmdReader) Read(p []byte) (n int, err error) {
 }
 
 func (cr *cmdReader) Close() error {
-	// 先取消上下文，停止命令执行
+	logger.Logger.Info("cmdReader.Close() called - cancelling context and closing reader")
+
+	// 1. 取消上下文，这会：
+	//    - kill docker compose 进程
+	//    - 让 stdout/stderr goroutines 通过 cmdCtx.Done() 检测到取消
 	if cr.cancel != nil {
 		cr.cancel()
 	}
-	// 然后关闭reader
+
+	// 2. 关闭 reader
 	return cr.reader.Close()
 }
 
@@ -133,7 +138,6 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 		writer.Close()
 		return result
 	}
-
 	// 在goroutine中处理命令输出并写入管道
 	go func() {
 		defer func() {
@@ -147,25 +151,61 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 		// 创建通道来协调stdout和stderr的处理
 		done := make(chan error, 2)
 
-		// 处理stdout - 使用字节流复制保留原始格式
+		// 处理stdout - 使用 goroutine + channel 模式，支持取消
 		go func() {
-			defer func() { done <- nil }()
-			buffer := make([]byte, 1024)
+			defer func() {
+				logger.Logger.Info("stdout goroutine exiting")
+				done <- nil
+			}()
+
+			// 创建 channel 来传递读取结果
+			type readResult struct {
+				data []byte
+				err  error
+			}
+			readCh := make(chan readResult, 1)
+
+			// 启动读取 goroutine
+			go func() {
+				buffer := make([]byte, 1024)
+				for {
+					n, err := stdout.Read(buffer)
+					// 复制数据到新的 slice，避免竞态
+					var data []byte
+					if n > 0 {
+						data = make([]byte, n)
+						copy(data, buffer[:n])
+					}
+
+					select {
+					case readCh <- readResult{data, err}:
+						if err != nil {
+							return
+						}
+					case <-cmdCtx.Done():
+						return
+					}
+				}
+			}()
+
+			// 主循环：等待读取结果或 context 取消
 			for {
 				select {
 				case <-cmdCtx.Done():
-					return // 上下文已取消
-				default:
-					n, err := stdout.Read(buffer)
-					if n > 0 {
-						// 直接写入，保留所有控制字符（\r, \n, ANSI等）
-						if _, writeErr := writer.Write(buffer[:n]); writeErr != nil {
-							return // 管道已关闭，reader端断开连接
+					logger.Logger.Info("stdout goroutine cancelled by context")
+					return
+				case result := <-readCh:
+					if len(result.data) > 0 {
+						if _, writeErr := writer.Write(result.data); writeErr != nil {
+							logger.Logger.Info("stdout write to pipe failed", zap.Error(writeErr))
+							return
 						}
 					}
-					if err != nil {
-						if err != io.EOF {
-							logger.Logger.Error("读取stdout失败", zap.Error(err))
+					if result.err != nil {
+						if result.err != io.EOF {
+							logger.Logger.Error("读取stdout失败", zap.Error(result.err))
+						} else {
+							logger.Logger.Info("stdout reached EOF")
 						}
 						return
 					}
@@ -173,25 +213,61 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 			}
 		}()
 
-		// 处理stderr - 使用字节流复制保留原始格式
+		// 处理stderr - 使用 goroutine + channel 模式，支持取消
 		go func() {
-			defer func() { done <- nil }()
-			buffer := make([]byte, 1024)
+			defer func() {
+				logger.Logger.Info("stderr goroutine exiting")
+				done <- nil
+			}()
+
+			// 创建 channel 来传递读取结果
+			type readResult struct {
+				data []byte
+				err  error
+			}
+			readCh := make(chan readResult, 1)
+
+			// 启动读取 goroutine
+			go func() {
+				buffer := make([]byte, 1024)
+				for {
+					n, err := stderr.Read(buffer)
+					// 复制数据到新的 slice，避免竞态
+					var data []byte
+					if n > 0 {
+						data = make([]byte, n)
+						copy(data, buffer[:n])
+					}
+
+					select {
+					case readCh <- readResult{data, err}:
+						if err != nil {
+							return
+						}
+					case <-cmdCtx.Done():
+						return
+					}
+				}
+			}()
+
+			// 主循环：等待读取结果或 context 取消
 			for {
 				select {
 				case <-cmdCtx.Done():
-					return // 上下文已取消
-				default:
-					n, err := stderr.Read(buffer)
-					if n > 0 {
-						// 直接写入，保留所有控制字符（\r, \n, ANSI等）
-						if _, writeErr := writer.Write(buffer[:n]); writeErr != nil {
-							return // 管道已关闭，reader端断开连接
+					logger.Logger.Info("stderr goroutine cancelled by context")
+					return
+				case result := <-readCh:
+					if len(result.data) > 0 {
+						if _, writeErr := writer.Write(result.data); writeErr != nil {
+							logger.Logger.Info("stderr write to pipe failed", zap.Error(writeErr))
+							return
 						}
 					}
-					if err != nil {
-						if err != io.EOF {
-							logger.Logger.Error("读取stderr失败", zap.Error(err))
+					if result.err != nil {
+						if result.err != io.EOF {
+							logger.Logger.Error("读取stderr失败", zap.Error(result.err))
+						} else {
+							logger.Logger.Info("stderr reached EOF")
 						}
 						return
 					}
