@@ -9,8 +9,14 @@ import AutoImport from 'unplugin-auto-import/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 // import basicSsl from '@vitejs/plugin-basic-ssl'
 
+// 读取 package.json 中的版本号
+import packageJson from './package.json'
+
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(packageJson.version),
+  },
   build: {
     outDir: 'dist',
     // 生成 sourcemap（包含第三方库）

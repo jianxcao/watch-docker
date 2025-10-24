@@ -1,6 +1,5 @@
 <template>
   <div class="settings-page">
-
     <!-- 设置内容 -->
     <div class="settings-content">
       <n-space vertical size="large">
@@ -20,13 +19,18 @@
               <n-input v-model:value="configForm.notify.url" :placeholder="notifyUrlPlaceholder" />
             </n-form-item>
             <n-form-item label="请求方法">
-              <n-select v-model:value="configForm.notify.method" :options="notifyMethodOptions" placeholder="选择请求方法" />
+              <n-select
+                v-model:value="configForm.notify.method"
+                :options="notifyMethodOptions"
+                placeholder="选择请求方法"
+              />
             </n-form-item>
             <n-form-item label="启用通知">
               <n-switch v-model:value="configForm.notify.isEnable" />
             </n-form-item>
             <n-alert title="占位符说明" type="info" class="mt-2">
-              支持在查询参数或路径中使用 title={title}、content={content}、url={url}、image={image} 占位符
+              支持在查询参数或路径中使用 title={title}、content={content}、url={url}、image={image}
+              占位符
             </n-alert>
           </n-form>
         </n-card>
@@ -68,7 +72,6 @@
           </n-form>
         </n-card>
 
-
         <!-- 策略设置 -->
         <n-card title="策略设置" embedded>
           <n-form :model="configForm" label-placement="left" label-width="120px">
@@ -107,8 +110,12 @@
                       <n-input v-model:value="auth.username" placeholder="username" />
                     </n-form-item>
                     <n-form-item label="密码">
-                      <n-input v-model:value="auth.password" type="password" show-password-on="click"
-                        placeholder="password" />
+                      <n-input
+                        v-model:value="auth.password"
+                        type="password"
+                        show-password-on="click"
+                        placeholder="password"
+                      />
                     </n-form-item>
                   </n-form>
 
@@ -151,7 +158,7 @@
       <div class="welcome-card">
         <div>
           <n-h2 class="m-0 text-lg">系统设置</n-h2>
-          <n-text depth="3" class="text-xs max-md:hidden ">
+          <n-text depth="3" class="text-xs max-md:hidden">
             配置 Watch Docker 的运行参数和策略
           </n-text>
         </div>
@@ -170,7 +177,6 @@
       </div>
     </Teleport>
   </div>
-
 </template>
 
 <script setup lang="ts">
@@ -197,23 +203,23 @@ const notifyUrlPlaceholder = computed(() => {
 // 表单数据
 const configForm = reactive<Config>({
   server: {
-    addr: ':8080'
+    addr: ':8080',
   },
   notify: {
     url: '',
     method: 'GET',
-    isEnable: true
+    isEnable: true,
   },
   docker: {
     host: '',
-    includeStopped: false
+    includeStopped: false,
   },
   scan: {
     cron: '',
     concurrency: 3,
     cacheTTL: 10,
     isUpdate: true,
-    allowComposeUpdate: false
+    allowComposeUpdate: false,
   },
   policy: {
     skipLabels: ['watchdocker.skip=true'],
@@ -221,14 +227,14 @@ const configForm = reactive<Config>({
     skipLocalBuild: true,
     skipPinnedDigest: true,
     skipSemverPinned: true,
-    floatingTags: ['latest', 'main', 'stable']
+    floatingTags: ['latest', 'main', 'stable'],
   },
   registry: {
-    auth: []
+    auth: [],
   },
   logging: {
-    level: 'info'
-  }
+    level: 'info',
+  },
 })
 
 // 选项配置
@@ -236,12 +242,12 @@ const logLevelOptions = [
   { label: 'Debug', value: 'debug' },
   { label: 'Info', value: 'info' },
   { label: 'Warn', value: 'warn' },
-  { label: 'Error', value: 'error' }
+  { label: 'Error', value: 'error' },
 ]
 
 const notifyMethodOptions = [
   { label: 'GET', value: 'GET' },
-  { label: 'POST', value: 'POST' }
+  { label: 'POST', value: 'POST' },
 ]
 
 // 添加仓库认证
@@ -249,7 +255,7 @@ const addAuth = () => {
   configForm.registry.auth.push({
     host: '',
     username: '',
-    password: ''
+    password: '',
   })
 }
 
@@ -260,7 +266,9 @@ const removeAuth = (index: number) => {
 
 // 保存配置
 const handleSave = async () => {
-  if (saving.value) {return}
+  if (saving.value) {
+    return
+  }
 
   saving.value = true
   try {
@@ -270,7 +278,6 @@ const handleSave = async () => {
     } else {
       throw new Error(response.msg || '保存失败')
     }
-
   } catch (error: any) {
     message.error(`保存失败: ${error.message || '未知错误'}`)
   } finally {
@@ -309,7 +316,6 @@ onMounted(async () => {
   flex-direction: row;
   height: 100%;
 }
-
 
 .settings-page {
   .page-header {

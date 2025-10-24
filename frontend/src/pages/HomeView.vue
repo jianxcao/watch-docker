@@ -1,6 +1,5 @@
 <template>
   <div class="home-page">
-
     <!-- 统计卡片 -->
     <div class="stats-grid">
       <!-- 容器统计 -->
@@ -31,9 +30,7 @@
         </n-space>
 
         <template #action>
-          <n-button type="primary" @click="$router.push('/containers')">
-            管理容器
-          </n-button>
+          <n-button type="primary" @click="$router.push('/containers')"> 管理容器 </n-button>
         </template>
       </n-card>
 
@@ -59,9 +56,7 @@
         </n-space>
 
         <template #action>
-          <n-button type="primary" @click="$router.push('/images')">
-            管理镜像
-          </n-button>
+          <n-button type="primary" @click="$router.push('/images')"> 管理镜像 </n-button>
         </template>
       </n-card>
 
@@ -69,8 +64,11 @@
       <n-card title="系统信息" hoverable>
         <n-space vertical>
           <n-descriptions :column="1" size="small">
-            <n-descriptions-item label="版本">
+            <n-descriptions-item label="后端版本">
               <n-text>{{ version }}</n-text>
+            </n-descriptions-item>
+            <n-descriptions-item label="前端版本">
+              <n-text>{{ appVersion }}</n-text>
             </n-descriptions-item>
             <n-descriptions-item label="最后刷新">
               <n-text :depth="3">{{ lastRefreshText }}</n-text>
@@ -84,9 +82,7 @@
         </n-space>
 
         <template #action>
-          <n-button type="primary" @click="$router.push('/settings')">
-            系统设置
-          </n-button>
+          <n-button type="primary" @click="$router.push('/settings')"> 系统设置 </n-button>
         </template>
       </n-card>
     </div>
@@ -94,8 +90,13 @@
     <!-- 快速操作 -->
     <n-card title="快速操作" class="quick-actions">
       <n-space>
-        <n-button v-if="containerStore.updateableContainers.length > 0" type="info" size="large"
-          @click="handleBatchUpdate" :loading="containerStore.batchUpdating">
+        <n-button
+          v-if="containerStore.updateableContainers.length > 0"
+          type="info"
+          size="large"
+          @click="handleBatchUpdate"
+          :loading="containerStore.batchUpdating"
+        >
           <template #icon>
             <n-icon>
               <CloudDownloadOutline />
@@ -128,7 +129,12 @@
           清理悬空镜像、网络和数据卷
         </n-tooltip>
 
-        <n-button type="primary" size="large" @click="handleRefreshAll" :loading="appStore.globalLoading">
+        <n-button
+          type="primary"
+          size="large"
+          @click="handleRefreshAll"
+          :loading="appStore.globalLoading"
+        >
           <template #icon>
             <n-icon>
               <RefreshOutline />
@@ -146,7 +152,7 @@
           <n-space align="center" justify="space-between">
             <div>
               <n-text strong>{{ container.name }}</n-text>
-              <br>
+              <br />
               <n-text depth="3" class="text-xs">{{ container.image }}</n-text>
             </div>
 
@@ -168,16 +174,16 @@
     <Teleport to="#header" defer>
       <div class="welcome-card">
         <div>
-          <n-h2 class="m-0 text-lg">首页<span class="text-xs pl-1">{{ systemHealthIcon }}</span></n-h2>
-          <n-text depth="3" class="text-xs max-md:hidden ">
+          <n-h2 class="m-0 text-lg"
+            >首页<span class="text-xs pl-1">{{ systemHealthIcon }}</span></n-h2
+          >
+          <n-text depth="3" class="text-xs max-md:hidden">
             Docker 容器和镜像管理工具，自动检测更新并管理您的容器
           </n-text>
         </div>
       </div>
     </Teleport>
   </div>
-
-
 </template>
 
 <script setup lang="ts">
@@ -210,7 +216,7 @@ const message = useMessage()
 const isPruning = ref(false)
 
 // 版本信息
-// 版本信息
+const appVersion = 'v' + __APP_VERSION__
 const version = computed(() => settingStore.systemInfo?.version)
 
 // 系统健康状态
@@ -249,7 +255,9 @@ const systemHealthIcon = computed(() => {
 
 // 最后刷新时间
 const lastRefreshText = computed(() => {
-  if (!appStore.lastRefreshTime) {return '从未'}
+  if (!appStore.lastRefreshTime) {
+    return '从未'
+  }
   return dayjs(appStore.lastRefreshTime).format('MM-DD HH:mm:ss')
 })
 
@@ -273,10 +281,7 @@ const handleBatchUpdate = async () => {
 const handleRefreshAll = async () => {
   appStore.setGlobalLoading(true)
   try {
-    await Promise.all([
-      containerStore.fetchContainers(),
-      imageStore.fetchImages(),
-    ])
+    await Promise.all([containerStore.fetchContainers(), imageStore.fetchImages()])
     appStore.updateRefreshTime()
   } finally {
     appStore.setGlobalLoading(false)
@@ -291,10 +296,7 @@ const handlePruneSystem = async () => {
     if (data.code === 0) {
       message.success(data.data.message || '系统清理完成')
       // 清理完成后刷新数据
-      await Promise.all([
-        containerStore.fetchContainers(),
-        imageStore.fetchImages(),
-      ])
+      await Promise.all([containerStore.fetchContainers(), imageStore.fetchImages()])
     } else {
       message.error(data.msg || '系统清理失败')
     }
