@@ -15,6 +15,7 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"github.com/jianxcao/watch-docker/backend/internal/wsstream"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +41,7 @@ func (s *Server) handleComposeCreateAndUpWebSocket() gin.HandlerFunc {
 		appPath := conf.EnvCfg.APP_PATH
 		if appPath == "" {
 			logger.Logger.Error("APP_PATH 未设置，无法创建项目")
-			sendWSMessage(conn, "ERROR", "APP_PATH 未设置，无法创建项目")
+			sendWSMessage(conn, "ERROR", "APP_PATH 未设置，无法创建项目, APP_PATH是docker安装根目录，需要映射")
 			return
 		}
 
@@ -211,12 +212,19 @@ func sendWSMessage(conn *websocket.Conn, msgType, message string) error {
 	return err
 }
 
-// handleComposeLogsWebSocket 处理 Compose 项目日志的 WebSocket 连接
+// handleComposeLogsWebSocketV2 处理 Compose 项目日志的 WebSocket 连接（使用新的流管理器）
 func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 从查询参数获取项目信息
+		// 从路径参数获取项目名称
+		projectName := c.Param("projectName")
+		// 从查询参数获取 composeFile（兼容旧逻辑）
 		composeFile := c.Query("composeFile")
-		projectName := c.Query("projectName")
+
+		if projectName == "" {
+			logger.Logger.Error("Missing projectName parameter")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing projectName parameter"})
+			return
+		}
 
 		if composeFile == "" {
 			logger.Logger.Error("Missing composeFile parameter")
@@ -225,144 +233,16 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 		}
 
 		logger.Logger.Info("Compose logs WebSocket connection request",
-			zap.String("composeFile", composeFile),
-			zap.String("projectName", projectName))
-
-		// 升级为 WebSocket 连接
-		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil {
-			logger.Logger.Error("Failed to upgrade WebSocket", zap.Error(err))
-			return
-		}
-		defer conn.Close()
-
-		// 设置连接参数
-		conn.SetReadLimit(1024 * 1024)
-		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-		conn.SetPongHandler(func(string) error {
-			conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-			return nil
-		})
-
-		// 创建上下文，用于控制日志流
-		ctx, cancel := context.WithCancel(c.Request.Context())
-		defer cancel()
-
-		// 启动心跳检测
-		go func() {
-			ticker := time.NewTicker(30 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-					if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-						logger.Logger.Warn("WebSocket Ping failed", zap.Error(err))
-						cancel()
-						return
-					}
-				}
-			}
-		}()
-
-		// 监听客户端消息（主要用于检测断开连接）
-		go func() {
-			defer cancel()
-			// 创建错误通道
-			readErr := make(chan error, 1)
-
-			// 启动读取 goroutine
-			go func() {
-				for {
-					if _, _, err := conn.ReadMessage(); err != nil {
-						logger.Logger.Info("WebSocket ReadMessage returned error",
-							zap.Error(err),
-							zap.Bool("isCloseError", websocket.IsCloseError(err,
-								websocket.CloseNormalClosure,
-								websocket.CloseGoingAway,
-								websocket.CloseAbnormalClosure)))
-						readErr <- err
-						return
-					}
-				}
-			}()
-
-			// 等待 ctx 取消或读取错误
-			select {
-			case <-ctx.Done():
-				logger.Logger.Info("WebSocket read goroutine: context cancelled")
-				return
-			case err := <-readErr:
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-					logger.Logger.Warn("WebSocket unexpected close error", zap.Error(err))
-				} else {
-					logger.Logger.Info("WebSocket closed normally", zap.Error(err))
-				}
-				return
-			}
-		}()
+			zap.String("projectName", projectName),
+			zap.String("composeFile", composeFile))
 
 		// 获取项目路径
 		projectPath := path.Dir(composeFile)
 
-		// 执行 docker compose logs 命令，使用流式输出
-		result := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
-			ExecPath:      projectPath,
-			Args:          []string{"--ansi", "always", "logs", "--follow", "--timestamps", "--tail=500"},
-			OperationName: "compose logs",
+		// 使用 StreamManager 处理 WebSocket 连接
+		// 相同 projectName 的客户端会共享同一个日志流
+		s.streamManager.HandleWebSocket(c, projectName, func() wsstream.StreamSource {
+			return wsstream.NewComposeLogsSource(projectPath, projectName)
 		})
-
-		if result.Error != nil {
-			logger.Logger.Error("Failed to start compose logs stream", zap.Error(result.Error))
-			errMsg := fmt.Sprintf("启动日志流失败: %v\n", result.Error)
-			conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-			conn.WriteMessage(websocket.BinaryMessage, []byte(errMsg))
-			return
-		}
-		defer result.Reader.Close()
-		// 发送欢迎消息
-		welcomeMsg := fmt.Sprintf("\x1b[32m=== 连接到项目 %s 的日志流 ===\x1b[0m\r\n", projectName)
-		conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-		if err := conn.WriteMessage(websocket.BinaryMessage, []byte(welcomeMsg)); err != nil {
-			logger.Logger.Error("Failed to send welcome message", zap.Error(err))
-			return
-		}
-
-		// 读取日志流并发送到 WebSocket
-		// 使用字节块读取，保留 ANSI 颜色和控制字符
-		buffer := make([]byte, 4096) // 4KB 缓冲区
-		for {
-			// 读取日志块
-			// 注意：Read 会阻塞，但当 ctx 取消时，底层的 docker compose 进程会终止
-			// 导致 Read 返回 EOF 或其他错误，从而退出循环
-			n, err := result.Reader.Read(buffer)
-			if n > 0 {
-				// 发送日志到 WebSocket（使用 BinaryMessage 避免 UTF-8 验证问题）
-				conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-				if err := conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
-					// 判断是否是连接关闭错误
-					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-						logger.Logger.Info("WebSocket connection closed by client", zap.Error(err))
-					} else if errors.Is(err, websocket.ErrCloseSent) {
-						logger.Logger.Info("WebSocket connection closed", zap.Error(err))
-					} else {
-						logger.Logger.Error("Failed to write message to WebSocket", zap.Error(err))
-					}
-					return
-				}
-			}
-
-			if err != nil {
-				if err == io.EOF {
-					logger.Logger.Info("Compose logs stream ended")
-					return
-				}
-				logger.Logger.Error("Error reading compose logs", zap.Error(err))
-				return
-			}
-		}
 	}
 }

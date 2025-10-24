@@ -19,6 +19,7 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/scheduler"
 	"github.com/jianxcao/watch-docker/backend/internal/twofa"
 	"github.com/jianxcao/watch-docker/backend/internal/updater"
+	"github.com/jianxcao/watch-docker/backend/internal/wsstream"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -33,6 +34,7 @@ type Server struct {
 	scheduler      *scheduler.Scheduler
 	wsStatsManager *StatsWebSocketManager
 	composeClient  *composecli.Client
+	streamManager  *wsstream.StreamManager
 }
 
 func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler) *gin.Engine {
@@ -42,6 +44,9 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 
 	// 创建 WebSocket 管理器
 	wsStatsManager := NewStatsWebSocketManager(docker, sc)
+
+	// 创建通用流 WebSocket 管理器
+	streamManager := wsstream.NewStreamManager()
 
 	// 创建 Compose 客户端
 	cfg := config.Get()
@@ -59,6 +64,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		scheduler:      sch,
 		wsStatsManager: wsStatsManager,
 		composeClient:  composeClient,
+		streamManager:  streamManager,
 	}
 
 	api := r.Group("/api/v1")

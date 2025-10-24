@@ -94,6 +94,7 @@ ENV LOG_FORMAT=text
 ENV STATIC_DIR=/app/static
 ENV USER_NAME=admin
 ENV USER_PASSWORD=admin
+LABEL watchdocker.skip="true"
 # 启动应用
 ENTRYPOINT ["/app/entrypoint" ]
 EXPOSE 8088

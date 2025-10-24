@@ -273,7 +273,7 @@ func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent st
 
 	// 创建项目目录
 	projectPath := filepath.Join(appPath, name)
-	composeFile := filepath.Join(projectPath, "docker-compose.yml")
+	composeFile := filepath.Join(projectPath, "docker-compose.yaml")
 
 	// 检查项目是否已存在
 	if stat, err := os.Stat(projectPath); err == nil && stat.IsDir() {

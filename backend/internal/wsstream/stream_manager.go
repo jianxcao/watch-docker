@@ -1,0 +1,155 @@
+package wsstream
+
+import (
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"go.uber.org/zap"
+)
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+	HandshakeTimeout:  10 * time.Second,
+	ReadBufferSize:    4096,
+	WriteBufferSize:   4096,
+	EnableCompression: true,
+}
+
+// StreamManager 管理所有的 StreamHub
+type StreamManager struct {
+	// key -> StreamHub 映射
+	hubs map[string]*StreamHub
+
+	// 保护 hubs 映射的互斥锁
+	mu sync.RWMutex
+
+	// 客户端计数器（用于生成唯一 ID）
+	clientCounter uint64
+	counterMu     sync.Mutex
+}
+
+// NewStreamManager 创建新的 StreamManager
+func NewStreamManager() *StreamManager {
+	return &StreamManager{
+		hubs:          make(map[string]*StreamHub),
+		clientCounter: 0,
+	}
+}
+
+// GetOrCreateHub 获取或创建指定 key 的 Hub
+func (m *StreamManager) GetOrCreateHub(key string, sourceFactory func() StreamSource) *StreamHub {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 检查是否已存在
+	if hub, exists := m.hubs[key]; exists {
+		logger.Logger.Debug("复用现有 StreamHub", zap.String("key", key))
+		return hub
+	}
+
+	// 创建新的 Hub
+	source := sourceFactory()
+	hub := NewStreamHub(source, m)
+	m.hubs[key] = hub
+
+	// 启动 Hub
+	go hub.Run()
+
+	logger.Logger.Info("创建新的 StreamHub", zap.String("key", key))
+	return hub
+}
+
+// RemoveHub 移除指定 key 的 Hub
+func (m *StreamManager) RemoveHub(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if hub, exists := m.hubs[key]; exists {
+		delete(m.hubs, key)
+		logger.Logger.Info("移除 StreamHub", zap.String("key", key))
+		// 不需要调用 hub.Close()，因为 Hub 已经在自己的 Run() 中处理了清理
+		_ = hub
+	}
+}
+
+// HandleWebSocket 处理 WebSocket 连接请求
+func (m *StreamManager) HandleWebSocket(c *gin.Context, key string, sourceFactory func() StreamSource) {
+	// 升级为 WebSocket 连接
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		logger.Logger.Error("WebSocket 升级失败", zap.Error(err))
+		return
+	}
+
+	// 获取或创建 Hub
+	hub := m.GetOrCreateHub(key, sourceFactory)
+
+	// 生成客户端 ID
+	clientID := m.generateClientID()
+
+	// 创建客户端
+	client := NewClient(conn, hub, clientID)
+
+	logger.Logger.Info("新的 WebSocket 连接",
+		zap.String("key", key),
+		zap.String("clientId", clientID))
+
+	// 注册客户端到 Hub
+	hub.RegisterClient(client)
+
+	// 启动客户端的读写协程
+	go client.writePump()
+	go client.readPump()
+}
+
+// generateClientID 生成唯一的客户端 ID
+func (m *StreamManager) generateClientID() string {
+	m.counterMu.Lock()
+	defer m.counterMu.Unlock()
+	m.clientCounter++
+	return fmt.Sprintf("client-%d", m.clientCounter)
+}
+
+// Close 关闭所有 Hub
+func (m *StreamManager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	logger.Logger.Info("关闭 StreamManager", zap.Int("hubCount", len(m.hubs)))
+
+	for key, hub := range m.hubs {
+		logger.Logger.Info("关闭 StreamHub", zap.String("key", key))
+		hub.Close()
+	}
+
+	m.hubs = make(map[string]*StreamHub)
+}
+
+// GetHubCount 获取当前 Hub 数量（用于监控）
+func (m *StreamManager) GetHubCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.hubs)
+}
+
+// GetClientCount 获取指定 Hub 的客户端数量
+func (m *StreamManager) GetClientCount(key string) int {
+	m.mu.RLock()
+	hub, exists := m.hubs[key]
+	m.mu.RUnlock()
+
+	if !exists {
+		return 0
+	}
+
+	hub.mu.RLock()
+	defer hub.mu.RUnlock()
+	return len(hub.clients)
+}

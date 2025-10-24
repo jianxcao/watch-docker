@@ -101,7 +101,7 @@ const socketUrl = computed(() => {
   const token = settingStore.getToken()
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1/compose/logs/ws?token=${token}&composeFile=${encodeURIComponent(props.project.composeFile)}&projectName=${encodeURIComponent(props.project.name)}`
+  return `${protocol}//${host}/api/v1/compose/logs/${props.project.name}/ws?token=${token}&composeFile=${encodeURIComponent(props.project.composeFile)}&projectName=${encodeURIComponent(props.project.name)}`
 })
 
 // 使用 VueUse 的 useWebSocket
