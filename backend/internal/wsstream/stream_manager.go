@@ -22,10 +22,10 @@ var upgrader = websocket.Upgrader{
 	EnableCompression: true,
 }
 
-// StreamManager 管理所有的 StreamHub
-type StreamManager struct {
+// StreamManager 管理所有的 StreamHub（泛型版本）
+type StreamManager[T MessageType] struct {
 	// key -> StreamHub 映射
-	hubs map[string]*StreamHub
+	hubs map[string]*StreamHub[T]
 
 	// 保护 hubs 映射的互斥锁
 	mu sync.RWMutex
@@ -36,15 +36,15 @@ type StreamManager struct {
 }
 
 // NewStreamManager 创建新的 StreamManager
-func NewStreamManager() *StreamManager {
-	return &StreamManager{
-		hubs:          make(map[string]*StreamHub),
+func NewStreamManager[T MessageType]() *StreamManager[T] {
+	return &StreamManager[T]{
+		hubs:          make(map[string]*StreamHub[T]),
 		clientCounter: 0,
 	}
 }
 
 // GetOrCreateHub 获取或创建指定 key 的 Hub
-func (m *StreamManager) GetOrCreateHub(key string, sourceFactory func() StreamSource) *StreamHub {
+func (m *StreamManager[T]) GetOrCreateHub(key string, sourceFactory func() StreamSource[T]) *StreamHub[T] {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,7 +67,7 @@ func (m *StreamManager) GetOrCreateHub(key string, sourceFactory func() StreamSo
 }
 
 // RemoveHub 移除指定 key 的 Hub
-func (m *StreamManager) RemoveHub(key string) {
+func (m *StreamManager[T]) RemoveHub(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -79,11 +79,11 @@ func (m *StreamManager) RemoveHub(key string) {
 	}
 }
 
-func (m *StreamManager) UpgradeWebSocket(c *gin.Context) (*websocket.Conn, error) {
+func (m *StreamManager[T]) UpgradeWebSocket(c *gin.Context) (*websocket.Conn, error) {
 	return upgrader.Upgrade(c.Writer, c.Request, nil)
 }
 
-func (m *StreamManager) StartHub(conn *websocket.Conn, key string, sourceFactory func() StreamSource) {
+func (m *StreamManager[T]) StartHub(conn *websocket.Conn, key string, sourceFactory func() StreamSource[T]) {
 
 	// 获取或创建 Hub
 	hub := m.GetOrCreateHub(key, sourceFactory)
@@ -107,7 +107,7 @@ func (m *StreamManager) StartHub(conn *websocket.Conn, key string, sourceFactory
 }
 
 // HandleWebSocket 处理 WebSocket 连接请求
-func (m *StreamManager) HandleWebSocket(c *gin.Context, key string, sourceFactory func() StreamSource) {
+func (m *StreamManager[T]) HandleWebSocket(c *gin.Context, key string, sourceFactory func() StreamSource[T]) {
 	// 升级为 WebSocket 连接
 	conn, err := m.UpgradeWebSocket(c)
 	if err != nil {
@@ -118,7 +118,7 @@ func (m *StreamManager) HandleWebSocket(c *gin.Context, key string, sourceFactor
 }
 
 // generateClientID 生成唯一的客户端 ID（内部使用）
-func (m *StreamManager) GenerateClientID() string {
+func (m *StreamManager[T]) GenerateClientID() string {
 	m.counterMu.Lock()
 	defer m.counterMu.Unlock()
 	m.clientCounter++
@@ -126,7 +126,7 @@ func (m *StreamManager) GenerateClientID() string {
 }
 
 // Close 关闭所有 Hub
-func (m *StreamManager) Close() {
+func (m *StreamManager[T]) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -137,18 +137,18 @@ func (m *StreamManager) Close() {
 		hub.Close()
 	}
 
-	m.hubs = make(map[string]*StreamHub)
+	m.hubs = make(map[string]*StreamHub[T])
 }
 
 // GetHubCount 获取当前 Hub 数量（用于监控）
-func (m *StreamManager) GetHubCount() int {
+func (m *StreamManager[T]) GetHubCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.hubs)
 }
 
 // GetClientCount 获取指定 Hub 的客户端数量
-func (m *StreamManager) GetClientCount(key string) int {
+func (m *StreamManager[T]) GetClientCount(key string) int {
 	m.mu.RLock()
 	hub, exists := m.hubs[key]
 	m.mu.RUnlock()

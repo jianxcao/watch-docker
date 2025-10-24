@@ -2,27 +2,101 @@ package wsstream
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
+	"os"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
 )
 
-// StreamHub 管理单个数据源的多个客户端连接
-type StreamHub struct {
+// isNormalCloseError 判断错误是否是正常关闭相关的错误
+func isNormalCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// 1. 检查 context 取消（最常见的正常关闭原因）
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// 2. 检查系统调用错误（使用类型断言，更精确）
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case syscall.EPIPE: // Broken pipe
+		case syscall.ECONNRESET: // Connection reset by peer
+		case syscall.ECONNABORTED: // Connection aborted
+		case syscall.ENOTCONN: // Socket is not connected
+		case syscall.ESHUTDOWN: // Cannot send after transport endpoint shutdown
+			return true
+		}
+	}
+
+	// 3. 检查网络操作错误
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		// 检查是否是关闭操作导致的错误
+		if errors.Is(opErr.Err, net.ErrClosed) {
+			return true
+		}
+		// 递归检查内部错误
+		if isNormalCloseError(opErr.Err) {
+			return true
+		}
+	}
+
+	// 4. 检查路径错误（用于文件/管道操作）
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		// 递归检查内部错误
+		if isNormalCloseError(pathErr.Err) {
+			return true
+		}
+	}
+
+	// 5. 检查特定的标准错误
+	if errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, os.ErrClosed) {
+		return true
+	}
+
+	// 6. 最后才用字符串匹配作为兜底（用于一些包装过的错误）
+	errMsg := err.Error()
+	normalErrorStrings := []string{
+		"use of closed network connection",
+		"read/write on closed pipe",
+	}
+
+	for _, normalErrStr := range normalErrorStrings {
+		if strings.Contains(errMsg, normalErrStr) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// StreamHub 管理单个数据源的多个客户端连接（泛型版本）
+type StreamHub[T MessageType] struct {
 	// 数据源
-	source StreamSource
+	source StreamSource[T]
 
 	// 注册的客户端
-	clients map[*Client]bool
+	clients map[*Client[T]]bool
 
 	// 注册请求通道
-	register chan *Client
+	register chan *Client[T]
 
 	// 注销请求通道
-	unregister chan *Client
+	unregister chan *Client[T]
 
 	// 用于保护客户端映射的互斥锁
 	mu sync.RWMutex
@@ -41,17 +115,17 @@ type StreamHub struct {
 	key string
 
 	// 父管理器的引用（用于通知清理）
-	manager *StreamManager
+	manager *StreamManager[T]
 }
 
 // NewStreamHub 创建新的 StreamHub
-func NewStreamHub(source StreamSource, manager *StreamManager) *StreamHub {
+func NewStreamHub[T MessageType](source StreamSource[T], manager *StreamManager[T]) *StreamHub[T] {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &StreamHub{
+	return &StreamHub[T]{
 		source:        source,
-		clients:       make(map[*Client]bool),
-		register:      make(chan *Client),
-		unregister:    make(chan *Client),
+		clients:       make(map[*Client[T]]bool),
+		register:      make(chan *Client[T]),
+		unregister:    make(chan *Client[T]),
 		ctx:           ctx,
 		cancel:        cancel,
 		sourceStarted: false,
@@ -62,7 +136,7 @@ func NewStreamHub(source StreamSource, manager *StreamManager) *StreamHub {
 }
 
 // Run 启动 Hub 的主循环
-func (h *StreamHub) Run() {
+func (h *StreamHub[T]) Run() {
 	defer func() {
 		close(h.done)
 		logger.Logger.Info("StreamHub 退出", zap.String("key", h.key))
@@ -122,7 +196,7 @@ func (h *StreamHub) Run() {
 				close(client.send)
 				client.conn.Close()
 			}
-			h.clients = make(map[*Client]bool)
+			h.clients = make(map[*Client[T]]bool)
 			h.mu.Unlock()
 			h.stopStreamSource()
 			return
@@ -131,7 +205,7 @@ func (h *StreamHub) Run() {
 }
 
 // startStreamSource 启动数据源并读取数据
-func (h *StreamHub) startStreamSource() {
+func (h *StreamHub[T]) startStreamSource() {
 	h.mu.Lock()
 	if h.sourceStarted {
 		h.mu.Unlock()
@@ -153,56 +227,50 @@ func (h *StreamHub) startStreamSource() {
 	defer reader.Close()
 
 	// 发送欢迎消息
-	h.broadcast([]byte("\x1b[32m=== 已连接到数据流 ===\x1b[0m\r\n"))
+	h.broadcastRaw([]byte("\x1b[32m=== 已连接到数据流 ===\x1b[0m\r\n"))
 
-	// 读取数据流并广播
-	buffer := make([]byte, 4096)
+	// 简单的读取循环
 	for {
 		select {
 		case <-h.ctx.Done():
 			logger.Logger.Info("数据源读取被取消", zap.String("key", h.key))
 			return
 		default:
-			n, err := reader.Read(buffer)
-			if n > 0 {
-				// 复制数据并广播
-				data := make([]byte, n)
-				copy(data, buffer[:n])
-				h.broadcast(data)
-			}
-
+			message, err := reader.Read(h.ctx)
 			if err != nil {
-				// 检查是否是 context 取消导致的
-				select {
-				case <-h.ctx.Done():
-					// Context 已取消，这是正常的停止流程
-					logger.Logger.Info("数据源读取被取消（检测到 context 取消）",
-						zap.String("key", h.key))
-					return
-				default:
-					// Context 未取消，这是真正的错误
-					if err == io.EOF {
-						logger.Logger.Info("数据源已结束",
-							zap.String("key", h.key))
-						h.broadcast([]byte("\r\n\x1b[33m=== 数据流已结束 ===\x1b[0m\r\n"))
-					} else {
-						logger.Logger.Error("读取数据源出错",
-							zap.String("key", h.key),
-							zap.Error(err))
-						h.broadcastError("读取数据流出错: " + err.Error())
-					}
-
-					// 数据源结束或出错后，关闭所有客户端连接
+				// 检查是否是正常的关闭错误
+				if isNormalCloseError(err) {
+					logger.Logger.Info("数据源读取被正常关闭",
+						zap.String("key", h.key),
+						zap.String("reason", err.Error()))
 					h.closeAllClients()
 					return
 				}
+
+				// EOF 是数据流正常结束
+				if err == io.EOF {
+					logger.Logger.Info("数据源已结束",
+						zap.String("key", h.key))
+					h.broadcastRaw([]byte("\r\n\x1b[33m=== 数据流已结束 ===\x1b[0m\r\n"))
+				} else {
+					// 其他错误才是真正的错误
+					logger.Logger.Error("读取数据源出错",
+						zap.String("key", h.key),
+						zap.Error(err))
+					h.broadcastError("读取数据流出错: " + err.Error())
+				}
+				h.closeAllClients()
+				return
 			}
+
+			// 直接广播消息（已经是完整的消息）
+			h.broadcast(message)
 		}
 	}
 }
 
 // stopStreamSource 停止数据源
-func (h *StreamHub) stopStreamSource() {
+func (h *StreamHub[T]) stopStreamSource() {
 	h.mu.Lock()
 	if !h.sourceStarted {
 		h.mu.Unlock()
@@ -223,10 +291,10 @@ func (h *StreamHub) stopStreamSource() {
 	}
 }
 
-// broadcast 广播消息到所有客户端
-func (h *StreamHub) broadcast(message []byte) {
+// broadcast 广播泛型消息到所有客户端
+func (h *StreamHub[T]) broadcast(message T) {
 	h.mu.RLock()
-	clients := make([]*Client, 0, len(h.clients))
+	clients := make([]*Client[T], 0, len(h.clients))
 	for client := range h.clients {
 		clients = append(clients, client)
 	}
@@ -245,17 +313,33 @@ func (h *StreamHub) broadcast(message []byte) {
 	}
 }
 
+// broadcastRaw 广播原始字节（用于欢迎消息等）
+func (h *StreamHub[T]) broadcastRaw(data []byte) {
+	// 将 []byte 转换为 T 类型
+	var sample T
+	var message T
+	switch any(sample).(type) {
+	case string:
+		message = any(string(data)).(T)
+	case []byte:
+		message = any(data).(T)
+	default:
+		message = any(data).(T)
+	}
+	h.broadcast(message)
+}
+
 // broadcastError 广播错误消息到所有客户端
-func (h *StreamHub) broadcastError(errMsg string) {
+func (h *StreamHub[T]) broadcastError(errMsg string) {
 	formattedMsg := []byte("\r\n\x1b[31m错误: " + errMsg + "\x1b[0m\r\n")
-	h.broadcast(formattedMsg)
+	h.broadcastRaw(formattedMsg)
 }
 
 // closeAllClients 关闭所有客户端连接（数据源结束或出错时调用）
-func (h *StreamHub) closeAllClients() {
+func (h *StreamHub[T]) closeAllClients() {
 	h.mu.Lock()
 	clientCount := len(h.clients)
-	clients := make([]*Client, 0, clientCount)
+	clients := make([]*Client[T], 0, clientCount)
 	for client := range h.clients {
 		clients = append(clients, client)
 	}
@@ -280,17 +364,17 @@ func (h *StreamHub) closeAllClients() {
 }
 
 // RegisterClient 注册客户端
-func (h *StreamHub) RegisterClient(client *Client) {
+func (h *StreamHub[T]) RegisterClient(client *Client[T]) {
 	h.register <- client
 }
 
 // UnregisterClient 注销客户端（通常由 client 自己调用）
-func (h *StreamHub) UnregisterClient(client *Client) {
+func (h *StreamHub[T]) UnregisterClient(client *Client[T]) {
 	h.unregister <- client
 }
 
 // Close 关闭 Hub
-func (h *StreamHub) Close() {
+func (h *StreamHub[T]) Close() {
 	h.cancel()
 	<-h.done
 }

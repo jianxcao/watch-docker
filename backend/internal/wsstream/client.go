@@ -8,39 +8,42 @@ import (
 	"go.uber.org/zap"
 )
 
-// Client 代表一个 WebSocket 客户端连接
-type Client struct {
+// Client 代表一个 WebSocket 客户端连接（泛型版本）
+type Client[T MessageType] struct {
 	// WebSocket 连接
 	conn *websocket.Conn
 
 	// 发送消息的缓冲通道
-	send chan []byte
+	send chan T
 
 	// 所属的 Hub
-	hub *StreamHub
+	hub *StreamHub[T]
 
 	// 客户端 ID（用于日志）
 	id string
 }
 
 // NewClient 创建新的 WebSocket 客户端
-func NewClient(conn *websocket.Conn, hub *StreamHub, id string) *Client {
-	return &Client{
+func NewClient[T MessageType](conn *websocket.Conn, hub *StreamHub[T], id string) *Client[T] {
+	return &Client[T]{
 		conn: conn,
-		send: make(chan []byte, 256),
+		send: make(chan T, 256),
 		hub:  hub,
 		id:   id,
 	}
 }
 
 // WritePump 处理向 WebSocket 连接写入消息
-func (c *Client) WritePump() {
+func (c *Client[T]) WritePump() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
 		logger.Logger.Debug("客户端 writePump 退出", zap.String("clientId", c.id))
 	}()
+
+	// 确定消息类型
+	messageType := c.getMessageType()
 
 	for {
 		select {
@@ -52,8 +55,8 @@ func (c *Client) WritePump() {
 				return
 			}
 
-			// 使用 BinaryMessage 避免 UTF-8 验证问题
-			if err := c.conn.WriteMessage(websocket.BinaryMessage, message); err != nil {
+			// 根据泛型类型发送消息
+			if err := c.writeMessage(messageType, message); err != nil {
 				logger.Logger.Warn("WebSocket 写入失败",
 					zap.String("clientId", c.id),
 					zap.Error(err))
@@ -73,9 +76,36 @@ func (c *Client) WritePump() {
 	}
 }
 
+// getMessageType 根据泛型类型确定 WebSocket 消息类型
+func (c *Client[T]) getMessageType() int {
+	var sample T
+	switch any(sample).(type) {
+	case string:
+		return websocket.TextMessage
+	case []byte:
+		return websocket.BinaryMessage
+	default:
+		return websocket.BinaryMessage
+	}
+}
+
+// writeMessage 根据消息类型写入 WebSocket
+func (c *Client[T]) writeMessage(messageType int, message T) error {
+	switch messageType {
+	case websocket.TextMessage:
+		// string 类型
+		return c.conn.WriteMessage(messageType, []byte(any(message).(string)))
+	case websocket.BinaryMessage:
+		// []byte 类型
+		return c.conn.WriteMessage(messageType, any(message).([]byte))
+	default:
+		return c.conn.WriteMessage(messageType, any(message).([]byte))
+	}
+}
+
 // ReadPump 处理从 WebSocket 连接读取消息
 // 主要用于检测客户端断开连接和处理 Pong 响应
-func (c *Client) ReadPump() {
+func (c *Client[T]) ReadPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()

@@ -18,6 +18,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// shellUpgrader WebSocket 升级器（用于 Shell）
+var shellUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+	HandshakeTimeout:  10 * time.Second,
+	ReadBufferSize:    4096,
+	WriteBufferSize:   4096,
+	EnableCompression: true,
+}
+
 // TerminalMessage 终端消息结构
 type TerminalMessage struct {
 	Type string `json:"type"` // "input", "resize"
@@ -43,7 +54,7 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 			logger.Logger.Warn("开启shell非常危险，请谨慎使用")
 		}
 		// 升级为 WebSocket 连接
-		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+		conn, err := shellUpgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			logger.Logger.Error("Failed to upgrade WebSocket", zap.Error(err))
 			return

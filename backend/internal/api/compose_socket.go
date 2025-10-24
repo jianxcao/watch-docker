@@ -33,7 +33,7 @@ func (s *Server) handleComposeCreateAndUpWebSocket() gin.HandlerFunc {
 // handleComposeCreateAndUpWebSocketCustom 自定义 WebSocket 处理（先读取参数）
 func (s *Server) handleComposeCreateAndUpWebSocketCustom(c *gin.Context, appPath string) {
 	// 升级为 WebSocket 连接
-	conn, err := s.streamManager.UpgradeWebSocket(c)
+	conn, err := s.streamManagerBytes.UpgradeWebSocket(c)
 	if err != nil {
 		logger.Logger.Error("WebSocket 升级失败", zap.Error(err))
 		return
@@ -66,7 +66,7 @@ func (s *Server) handleComposeCreateAndUpWebSocketCustom(c *gin.Context, appPath
 	composeDir := filepath.Join(appPath, req.Name)
 	// 获取或创建 Hub（使用二进制模式）
 	key := fmt.Sprintf("compose-up-%s", req.Name)
-	s.streamManager.StartHub(conn, key, func() wsstream.StreamSource {
+	s.streamManagerBytes.StartHub(conn, key, func() wsstream.StreamSource[[]byte] {
 		return wsstream.NewComposeCreateUpSource(wsstream.ComposeCreateUpSourceOptions{
 			ProjectName:   req.Name,
 			YamlContent:   req.YamlContent,
@@ -111,7 +111,7 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 
 		// 使用 StreamManager 处理 WebSocket 连接
 		// 相同 projectName 的客户端会共享同一个日志流
-		s.streamManager.HandleWebSocket(c, projectName, func() wsstream.StreamSource {
+		s.streamManagerBytes.HandleWebSocket(c, projectName, func() wsstream.StreamSource[[]byte] {
 			return wsstream.NewComposeLogsSource(projectPath, projectName)
 		})
 	}

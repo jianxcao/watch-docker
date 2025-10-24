@@ -54,7 +54,7 @@ func NewComposeCreateUpSource(opts ComposeCreateUpSourceOptions) *ComposeCreateU
 }
 
 // Start 启动流，完全控制流的内容
-func (s *ComposeCreateUpSource) Start(ctx context.Context) (io.ReadCloser, error) {
+func (s *ComposeCreateUpSource) Start(ctx context.Context) (StreamReader[[]byte], error) {
 	logger.Logger.Info("启动 Compose Create and Up 流",
 		zap.String("projectName", s.projectName),
 		zap.String("composeDir", s.composeDir))
@@ -65,7 +65,8 @@ func (s *ComposeCreateUpSource) Start(ctx context.Context) (io.ReadCloser, error
 	// 在 goroutine 中控制整个流程
 	go s.processFlow(ctx, writer)
 
-	return reader, nil
+	// 使用 ByteStreamReader 直接流式传输
+	return NewByteStreamReader(reader), nil
 }
 
 // processFlow 处理完整的创建和启动流程

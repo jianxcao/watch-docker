@@ -30,7 +30,7 @@ export default function useStatsWebSocket() {
     const host = window.location.host
     return `${protocol}//${host}/api/v1/containers/stats/ws?token=${token}`
   })
-  console.debug('wsUrl', wsUrl.value)
+
   // 使用 VueUse 的 useWebSocket
   const { status, send, open, close, ws } = useWebSocket(wsUrl, {
     // 自动重连配置
@@ -85,14 +85,17 @@ export default function useStatsWebSocket() {
           console.error('未知的消息类型:', typeof event.data)
           return
         }
-
-        const message: StatsMessage = JSON.parse(dataStr)
-
-        if (message.type === 'containers' && message.data.containers) {
-          statsEmitter.emit('containers', message.data.containers)
+        try {
+          const message: StatsMessage = JSON.parse(dataStr)
+          if (message.type === 'containers' && message.data.containers) {
+            console.debug('onMessage', message.data.containers)
+            statsEmitter.emit('containers', message.data.containers)
+          }
+        } catch (error) {
+          console.error('解析 JSON 消息失败:', error, 'Data:', dataStr)
         }
       } catch (error) {
-        console.error('解析 WebSocket 消息失败:', error)
+        console.error('处理 WebSocket 消息失败:', error)
       }
     },
   })

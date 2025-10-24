@@ -2,7 +2,6 @@ package wsstream
 
 import (
 	"context"
-	"io"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -14,7 +13,7 @@ type ComposeLogsSource struct {
 	projectPath string
 	projectName string
 	key         string
-	result      *composecli.ExecDockerComposeStreamResult
+	reader      *ByteStreamReader
 }
 
 // NewComposeLogsSource 创建新的 Compose 日志数据源
@@ -27,7 +26,7 @@ func NewComposeLogsSource(projectPath, projectName string) *ComposeLogsSource {
 }
 
 // Start 启动 Compose 日志流
-func (s *ComposeLogsSource) Start(ctx context.Context) (io.ReadCloser, error) {
+func (s *ComposeLogsSource) Start(ctx context.Context) (StreamReader[[]byte], error) {
 	logger.Logger.Info("启动 Compose 日志流",
 		zap.String("projectPath", s.projectPath),
 		zap.String("projectName", s.projectName))
@@ -45,11 +44,9 @@ func (s *ComposeLogsSource) Start(ctx context.Context) (io.ReadCloser, error) {
 			zap.Error(result.Error))
 		return nil, result.Error
 	}
-
-	// 保存结果引用
-	s.result = result
-
-	return result.Reader, nil
+	// 使用 ByteStreamReader 直接流式传输日志
+	s.reader = NewByteStreamReader(result.Reader)
+	return s.reader, nil
 }
 
 // Stop 停止 Compose 日志流
@@ -57,10 +54,10 @@ func (s *ComposeLogsSource) Stop() error {
 	logger.Logger.Info("停止 Compose 日志流",
 		zap.String("projectName", s.projectName))
 
-	if s.result != nil && s.result.Reader != nil {
-		return s.result.Reader.Close()
+	if s.reader != nil {
+		s.reader.Close()
+		s.reader = nil
 	}
-
 	return nil
 }
 
