@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -19,20 +18,23 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/scheduler"
 	"github.com/jianxcao/watch-docker/backend/internal/twofa"
 	"github.com/jianxcao/watch-docker/backend/internal/updater"
+	"github.com/jianxcao/watch-docker/backend/internal/wsstream"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
 type Server struct {
-	logger         *zap.Logger
-	docker         *dockercli.Client
-	registry       *registry.Client
-	scanner        *scanner.Scanner
-	updater        *updater.Updater
-	scheduler      *scheduler.Scheduler
-	wsStatsManager *StatsWebSocketManager
-	composeClient  *composecli.Client
+	logger              *zap.Logger
+	docker              *dockercli.Client
+	registry            *registry.Client
+	scanner             *scanner.Scanner
+	updater             *updater.Updater
+	scheduler           *scheduler.Scheduler
+	wsStatsManager      *StatsWebSocketManager
+	composeClient       *composecli.Client
+	streamManagerString *wsstream.StreamManager[string] // 用于 container stats (JSON 文本)
+	streamManagerBytes  *wsstream.StreamManager[[]byte] // 用于 compose logs (二进制流)
 }
 
 func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler) *gin.Engine {
@@ -40,8 +42,14 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	r.Use(gin.Recovery())
 	// r.Use(ginzap(logger))
 
-	// 创建 WebSocket 管理器
-	wsStatsManager := NewStatsWebSocketManager(docker, sc)
+	// 创建 WebSocket 管理器（string 类型用于 JSON 文本）
+	streamManagerString := wsstream.NewStreamManager[string]()
+
+	// 创建 WebSocket 管理器（[]byte 类型用于日志流）
+	streamManagerBytes := wsstream.NewStreamManager[[]byte]()
+
+	// 创建 WebSocket 管理器（使用 wsstream 框架）
+	wsStatsManager := NewStatsWebSocketManager(docker, sc, streamManagerString)
 
 	// 创建 Compose 客户端
 	cfg := config.Get()
@@ -51,14 +59,16 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	}
 
 	s := &Server{
-		logger:         logger,
-		docker:         docker,
-		registry:       reg,
-		scanner:        sc,
-		updater:        updater.New(docker),
-		scheduler:      sch,
-		wsStatsManager: wsStatsManager,
-		composeClient:  composeClient,
+		logger:              logger,
+		docker:              docker,
+		registry:            reg,
+		scanner:             sc,
+		updater:             updater.New(docker),
+		scheduler:           sch,
+		wsStatsManager:      wsStatsManager,
+		composeClient:       composeClient,
+		streamManagerString: streamManagerString,
+		streamManagerBytes:  streamManagerBytes,
 	}
 
 	api := r.Group("/api/v1")
@@ -111,22 +121,8 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	}
 	s.setupStaticRoutes(r)
 
-	// 启动 WebSocket 管理器
-	go wsStatsManager.Run(context.Background())
-
 	return r
 }
-
-// simple logging middleware using zap
-// func ginzap(logger *zap.Logger) gin.HandlerFunc {
-// 	return func(c *gin.Context) {
-// 		path := c.Request.URL.Path
-// 		method := c.Request.Method
-// 		c.Next()
-// 		status := c.Writer.Status()
-// 		logger.Info("页面请求", zap.String("method", method), zap.String("path", path), zap.Int("status", status))
-// 	}
-// }
 
 // handleGetInfo 获取系统信息
 func (s *Server) handleGetInfo() gin.HandlerFunc {

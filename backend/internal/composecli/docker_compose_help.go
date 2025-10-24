@@ -8,6 +8,7 @@ import (
 
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type ExecDockerComposeOptions struct {
@@ -47,12 +48,126 @@ func (cr *cmdReader) Read(p []byte) (n int, err error) {
 }
 
 func (cr *cmdReader) Close() error {
-	// 先取消上下文，停止命令执行
+	logger.Logger.Info("cmdReader.Close() called - cancelling context and closing reader")
+
+	// 1. 取消上下文，这会：
+	//    - kill docker compose 进程
+	//    - 让 stdout/stderr goroutines 通过 cmdCtx.Done() 检测到取消
 	if cr.cancel != nil {
 		cr.cancel()
 	}
-	// 然后关闭reader
+
+	// 2. 关闭 reader
 	return cr.reader.Close()
+}
+
+// copyStreamWithCancel 可取消的流复制函数
+// 从 src 读取数据并写入 dst，支持通过 context 取消
+func copyStreamWithCancel(ctx context.Context, dst io.Writer, src io.Reader, streamName string) error {
+	// 创建 channel 来传递读取结果
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readCh := make(chan readResult, 1)
+
+	// 启动读取 goroutine
+	go func() {
+		buffer := make([]byte, 1024)
+		for {
+			n, err := src.Read(buffer)
+			// 复制数据到新的 slice，避免竞态
+			var data []byte
+			if n > 0 {
+				data = make([]byte, n)
+				copy(data, buffer[:n])
+			}
+
+			select {
+			case readCh <- readResult{data, err}:
+				if err != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// 主循环：等待读取结果或 context 取消
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Logger.Debug(streamName+" goroutine cancelled by context", zap.String("stream", streamName))
+			return ctx.Err()
+		case result := <-readCh:
+			if len(result.data) > 0 {
+				if _, writeErr := dst.Write(result.data); writeErr != nil {
+					logger.Logger.Info(streamName+" write to pipe failed",
+						zap.String("stream", streamName),
+						zap.Error(writeErr))
+					return writeErr
+				}
+			}
+			if result.err != nil {
+				if result.err != io.EOF {
+					logger.Logger.Error("读取"+streamName+"失败",
+						zap.String("stream", streamName),
+						zap.Error(result.err))
+					return result.err
+				}
+				// EOF 是正常结束
+				logger.Logger.Debug(streamName+" reached EOF", zap.String("stream", streamName))
+				return nil
+			}
+		}
+	}
+}
+
+// parseExitCode 解析命令退出码并记录日志
+func parseExitCode(waitErr error, ctx context.Context, operationName string) int {
+	exitCode := 0
+
+	if waitErr != nil {
+		// 检查是否是退出码错误
+		if exitError, ok := waitErr.(*exec.ExitError); ok {
+			exitCode = exitError.ExitCode()
+
+			// 检查是否是因为 context 取消或信号导致的终止（这是正常的取消操作）
+			errMsg := waitErr.Error()
+			if strings.Contains(errMsg, "signal: killed") ||
+				strings.Contains(errMsg, "signal: terminated") ||
+				strings.Contains(errMsg, "signal: interrupt") {
+				logger.Logger.Info("命令被取消",
+					zap.String("operation", operationName),
+					zap.String("reason", errMsg))
+			} else {
+				// 真正的命令执行失败
+				logger.Logger.Warn("命令执行失败",
+					zap.String("operation", operationName),
+					zap.Int("exitCode", exitCode),
+					zap.Error(waitErr))
+			}
+		} else {
+			// 其他错误，设置退出码为 -1
+			exitCode = -1
+			// 同样检查是否是 context 取消
+			if ctx.Err() == context.Canceled {
+				logger.Logger.Info("命令被取消",
+					zap.String("operation", operationName),
+					zap.Error(waitErr))
+			} else {
+				logger.Logger.Error("命令等待失败",
+					zap.String("operation", operationName),
+					zap.Error(waitErr))
+			}
+		}
+	} else {
+		logger.Logger.Info("命令执行成功",
+			zap.String("operation", operationName))
+	}
+
+	return exitCode
 }
 
 func ExecuteDockerComposeCommand(ctx context.Context, options ExecDockerComposeOptions) *ExecDockerComposeResult {
@@ -69,24 +184,6 @@ func ExecuteDockerComposeCommand(ctx context.Context, options ExecDockerComposeO
 	return result
 }
 
-// ExecuteDockerComposeCommandStream 流式执行Docker Compose命令，返回可读取的输出流
-//
-// 使用方式：
-//
-//	result := ExecuteDockerComposeCommandStream(ctx, options)
-//	if result.Error != nil { ... }
-//	defer result.Reader.Close()
-//
-//	// 方式1：直接复制到WebSocket或其他Writer
-//	io.Copy(websocketWriter, result.Reader)
-//
-//	// 方式2：逐块读取并处理
-//	buffer := make([]byte, 1024)
-//	for {
-//	  n, err := result.Reader.Read(buffer)
-//	  if n > 0 { /* 处理数据 */ }
-//	  if err == io.EOF { break }
-//	}
 func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerComposeStreamOptions) *ExecDockerComposeStreamResult {
 	// 创建可取消的上下文，用于控制命令执行
 	cmdCtx, cancel := context.WithCancel(ctx)
@@ -144,88 +241,26 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 			close(result.ExitCode)
 		}()
 
-		// 创建通道来协调stdout和stderr的处理
-		done := make(chan error, 2)
+		// 使用 errgroup 管理 stdout 和 stderr 的并发复制
+		eg, egCtx := errgroup.WithContext(cmdCtx)
 
-		// 处理stdout - 使用字节流复制保留原始格式
-		go func() {
-			defer func() { done <- nil }()
-			buffer := make([]byte, 1024)
-			for {
-				select {
-				case <-cmdCtx.Done():
-					return // 上下文已取消
-				default:
-					n, err := stdout.Read(buffer)
-					if n > 0 {
-						// 直接写入，保留所有控制字符（\r, \n, ANSI等）
-						if _, writeErr := writer.Write(buffer[:n]); writeErr != nil {
-							return // 管道已关闭，reader端断开连接
-						}
-					}
-					if err != nil {
-						if err != io.EOF {
-							logger.Logger.Error("读取stdout失败", zap.Error(err))
-						}
-						return
-					}
-				}
-			}
-		}()
+		// 并发复制 stdout
+		eg.Go(func() error {
+			defer logger.Logger.Debug("stdout goroutine exiting")
+			return copyStreamWithCancel(egCtx, writer, stdout, "stdout")
+		})
 
-		// 处理stderr - 使用字节流复制保留原始格式
-		go func() {
-			defer func() { done <- nil }()
-			buffer := make([]byte, 1024)
-			for {
-				select {
-				case <-cmdCtx.Done():
-					return // 上下文已取消
-				default:
-					n, err := stderr.Read(buffer)
-					if n > 0 {
-						// 直接写入，保留所有控制字符（\r, \n, ANSI等）
-						if _, writeErr := writer.Write(buffer[:n]); writeErr != nil {
-							return // 管道已关闭，reader端断开连接
-						}
-					}
-					if err != nil {
-						if err != io.EOF {
-							logger.Logger.Error("读取stderr失败", zap.Error(err))
-						}
-						return
-					}
-				}
-			}
-		}()
+		// 并发复制 stderr
+		eg.Go(func() error {
+			defer logger.Logger.Debug("stderr goroutine exiting")
+			return copyStreamWithCancel(egCtx, writer, stderr, "stderr")
+		})
 
-		// 等待两个流处理完成
-		<-done
-		<-done
+		// 等待两个流都完成（忽略错误，因为取消是正常的）
+		_ = eg.Wait()
 
-		// 等待命令完成并获取退出码
-		waitErr := cmd.Wait()
-		exitCode := 0
-
-		if waitErr != nil {
-			// 检查是否是退出码错误
-			if exitError, ok := waitErr.(*exec.ExitError); ok {
-				exitCode = exitError.ExitCode()
-				logger.Logger.Warn("命令执行失败",
-					zap.String("operation", options.OperationName),
-					zap.Int("exitCode", exitCode),
-					zap.Error(waitErr))
-			} else {
-				// 其他错误，设置退出码为 -1
-				exitCode = -1
-				logger.Logger.Error("命令等待失败",
-					zap.String("operation", options.OperationName),
-					zap.Error(waitErr))
-			}
-		} else {
-			logger.Logger.Info("命令执行成功",
-				zap.String("operation", options.OperationName))
-		}
+		// 等待命令完成并解析退出码
+		exitCode := parseExitCode(cmd.Wait(), ctx, options.OperationName)
 
 		// 发送退出码
 		result.ExitCode <- exitCode

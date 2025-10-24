@@ -30,7 +30,7 @@ export default function useStatsWebSocket() {
     const host = window.location.host
     return `${protocol}//${host}/api/v1/containers/stats/ws?token=${token}`
   })
-  console.debug('wsUrl', wsUrl.value)
+
   // 使用 VueUse 的 useWebSocket
   const { status, send, open, close, ws } = useWebSocket(wsUrl, {
     // 自动重连配置
@@ -73,13 +73,29 @@ export default function useStatsWebSocket() {
     // 消息接收回调
     onMessage(_, event) {
       try {
-        const message: StatsMessage = JSON.parse(event.data)
-
-        if (message.type === 'containers' && message.data.containers) {
-          statsEmitter.emit('containers', message.data.containers)
+        let dataStr: string
+        // 处理二进制消息
+        if (event.data instanceof ArrayBuffer) {
+          const decoder = new TextDecoder('utf-8')
+          dataStr = decoder.decode(event.data)
+        } else if (typeof event.data === 'string') {
+          // 兼容文本消息
+          dataStr = event.data
+        } else {
+          console.error('未知的消息类型:', typeof event.data)
+          return
+        }
+        try {
+          const message: StatsMessage = JSON.parse(dataStr)
+          if (message.type === 'containers' && message.data.containers) {
+            console.debug('onMessage', message.data.containers)
+            statsEmitter.emit('containers', message.data.containers)
+          }
+        } catch (error) {
+          console.error('解析 JSON 消息失败:', error, 'Data:', dataStr)
         }
       } catch (error) {
-        console.error('解析 WebSocket 消息失败:', error)
+        console.error('处理 WebSocket 消息失败:', error)
       }
     },
   })

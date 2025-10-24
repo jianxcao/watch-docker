@@ -49,15 +49,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
-import { useMessage, useThemeVars } from 'naive-ui'
-import { useWebSocket } from '@vueuse/core'
+import ComposeIcon from '@/assets/svg/compose.svg?component'
 import type { ComposeProject } from '@/common/types'
+import { renderIcon } from '@/common/utils'
 import { useSettingStore } from '@/store/setting'
 import { RefreshOutline, TrashOutline } from '@vicons/ionicons5'
+import { useWebSocket } from '@vueuse/core'
+import { useMessage, useThemeVars } from 'naive-ui'
+import { computed, ref } from 'vue'
 import Term, { type TermConfig } from './Term/TermView.vue'
-import { renderIcon } from '@/common/utils'
-import ComposeIcon from '@/assets/svg/compose.svg?component'
 
 interface Props {
   project: ComposeProject | null
@@ -101,17 +101,33 @@ const socketUrl = computed(() => {
   const token = settingStore.getToken()
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1/compose/logs/ws?token=${token}&composeFile=${encodeURIComponent(props.project.composeFile)}&projectName=${encodeURIComponent(props.project.name)}`
+  return `${protocol}//${host}/api/v1/compose/logs/${props.project.name}/ws?token=${token}&composeFile=${encodeURIComponent(props.project.composeFile)}&projectName=${encodeURIComponent(props.project.name)}`
 })
 
 // 使用 VueUse 的 useWebSocket
-const { status, data, close, open } = useWebSocket(socketUrl, {
+const { status, close, open } = useWebSocket(socketUrl, {
   autoReconnect: false,
   immediate: false,
   autoConnect: false,
 
-  onConnected: () => {
+  // 直接处理消息事件，支持二进制数据
+  onMessage: (_ws, event) => {
+    if (termRef.value && event.data) {
+      // 处理二进制消息
+      if (event.data instanceof ArrayBuffer) {
+        termRef.value.write(new Uint8Array(event.data))
+      } else if (typeof event.data === 'string') {
+        // 兼容文本消息
+        termRef.value.write(event.data)
+      }
+    }
+  },
+  onConnected: (_ws) => {
     termRef.value?.writeln('\x1b[32m已连接到日志流\x1b[0m\r\n')
+    // 设置二进制类型为 arraybuffer
+    if (_ws) {
+      _ws.binaryType = 'arraybuffer'
+    }
   },
   onDisconnected: () => {
     termRef.value?.writeln('\r\n\x1b[33m日志流已断开\x1b[0m\r\n')
@@ -125,13 +141,6 @@ const { status, data, close, open } = useWebSocket(socketUrl, {
 // 连接状态
 const isConnecting = computed(() => status.value === 'CONNECTING')
 const isConnected = computed(() => status.value === 'OPEN')
-
-// 监听 WebSocket 消息
-watch(data, (newData) => {
-  if (newData) {
-    termRef.value?.write(newData)
-  }
-})
 
 // 终端就绪回调
 const handleTermReady = () => {
@@ -160,13 +169,6 @@ const handleClearLogs = () => {
 const handleClose = () => {
   close()
 }
-
-// 监听弹窗显示状态
-watch(show, (newShow) => {
-  if (!newShow) {
-    close()
-  }
-})
 </script>
 
 <style scoped lang="less">

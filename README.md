@@ -94,17 +94,29 @@ services:
     image: jianxcao/watch-docker:latest
     container_name: watch-docker
     hostname: watch-docker
+    # 自己无法更新自己，会死求的
     labels:
-      - "watchdocker.skip=true" # 避免自己更新自己
+      - "watchdocker.skip=true"
     ports:
       - "8080:8080"
     volumes:
-      - ./config:/config
+      - /volume1/watch-docker:/config
+      # 放置 docker yaml文件的目录，必须左右 2 侧一样
+      - /volume1/docker:/volume1/docker
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - TZ=Asia/Shanghai
       - USER_NAME=admin
       - USER_PASSWORD=admin
+      - PUID=0
+      - PGID=0
+      - UMASK=0000
+      # 是否开启 shell 功能，危险操作
+      - IS_OPEN_DOCKER_SHELL=false
+        # 放置 docker yaml文件的目录，注意是所有docker 的目录，不是 watch-docker 的目录
+      - APP_PATH=/volume1/docker
+      # 是否开启二次验证
+      - IS_SECONDARY_VERIFICATION=false
     restart: unless-stopped
 ```
 
@@ -119,14 +131,24 @@ docker-compose up -d
 ```bash
 docker run -d \
   --name watch-docker \
+  --hostname watch-docker \
+  --label "watchdocker.skip=true" \
   -p 8080:8080 \
-  -v ./config:/config \
+  -v /volume1/watch-docker:/config \
+  -v /volume1/docker:/volume1/docker \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -e TZ=Asia/Shanghai \
   -e USER_NAME=admin \
   -e USER_PASSWORD=admin \
-  --label watchdocker.skip=true \
+  -e PUID=0 \
+  -e PGID=0 \
+  -e UMASK=0000 \
+  -e IS_OPEN_DOCKER_SHELL=false \
+  -e APP_PATH=/volume1/docker \
+  -e IS_SECONDARY_VERIFICATION=false \
+  --restart unless-stopped \
   jianxcao/watch-docker:latest
+
 ```
 
 访问 `http://localhost:8080` 并使用默认账户 `admin/admin` 登录。
@@ -135,15 +157,16 @@ docker run -d \
 
 ### 环境变量
 
-| 变量名                 | 默认值          | 描述                                 |
-| ---------------------- | --------------- | ------------------------------------ |
-| `CONFIG_PATH`          | `/config`       | 配置文件目录                         |
-| `CONFIG_FILE`          | `config.yaml`   | 配置文件名                           |
-| `USER_NAME`            | `admin`         | 登录用户名                           |
-| `USER_PASSWORD`        | `admin`         | 登录密码                             |
-| `TZ`                   | `Asia/Shanghai` | 时区设置                             |
-| `PORT`                 | `8088`          | 服务端口                             |
-| `IS_OPEN_DOCKER_SHELL` | `false`         | 是否开启 Shell 终端功能（⚠️ 高风险） |
+| 变量名                      | 默认值          | 描述                                 |
+| --------------------------- | --------------- | ------------------------------------ |
+| `CONFIG_PATH`               | `/config`       | 配置文件目录                         |
+| `CONFIG_FILE`               | `config.yaml`   | 配置文件名                           |
+| `USER_NAME`                 | `admin`         | 登录用户名                           |
+| `USER_PASSWORD`             | `admin`         | 登录密码                             |
+| `TZ`                        | `Asia/Shanghai` | 时区设置                             |
+| `PORT`                      | `8088`          | 服务端口                             |
+| `IS_OPEN_DOCKER_SHELL`      | `false`         | 是否开启 Shell 终端功能（⚠️ 高风险） |
+| `IS_SECONDARY_VERIFICATION` | `false`         | 是否开启二次验证                     |
 
 ### 配置文件示例
 
@@ -274,7 +297,8 @@ services:
     volumes:
       - ./config:/config
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /opt/compose-projects:/compose-projects:ro # 挂载 Compose 项目目录,注意左右 2 侧需要相同
+      # 挂载 Compose 项目目录,注意左右 2 侧需要相同
+      - /opt/compose-projects:/compose-projects:ro
     environment:
       - /opt/compose-projects
 ```

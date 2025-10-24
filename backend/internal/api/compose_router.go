@@ -19,7 +19,7 @@ func (s *Server) setupComposeRoutes(protected *gin.RouterGroup) {
 	protected.DELETE("/compose/delete", s.handleDeleteComposeProject())
 	protected.POST("/compose/create", s.handleCreateComposeProject())
 	protected.POST("/compose/new", s.handleSaveNewProject())
-	protected.GET("/compose/logs/ws", s.handleComposeLogsWebSocket())
+	protected.GET("/compose/logs/:projectName/ws", s.handleComposeLogsWebSocket())
 	protected.GET("/compose/create-and-up/ws", s.handleComposeCreateAndUpWebSocket())
 }
 
