@@ -79,20 +79,17 @@ func (m *StreamManager) RemoveHub(key string) {
 	}
 }
 
-// HandleWebSocket 处理 WebSocket 连接请求
-func (m *StreamManager) HandleWebSocket(c *gin.Context, key string, sourceFactory func() StreamSource) {
-	// 升级为 WebSocket 连接
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		logger.Logger.Error("WebSocket 升级失败", zap.Error(err))
-		return
-	}
+func (m *StreamManager) UpgradeWebSocket(c *gin.Context) (*websocket.Conn, error) {
+	return upgrader.Upgrade(c.Writer, c.Request, nil)
+}
+
+func (m *StreamManager) StartHub(conn *websocket.Conn, key string, sourceFactory func() StreamSource) {
 
 	// 获取或创建 Hub
 	hub := m.GetOrCreateHub(key, sourceFactory)
 
 	// 生成客户端 ID
-	clientID := m.generateClientID()
+	clientID := m.GenerateClientID()
 
 	// 创建客户端
 	client := NewClient(conn, hub, clientID)
@@ -105,12 +102,23 @@ func (m *StreamManager) HandleWebSocket(c *gin.Context, key string, sourceFactor
 	hub.RegisterClient(client)
 
 	// 启动客户端的读写协程
-	go client.writePump()
-	go client.readPump()
+	go client.WritePump()
+	go client.ReadPump()
 }
 
-// generateClientID 生成唯一的客户端 ID
-func (m *StreamManager) generateClientID() string {
+// HandleWebSocket 处理 WebSocket 连接请求
+func (m *StreamManager) HandleWebSocket(c *gin.Context, key string, sourceFactory func() StreamSource) {
+	// 升级为 WebSocket 连接
+	conn, err := m.UpgradeWebSocket(c)
+	if err != nil {
+		logger.Logger.Error("WebSocket 升级失败", zap.Error(err))
+		return
+	}
+	m.StartHub(conn, key, sourceFactory)
+}
+
+// generateClientID 生成唯一的客户端 ID（内部使用）
+func (m *StreamManager) GenerateClientID() string {
 	m.counterMu.Lock()
 	defer m.counterMu.Unlock()
 	m.clientCounter++

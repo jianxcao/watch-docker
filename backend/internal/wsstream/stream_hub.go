@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"time"
 
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
@@ -190,6 +191,9 @@ func (h *StreamHub) startStreamSource() {
 							zap.Error(err))
 						h.broadcastError("读取数据流出错: " + err.Error())
 					}
+
+					// 数据源结束或出错后，关闭所有客户端连接
+					h.closeAllClients()
 					return
 				}
 			}
@@ -245,6 +249,34 @@ func (h *StreamHub) broadcast(message []byte) {
 func (h *StreamHub) broadcastError(errMsg string) {
 	formattedMsg := []byte("\r\n\x1b[31m错误: " + errMsg + "\x1b[0m\r\n")
 	h.broadcast(formattedMsg)
+}
+
+// closeAllClients 关闭所有客户端连接（数据源结束或出错时调用）
+func (h *StreamHub) closeAllClients() {
+	h.mu.Lock()
+	clientCount := len(h.clients)
+	clients := make([]*Client, 0, clientCount)
+	for client := range h.clients {
+		clients = append(clients, client)
+	}
+	h.mu.Unlock()
+
+	logger.Logger.Info("关闭所有客户端连接",
+		zap.String("key", h.key),
+		zap.Int("clientCount", clientCount))
+
+	// 给所有客户端一点时间接收最后的消息
+	// 然后关闭连接
+	go func() {
+		// 等待 100ms 让最后的消息发送出去
+		time.Sleep(100 * time.Millisecond)
+
+		for _, client := range clients {
+			// 直接关闭连接，conn.Close() 是幂等的，内部有互斥锁保护
+			// 即使在 writePump/readPump 中也调用了 Close()，也不会有问题
+			client.conn.Close()
+		}
+	}()
 }
 
 // RegisterClient 注册客户端

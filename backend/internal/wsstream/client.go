@@ -33,8 +33,8 @@ func NewClient(conn *websocket.Conn, hub *StreamHub, id string) *Client {
 	}
 }
 
-// writePump 处理向 WebSocket 连接写入消息
-func (c *Client) writePump() {
+// WritePump 处理向 WebSocket 连接写入消息
+func (c *Client) WritePump() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
@@ -73,9 +73,9 @@ func (c *Client) writePump() {
 	}
 }
 
-// readPump 处理从 WebSocket 连接读取消息
+// ReadPump 处理从 WebSocket 连接读取消息
 // 主要用于检测客户端断开连接和处理 Pong 响应
-func (c *Client) readPump() {
+func (c *Client) ReadPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()

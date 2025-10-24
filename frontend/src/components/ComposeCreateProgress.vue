@@ -61,7 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useWebSocket } from '@vueuse/core'
 import { useMessage } from 'naive-ui'
 import {
@@ -126,22 +126,54 @@ const wsUrl = computed(() => {
 })
 
 // 使用 VueUse 的 useWebSocket
-const {
-  data: wsData,
-  send,
-  open,
-  close,
-} = useWebSocket(wsUrl.value, {
+const { send, open, close } = useWebSocket(wsUrl.value, {
   immediate: false,
   autoReconnect: false,
   heartbeat: {
     message: 'ping',
     interval: 30000,
   },
-  onConnected: () => {
+  onMessage: (_ws, event) => {
+    if (event.data) {
+      // 处理二进制消息
+      if (event.data instanceof ArrayBuffer) {
+        const data = new Uint8Array(event.data)
+        // 检查是否是状态消息（以 \x00JSON: 开头）
+        if (
+          data.length > 6 &&
+          data[0] === 0 &&
+          String.fromCharCode(...data.slice(1, 6)) === 'JSON:'
+        ) {
+          // 解析状态消息
+          try {
+            const jsonStr = new TextDecoder().decode(data.slice(6))
+            const statusMsg = JSON.parse(jsonStr)
+            console.debug('收到状态消息:', statusMsg)
+
+            if (statusMsg.status === 'success') {
+              status.value = 'success'
+              emit('success', statusMsg.message)
+              emit('complete')
+            } else if (statusMsg.status === 'error') {
+              status.value = 'error'
+              emit('error', statusMsg.message)
+            }
+          } catch (e) {
+            console.error('Failed to parse status message:', e)
+          }
+        } else {
+          // 普通日志消息，写入终端
+          termRef.value?.write(data)
+        }
+      }
+    }
+  },
+  onConnected: (_ws) => {
     status.value = 'creating'
     writeLine('\x1b[32m=== 连接成功，开始创建项目 ===\x1b[0m\r\n')
-
+    if (_ws) {
+      _ws.binaryType = 'arraybuffer'
+    }
     // 发送创建请求
     if (props.projectName && props.yamlContent) {
       send(
@@ -175,47 +207,6 @@ const writeLine = (text: string | Uint8Array) => {
     termRef.value?.scrollToBottom()
   })
 }
-
-// 监听 WebSocket 消息
-watch(wsData, (data) => {
-  if (!data) {
-    return
-  }
-
-  try {
-    const message = JSON.parse(data)
-    const { type, message: msg } = message
-
-    switch (type) {
-      case 'INFO':
-        writeLine(`\x1b[36mℹ ${msg}\x1b[0m`)
-        break
-      case 'SUCCESS':
-        writeLine(`\x1b[32m✓ ${msg}\x1b[0m`)
-        break
-      case 'ERROR':
-        status.value = 'error'
-        writeLine(`\x1b[31m✗ ${msg}\x1b[0m`)
-        emit('error', msg)
-        break
-      case 'LOG':
-        writeLine(msg)
-        break
-      case 'COMPLETE':
-        status.value = 'success'
-        writeLine('\r\n\x1b[32m✓ 项目创建并启动成功！\x1b[0m\r\n')
-        emit('success', msg)
-        emit('complete')
-        // 关闭 WebSocket 连接
-        setTimeout(() => {
-          close()
-        }, 1000)
-        break
-    }
-  } catch (error) {
-    console.error('解析 WebSocket 消息失败:', error)
-  }
-})
 
 // 开始创建
 const start = () => {
