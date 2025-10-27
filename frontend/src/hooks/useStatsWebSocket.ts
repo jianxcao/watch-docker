@@ -88,7 +88,7 @@ export default function useStatsWebSocket() {
         try {
           const message: StatsMessage = JSON.parse(dataStr)
           if (message.type === 'containers' && message.data.containers) {
-            console.debug('onMessage', message.data.containers)
+            // console.debug('onMessage', message.data.containers)
             statsEmitter.emit('containers', message.data.containers)
           }
         } catch (error) {

@@ -6,11 +6,12 @@
     preset="dialog"
     :title="title"
     class="compose-logs-modal"
+    contentClass="compose-logs-modal-content"
     :style="{
-      padding: '12px',
+      padding: '8px',
       width: '90vw',
       maxWidth: '1200px',
-      height: '80vh',
+      height: '90vh',
     }"
     :mask-closable="false"
     :closable="true"
@@ -21,10 +22,10 @@
         ref="termRef"
         :config="termConfig"
         @ready="handleTermReady"
-        height="calc(80vh - 42px)"
+        height="calc(90vh - 104px)"
       />
     </div>
-    <template #footer>
+    <template #action>
       <n-space justify="end">
         <n-button @click="handleReconnect" :disabled="isConnecting || isConnected">
           <template #icon>
@@ -171,13 +172,19 @@ const handleClose = () => {
 }
 </script>
 
-<style scoped lang="less">
+<style lang="less">
 .compose-logs-modal {
-  :deep(.n-scrollbar-container) {
-    overflow: hidden !important;
+  .n-dialog__content {
+    margin-bottom: 0;
+    margin-top: 0;
+  }
+  .n-dialog__close {
+    top: -8px;
   }
 }
+</style>
 
+<style scoped lang="less">
 .logs-container {
   flex: 1;
   overflow: hidden;
