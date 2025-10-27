@@ -5,6 +5,7 @@
     placement="left"
     :trap-focus="false"
     :block-scroll="false"
+    class="mobile-drawer-menu"
   >
     <SiderContent :on-menu-select="handleMenuSelect" />
   </n-drawer>
@@ -32,3 +33,10 @@ const handleMenuSelect = () => {
   appStore.closeDrawer()
 }
 </script>
+
+<style lang="less">
+.mobile-drawer-menu {
+  background-color: color-mix(in srgb, var(--n-color) 50%, transparent);
+  backdrop-filter: blur(30px) brightness(95%);
+}
+</style>
