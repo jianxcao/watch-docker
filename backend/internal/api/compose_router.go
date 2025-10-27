@@ -19,6 +19,7 @@ func (s *Server) setupComposeRoutes(protected *gin.RouterGroup) {
 	protected.DELETE("/compose/delete", s.handleDeleteComposeProject())
 	protected.POST("/compose/create", s.handleCreateComposeProject())
 	protected.POST("/compose/new", s.handleSaveNewProject())
+	protected.GET("/compose/:projectName/yaml", s.handleGetProjectYaml())
 	protected.GET("/compose/logs/:projectName/ws", s.handleComposeLogsWebSocket())
 	protected.GET("/compose/create-and-up/ws", s.handleComposeCreateAndUpWebSocket())
 }
@@ -182,6 +183,39 @@ func (s *Server) handleSaveNewProject() gin.HandlerFunc {
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"ok":          true,
 			"composeFile": composeFile,
+		}))
+	}
+}
+
+func (s *Server) handleGetProjectYaml() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		projectName := c.Param("projectName")
+		composeFile := c.Query("composeFile")
+
+		if projectName == "" {
+			s.logger.Error("missing projectName parameter")
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInvalidRequest, "缺少项目名称参数"))
+			return
+		}
+
+		if composeFile == "" {
+			s.logger.Error("missing composeFile parameter")
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInvalidRequest, "缺少 composeFile 参数"))
+			return
+		}
+
+		yamlContent, err := s.composeClient.GetProjectYaml(composeFile)
+		if err != nil {
+			s.logger.Error("get project yaml failed",
+				zap.String("projectName", projectName),
+				zap.String("composeFile", composeFile),
+				zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"yamlContent": yamlContent,
 		}))
 	}
 }

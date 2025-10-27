@@ -3,6 +3,7 @@
     class="compose-card"
     :data-theme="settingStore.setting.theme"
     :class="['card-status-' + project.status, { 'card-updating': loading }]"
+    @click="handleCardClick"
   >
     <div class="card-content">
       <!-- 项目头部信息 -->
@@ -20,7 +21,7 @@
           <div class="project-title-row">
             <div class="project-name">{{ project.name }}</div>
             <n-dropdown :options="dropdownOptions" @select="handleMenuSelect" trigger="click">
-              <n-button quaternary circle size="small" class="menu-btn">
+              <n-button quaternary circle size="small" class="menu-btn" @click.stop>
                 <template #icon>
                   <n-icon>
                     <MenuIcon />
@@ -57,7 +58,7 @@
       </div>
 
       <!-- 操作按钮区域 -->
-      <div class="action-buttons">
+      <div class="action-buttons" @click.stop>
         <n-button
           v-if="project.status === 'exited' || project.status === 'partial'"
           text
@@ -129,6 +130,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { NIcon, type DropdownOption } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
 import type { ComposeProject } from '@/common/types'
@@ -147,6 +149,7 @@ import { useCompose } from '@/hooks/useCompose'
 import { renderIcon } from '@/common/utils'
 
 const { handleStart, handleStop, handleRestart, handleDelete, handleCreate } = useCompose()
+const router = useRouter()
 
 interface Props {
   project: ComposeProject
@@ -233,6 +236,16 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
   return options
 })
 
+// 处理卡片点击，跳转到详情页
+const handleCardClick = () => {
+  router.push({
+    name: 'compose-detail',
+    params: {
+      projectName: props.project.name,
+    },
+  })
+}
+
 // 处理菜单选择
 const handleMenuSelect = (key: string) => {
   switch (key) {
@@ -268,6 +281,7 @@ const handleMenuSelect = (key: string) => {
   border: 1px solid rgba(49, 65, 88, 0.5);
   background: rgba(29, 41, 61, 0.5);
   min-width: 320px;
+  cursor: pointer;
 
   &:hover {
     transform: translateY(-2px);

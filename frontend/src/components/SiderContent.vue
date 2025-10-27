@@ -280,7 +280,8 @@ const handleGithubClick = () => {
 }
 
 .sider-header {
-  height: 56px;
+  // 加下 border 是56px
+  height: 55px;
   box-sizing: border-box;
   padding: 0 16px;
   border-bottom: 1px solid var(--divider-color);

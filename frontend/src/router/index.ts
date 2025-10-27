@@ -55,6 +55,16 @@ const router = createRouter({
           },
         },
         {
+          path: '/compose/:projectName/detail',
+          name: 'compose-detail',
+          component: () => import('@/pages/ComposeDetailView.vue'),
+          meta: {
+            title: 'Compose 项目详情',
+            requiresAuth: true,
+            layoutClass: 'layout-compose-detail',
+          },
+        },
+        {
           path: '/settings',
           component: () => import('@/pages/SettingsView.vue'),
           meta: { title: '系统设置', requiresAuth: true, layoutClass: 'layout-settings' },

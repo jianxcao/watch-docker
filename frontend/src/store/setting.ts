@@ -33,6 +33,13 @@ export const useSettingStore = defineStore('setting', () => {
   const docStyle = window.getComputedStyle(doc)
   safeArea.top = parseInt(docStyle.getPropertyValue('--top-inset')) || 0
   safeArea.bottom = parseInt(docStyle.getPropertyValue('--bottom-inset')) || 0
+  // 12是 容器的 padding
+  const contentSafeTop = ref(safeArea.top + headerHeight.value + 12 * 2)
+
+  watchEffect(() => {
+    document.body.style.setProperty('--content-safe-top', `${contentSafeTop.value}px`)
+  })
+
   const themeDefault = useThemeVars()
 
   const themeVars = ref<ThemeCommonVars & CustomThemeCommonVars>(themeDefault.value)
@@ -135,5 +142,6 @@ export const useSettingStore = defineStore('setting', () => {
     setTmpToken,
     getToken,
     clearToken,
+    contentSafeTop,
   }
 })

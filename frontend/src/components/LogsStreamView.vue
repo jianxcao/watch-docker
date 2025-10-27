@@ -1,6 +1,6 @@
 <template>
   <div class="logs-container">
-    <Term ref="termRef" :config="termConfig" @ready="handleTermReady" height="calc(90vh - 104px)" />
+    <Term ref="termRef" :config="termConfig" @ready="handleTermReady" :height="height" />
   </div>
 </template>
 
@@ -12,9 +12,12 @@ import Term, { type TermConfig } from './Term/TermView.vue'
 
 interface Props {
   socketUrl?: string
+  height?: string
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  height: 'calc(90vh - 104px)',
+})
 const message = useMessage()
 const termRef = ref<InstanceType<typeof Term>>()
 

@@ -199,6 +199,7 @@ func TestExecuteDockerComposeCommandStreamTimeout(t *testing.T) {
 	// 即使上下文已经超时，函数也应该能够正常返回
 	if result == nil {
 		t.Error("结果不应该为nil")
+		return
 	}
 
 	if result.Reader != nil {

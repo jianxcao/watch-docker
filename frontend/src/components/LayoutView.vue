@@ -135,9 +135,9 @@ watch(visibility, (newVal) => {
 }
 
 .layout-content {
-  padding: 16px;
+  padding: 12px;
   box-sizing: border-box;
-  min-height: calc(100vh - 56px);
+  min-height: calc(100vh - var(--content-safe-top));
 }
 
 #footer {
@@ -164,7 +164,8 @@ watch(visibility, (newVal) => {
 
 .header-content {
   padding: 0 16px;
-  height: 56px;
+  // 加下 border 是56px
+  height: 55px;
   box-sizing: border-box;
   display: flex;
   align-items: center;

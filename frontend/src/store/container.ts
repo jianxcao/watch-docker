@@ -23,7 +23,7 @@ export const useContainerStore = defineStore('container', () => {
   const stoppedContainers = computed(() => containers.value.filter((c) => !c.running))
 
   const updateableContainers = computed(() =>
-    containers.value.filter((c) => c.status === 'UpdateAvailable' && !c.skipped)
+    containers.value.filter((c) => c.status === 'UpdateAvailable' && !c.skipped),
   )
 
   const upToDateContainers = computed(() => containers.value.filter((c) => c.status === 'UpToDate'))
@@ -172,6 +172,15 @@ export const useContainerStore = defineStore('container', () => {
     return containers.value.find((c) => c.name === name)
   }
 
+  // 方法：根据项目名称获取容器列表
+  const getProjectContainers = (projectName: string) => {
+    return computed(() => {
+      return containers.value.filter((container) => {
+        return container.labels?.['com.docker.compose.project'] === projectName
+      })
+    })
+  }
+
   // 方法：检查容器是否正在更新
   const isContainerUpdating = (id: string) => {
     return updating.value.has(id)
@@ -207,7 +216,7 @@ export const useContainerStore = defineStore('container', () => {
       // 构建下载URL，将token作为查询参数
       const baseUrl = '/api/v1'
       const downloadUrl = `${baseUrl}/containers/${id}/export?token=${encodeURIComponent(
-        token
+        token,
       )}&_t=${Date.now()}`
 
       // 使用window.open直接下载，浏览器会处理大文件和进度
@@ -252,6 +261,7 @@ export const useContainerStore = defineStore('container', () => {
     deleteContainer,
     findContainerById,
     findContainerByName,
+    getProjectContainers,
     isContainerUpdating,
     exportContainer,
     statsWebSocket,

@@ -55,7 +55,7 @@
         <div class="container-status">
           <RunningStatusBadge :container="container" />
           <n-dropdown :options="dropdownOptions" @select="handleMenuSelect" trigger="click">
-            <n-button quaternary circle>
+            <n-button quaternary circle @click.stop>
               <template #icon>
                 <n-icon>
                   <MenuIcon />

@@ -129,6 +129,7 @@ import { useRouter } from 'vue-router'
 import { useMessage, useThemeVars, type FormInst, type FormRules } from 'naive-ui'
 import { ArrowBackOutline, FolderOpenOutline, CloudUploadOutline } from '@vicons/ionicons5'
 import { useSettingStore } from '@/store/setting'
+import { validateComposeYaml } from '@/common/utils'
 import YamlEditor from '@/components/YamlEditor/index.vue'
 import ComposeCreateProgress from '@/components/ComposeCreateProgress.vue'
 import { useComposeStore } from '@/store/compose'
@@ -216,50 +217,9 @@ const handleNameChange = () => {
 
 // YAML 变化时进行简单验证
 const handleYamlChange = () => {
-  try {
-    const yaml = formData.value.yaml.trim()
-    if (!yaml) {
-      isYamlValid.value = false
-      yamlValidationMessage.value = '请输入 YAML 配置'
-      return
-    }
-
-    // 简单的 YAML 格式检查
-    if (!yaml.includes('services:')) {
-      isYamlValid.value = false
-      yamlValidationMessage.value = '缺少 services 配置'
-      return
-    }
-
-    // 检查缩进和基本语法
-    const lines = yaml.split('\n')
-    let hasError = false
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-      if (!line.trim() || line.trim().startsWith('#')) {
-        continue
-      }
-
-      const singleQuotes = (line.match(/'/g) || []).length
-      const doubleQuotes = (line.match(/"/g) || []).length
-      if (singleQuotes % 2 !== 0 || doubleQuotes % 2 !== 0) {
-        hasError = true
-        yamlValidationMessage.value = `第 ${i + 1} 行：引号未闭合`
-        break
-      }
-    }
-
-    if (hasError) {
-      isYamlValid.value = false
-      return
-    }
-
-    isYamlValid.value = true
-    yamlValidationMessage.value = ''
-  } catch (error) {
-    isYamlValid.value = false
-    yamlValidationMessage.value = `YAML 格式错误: ${(error as Error).message}`
-  }
+  const result = validateComposeYaml(formData.value.yaml)
+  isYamlValid.value = result.isValid
+  yamlValidationMessage.value = result.errorMessage
 }
 
 // 导入 YAML 文件

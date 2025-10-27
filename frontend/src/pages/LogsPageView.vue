@@ -56,8 +56,7 @@ const logs = ref<LogEntry[]>([])
 const virtualListRef = ref()
 const containerRef = ref<HTMLDivElement | null>(null)
 const containerHeight = computed(
-  () =>
-    `calc(100vh - ${settingStore.headerHeight + settingStore.safeArea.top + settingStore.safeArea.bottom + 18}px)`,
+  () => `calc(100vh - ${settingStore.contentSafeTop + settingStore.safeArea.bottom}px)`,
 )
 
 // 估算的每个日志项高度（像素）
