@@ -1,5 +1,11 @@
 <template>
-  <n-drawer v-model:show="drawerVisible" :width="280" placement="left" :trap-focus="false" :block-scroll="false">
+  <n-drawer
+    v-model:show="drawerVisible"
+    :width="280"
+    placement="left"
+    :trap-focus="false"
+    :block-scroll="false"
+  >
     <SiderContent :on-menu-select="handleMenuSelect" />
   </n-drawer>
 </template>
@@ -18,7 +24,7 @@ const drawerVisible = computed({
     if (!value) {
       appStore.closeDrawer()
     }
-  }
+  },
 })
 
 // 处理菜单选择（关闭抽屉）

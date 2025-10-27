@@ -23,7 +23,12 @@
         </n-button>
       </n-dropdown>
       <!-- 搜索 -->
-      <n-input v-model:value="searchKeyword" placeholder="搜索镜像标签或ID" style="width: 200px;" clearable>
+      <n-input
+        v-model:value="searchKeyword"
+        placeholder="搜索镜像标签或ID"
+        style="width: 200px"
+        clearable
+      >
         <template #prefix>
           <n-icon>
             <SearchOutline />
@@ -43,13 +48,22 @@
           </n-empty>
         </div>
 
-        <div v-else class="images-grid" :class="{
-          'grid-cols-1': isMobile,
-          'grid-cols-2': isTablet,
-          'grid-cols-3': isLaptop || isDesktop,
-          'grid-cols-4': isDesktopLarge,
-        }">
-          <ImageCard v-for="image in filteredImages" :key="image.id" :image="image" @delete="handleDelete" />
+        <div
+          v-else
+          class="images-grid"
+          :class="{
+            'grid-cols-1': isMobile,
+            'grid-cols-2': isTablet,
+            'grid-cols-3': isLaptop || isDesktop,
+            'grid-cols-4': isDesktopLarge,
+          }"
+        >
+          <ImageCard
+            v-for="image in filteredImages"
+            :key="image.id"
+            :image="image"
+            @delete="handleDelete"
+          />
         </div>
       </n-spin>
     </div>
@@ -58,9 +72,9 @@
       <div class="welcome-card">
         <div>
           <n-h2 class="m-0 text-lg">镜像管理</n-h2>
-          <n-text depth="3" class="text-xs max-md:hidden ">
-            共 {{ imageStore.stats.total }} 个镜像，
-            总大小 {{ imageStore.stats.formattedTotalSize }}，
+          <n-text depth="3" class="text-xs max-md:hidden">
+            共 {{ imageStore.stats.total }} 个镜像， 总大小
+            {{ imageStore.stats.formattedTotalSize }}，
           </n-text>
         </div>
         <n-space size="small">
@@ -129,23 +143,22 @@ const statusFilter = ref<string | null>(null)
 const sortBy = ref<string>('created') // 默认按创建时间排序
 const sortOrder = ref<'asc' | 'desc'>('desc') // 默认降序
 
-
 // 状态过滤菜单选项
 const statusFilterMenuOptions = computed(() => [
   {
     label: '全部',
     key: null,
-    icon: renderIcon(AppsOutline)
+    icon: renderIcon(AppsOutline),
   },
   {
     label: '使用中',
     key: 'in-use',
-    icon: renderIcon(CheckmarkCircleOutline)
+    icon: renderIcon(CheckmarkCircleOutline),
   },
   {
     label: '未使用',
     key: 'unused',
-    icon: renderIcon(CloseCircleOutline)
+    icon: renderIcon(CloseCircleOutline),
   },
 ])
 
@@ -160,17 +173,17 @@ const sortMenuOptions = computed(() => [
   {
     label: `名称 ${sortBy.value === 'name' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
     key: 'name',
-    icon: renderIcon(TextOutline)
+    icon: renderIcon(TextOutline),
   },
   {
     label: `大小 ${sortBy.value === 'size' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
     key: 'size',
-    icon: renderIcon(ResizeOutline)
+    icon: renderIcon(ResizeOutline),
   },
   {
     label: `创建时间 ${sortBy.value === 'created' ? (sortOrder.value === 'asc' ? '↑' : '↓') : ''}`,
     key: 'created',
-    icon: renderIcon(CalendarOutline)
+    icon: renderIcon(CalendarOutline),
   },
 ])
 
@@ -198,20 +211,18 @@ const filteredImages = computed(() => {
   // 搜索过滤
   if (searchKeyword.value) {
     const keyword = searchKeyword.value.toLowerCase()
-    images = images.filter(image => {
+    images = images.filter((image) => {
       const displayTag = imageStore.getImageDisplayTag(image).toLowerCase()
       const id = image.id.toLowerCase()
       const tags = image.repoTags?.join(' ').toLowerCase() || ''
 
-      return displayTag.includes(keyword) ||
-        id.includes(keyword) ||
-        tags.includes(keyword)
+      return displayTag.includes(keyword) || id.includes(keyword) || tags.includes(keyword)
     })
   }
 
   // 状态过滤
   if (statusFilter.value) {
-    images = images.filter(image => {
+    images = images.filter((image) => {
       const isUse = imageHooks.isImageInUse(image)
       // console.debug('isUse', image.repoTags, isUse)
       switch (statusFilter.value) {
@@ -248,7 +259,6 @@ const filteredImages = computed(() => {
   })
   return sortedImages
 })
-
 
 // 操作处理函数
 const handleDelete = async (image: ImageInfo) => {
@@ -329,7 +339,6 @@ onMounted(async () => {
       grid-template-columns: repeat(4, minmax(1fr, 25%));
     }
   }
-
 }
 
 // 响应式调整

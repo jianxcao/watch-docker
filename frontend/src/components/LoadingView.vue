@@ -15,7 +15,7 @@ interface Props {
 }
 
 withDefaults(defineProps<Props>(), {
-  text: '正在加载数据...'
+  text: '正在加载数据...',
 })
 </script>
 

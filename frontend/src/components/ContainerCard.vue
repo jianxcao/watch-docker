@@ -1,5 +1,9 @@
 <template>
-  <div class="container-card" :data-theme="settingStore.setting.theme" :class="{ 'card-updating': isUpdating }">
+  <div
+    class="container-card"
+    :data-theme="settingStore.setting.theme"
+    :class="{ 'card-updating': isUpdating }"
+  >
     <!-- 状态指示条 -->
     <div class="status-bar" :class="container.running ? 'running' : 'stopped'"></div>
     <div class="card-content">
@@ -10,8 +14,15 @@
             <ContainerLogo />
           </n-icon>
           <div class="absolute -top-1 -right-1">
-            <div class="w-4 h-4 rounded-full flex items-center justify-center" :class="statusConfig.color">
-              <div class="w-2 h-2 rounded-full" v-if="container.running" :class="statusConfig.pulseColor"></div>
+            <div
+              class="w-4 h-4 rounded-full flex items-center justify-center"
+              :class="statusConfig.color"
+            >
+              <div
+                class="w-2 h-2 rounded-full"
+                v-if="container.running"
+                :class="statusConfig.pulseColor"
+              ></div>
             </div>
           </div>
         </div>
@@ -31,7 +42,9 @@
             </n-tooltip>
             <n-tooltip :delay="500" v-if="container.status === 'UpdateAvailable'">
               <template #trigger>
-                <div class="absolute -top-1 -right-1 w-3 h-3 bg-orange-500 rounded-full cursor-help">
+                <div
+                  class="absolute -top-1 -right-1 w-3 h-3 bg-orange-500 rounded-full cursor-help"
+                >
                   <div class="w-full h-full bg-orange-400 rounded-full animate-ping"></div>
                 </div>
               </template>
@@ -71,7 +84,9 @@
             </div>
           </div>
           <div class="detail-item">
-            <div class="detail-value min-w-[152px]">{{ formatCreatedTime(container.startedAt) }}</div>
+            <div class="detail-value min-w-[152px]">
+              {{ formatCreatedTime(container.startedAt) }}
+            </div>
             <div class="detail-value">{{ formatPorts(container.ports) }}</div>
           </div>
         </div>
@@ -88,12 +103,10 @@
               </n-icon>
               <span>运行时长</span>
             </div>
-            <div class="time-value" :class="container.running ? 'running' : 'stopped'">{{ container.running &&
-              container.startedAt ?
-              formatTime(container.startedAt) :
-              '-' }}</div>
+            <div class="time-value" :class="container.running ? 'running' : 'stopped'">
+              {{ container.running && container.startedAt ? formatTime(container.startedAt) : '-' }}
+            </div>
           </div>
-
         </div>
         <div class="stats-grid">
           <div class="stat-item">
@@ -134,10 +147,8 @@
             </div>
             <div class="network-rate">{{ formatBytesPerSecond(stats.networkTxRate) }}</div>
           </div>
-
         </div>
       </div>
-
     </div>
   </div>
 </template>
@@ -153,7 +164,16 @@ import type { ContainerStatus } from '@/common/types'
 import { formatBytes, formatBytesPerSecond, formatPercent, formatTime } from '@/common/utils'
 import { useContainerStore } from '@/store/container'
 import { useSettingStore } from '@/store/setting'
-import { CloudDownloadOutline, CloudUploadOutline, PlayCircleOutline, StopCircleOutline, TimeOutline, TrashOutline, DownloadOutline } from '@vicons/ionicons5'
+import {
+  CloudDownloadOutline,
+  CloudUploadOutline,
+  PlayCircleOutline,
+  StopCircleOutline,
+  TimeOutline,
+  TrashOutline,
+  DownloadOutline,
+} from '@vicons/ionicons5'
+import LogIcon from '@/assets/svg/log.svg?component'
 import dayjs from 'dayjs'
 import { NIcon, useThemeVars } from 'naive-ui'
 import { computed, h } from 'vue'
@@ -170,6 +190,7 @@ interface Emits {
   (e: 'stop'): void
   (e: 'delete'): void
   (e: 'export'): void
+  (e: 'logs'): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -179,13 +200,15 @@ const theme = useThemeVars()
 const emits = defineEmits<Emits>()
 
 const stats = computed(() => {
-  return props.container.stats || {
-    cpuPercent: 0,
-    memoryUsage: 0,
-    memoryPercent: 0,
-    networkRxRate: 0,
-    networkTxRate: 0,
-  }
+  return (
+    props.container.stats || {
+      cpuPercent: 0,
+      memoryUsage: 0,
+      memoryPercent: 0,
+      networkRxRate: 0,
+      networkTxRate: 0,
+    }
+  )
 })
 
 const containerStore = useContainerStore()
@@ -202,13 +225,17 @@ const statusConfig = computed(() => {
 
 // 格式化创建时间
 const formatCreatedTime = (createdAt: string): string => {
-  if (!createdAt) { return '-' }
+  if (!createdAt) {
+    return '-'
+  }
   return dayjs(createdAt).format('YYYY-MM-DD HH:mm')
 }
 
 // 格式化端口映射
 const formatPorts = (ports: any[]): string => {
-  if (!ports || ports.length === 0) { return '-' }
+  if (!ports || ports.length === 0) {
+    return '-'
+  }
   // return ports
   //   .map((port) => {
   //     if (port.publicPort) {
@@ -218,38 +245,55 @@ const formatPorts = (ports: any[]): string => {
   //     }
   //   })
   //   .join(', ')
-  return ports.filter(port => port.publicPort).map(port => `${port.publicPort}:${port.privatePort}`)[0] || '-'
+  return (
+    ports
+      .filter((port) => port.publicPort)
+      .map((port) => `${port.publicPort}:${port.privatePort}`)[0] || '-'
+  )
 }
-
-
 
 // 下拉菜单选项
 const dropdownOptions = computed(() => [
   {
     key: props.container.running ? 'stop' : 'start',
     label: props.container.running ? '停止容器' : '启动容器',
-    icon: () => h(NIcon, null, {
-      default: () => h(props.container.running ? StopCircleOutline : PlayCircleOutline)
-    }),
-    disabled: props.loading
+    icon: () =>
+      h(NIcon, null, {
+        default: () => h(props.container.running ? StopCircleOutline : PlayCircleOutline),
+      }),
+    disabled: props.loading,
   },
   {
     key: 'export',
     label: '导出容器',
-    icon: () => h(NIcon, null, {
-      default: () => h(DownloadOutline)
-    })
+    icon: () =>
+      h(NIcon, null, {
+        default: () => h(DownloadOutline),
+      }),
   },
   {
     key: 'delete',
     label: '删除容器',
-    icon: () => h(NIcon, {
-      color: theme.value.errorColor
-    }, {
-      default: () => h(TrashOutline)
-    }),
+    icon: () =>
+      h(
+        NIcon,
+        {
+          color: theme.value.errorColor,
+        },
+        {
+          default: () => h(TrashOutline),
+        },
+      ),
     disabled: props.loading,
-  }
+  },
+  {
+    key: 'logs',
+    label: '查看日志',
+    icon: () =>
+      h(NIcon, null, {
+        default: () => h(LogIcon),
+      }),
+  },
 ])
 
 // 处理下拉菜单选择
@@ -267,9 +311,11 @@ const handleMenuSelect = (key: string) => {
     case 'delete':
       emits('delete')
       break
+    case 'logs':
+      emits('logs')
+      break
   }
 }
-
 </script>
 
 <style scoped lang="less">
@@ -298,17 +344,21 @@ const handleMenuSelect = (key: string) => {
   }
 
   &:has(.status-bar.stopped) {
-    background: linear-gradient(135deg,
-        rgba(98, 116, 142, 0.05) 0%,
-        rgba(106, 114, 130, 0.05) 100%);
+    background: linear-gradient(
+      135deg,
+      rgba(98, 116, 142, 0.05) 0%,
+      rgba(106, 114, 130, 0.05) 100%
+    );
     border-color: rgba(98, 116, 142, 0.2);
   }
 
   &[data-theme='light']:has(.status-bar.stopped) {
     border: 2px solid rgba(98, 116, 142, 0.2);
-    background: linear-gradient(135deg,
-        rgba(98, 116, 142, 0.05) 0%,
-        rgba(106, 114, 130, 0.05) 100%);
+    background: linear-gradient(
+      135deg,
+      rgba(98, 116, 142, 0.05) 0%,
+      rgba(106, 114, 130, 0.05) 100%
+    );
   }
 
   .status-bar {
@@ -350,9 +400,11 @@ const handleMenuSelect = (key: string) => {
       border-radius: 14px;
       align-self: center;
       border: 1px solid rgba(0, 188, 125, 0.2);
-      background: linear-gradient(135deg,
-          rgba(250, 250, 250, 0.1) 0%,
-          rgba(250, 250, 250, 0.05) 100%);
+      background: linear-gradient(
+        135deg,
+        rgba(250, 250, 250, 0.1) 0%,
+        rgba(250, 250, 250, 0.05) 100%
+      );
     }
 
     .container-basic-info {
@@ -446,7 +498,6 @@ const handleMenuSelect = (key: string) => {
   }
 }
 
-
 .container-stats {
   margin-top: 12px;
   padding-top: 12px;
@@ -472,8 +523,6 @@ const handleMenuSelect = (key: string) => {
     gap: 8px;
     justify-content: space-between;
 
-
-
     .stat-item {
       display: flex;
       flex-direction: column;
@@ -484,7 +533,6 @@ const handleMenuSelect = (key: string) => {
     }
 
     .stat-status {
-
       .time-value,
       .time-status,
       .network-rate {

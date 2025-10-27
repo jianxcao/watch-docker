@@ -6,7 +6,13 @@
         {{ imageHooks.getImageNameOnly(image) }}
       </div>
       <div class="status-tags">
-        <n-tag v-if="imageHooks.isImageInUse(image)" :bordered="false" round type="success" size="small">
+        <n-tag
+          v-if="imageHooks.isImageInUse(image)"
+          :bordered="false"
+          round
+          type="success"
+          size="small"
+        >
           使用中
         </n-tag>
       </div>
@@ -46,8 +52,13 @@
 
     <!-- 操作按钮 -->
     <div class="card-footer">
-      <n-button @click="() => handleDownload()" ghost size="small" class="download-btn"
-        :loading="imageStore.isImageDownloading(image.id)">
+      <n-button
+        @click="() => handleDownload()"
+        ghost
+        size="small"
+        class="download-btn"
+        :loading="imageStore.isImageDownloading(image.id)"
+      >
         <template #icon>
           <n-icon>
             <DownloadOutline />
@@ -55,8 +66,14 @@
         </template>
         下载
       </n-button>
-      <n-button @click="() => handleDelete()" type="error" ghost size="small" class="delete-btn"
-        :loading="imageStore.isImageDeleting(image.id)">
+      <n-button
+        @click="() => handleDelete()"
+        type="error"
+        ghost
+        size="small"
+        class="delete-btn"
+        :loading="imageStore.isImageDeleting(image.id)"
+      >
         <template #icon>
           <n-icon>
             <TrashOutline />
@@ -95,8 +112,6 @@ const emit = defineEmits<{
 const imageStore = useImageStore()
 const imageHooks = useImage()
 
-
-
 // 下载处理函数
 const handleDownload = async () => {
   await imageHooks.handleDownload(props.image)
@@ -122,7 +137,11 @@ const handleDelete = () => {
 
   &:hover {
     transform: translateY(-2px);
-    background: linear-gradient(135deg, var(--card-color) 0%, color-mix(in srgb, var(--card-color) 10%, transparent) 100%);
+    background: linear-gradient(
+      135deg,
+      var(--card-color) 0%,
+      color-mix(in srgb, var(--card-color) 10%, transparent) 100%
+    );
     border-color: color-mix(in srgb, var(--border-color) 90%, var(--text-color-3) 100%);
   }
 
@@ -133,7 +152,12 @@ const handleDelete = () => {
     left: 0;
     right: 0;
     height: 1px;
-    background: linear-gradient(90deg, transparent 0%, var(--text-color-disabled) 50%, transparent 100%);
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--text-color-disabled) 50%,
+      transparent 100%
+    );
   }
 
   .card-header {
@@ -169,7 +193,6 @@ const handleDelete = () => {
       color: var(--text-color-3);
       flex-shrink: 0;
     }
-
   }
 
   .info-list {
@@ -203,7 +226,6 @@ const handleDelete = () => {
       }
     }
   }
-
 
   .card-footer {
     margin-top: 16px;

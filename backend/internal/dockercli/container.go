@@ -357,3 +357,16 @@ func (c *Client) CleanupContainerResources(ctx context.Context, containerInfo co
 
 	return nil
 }
+
+// ContainerLogs 获取容器日志流
+func (c *Client) ContainerLogs(ctx context.Context, containerID string, since string, timestamps bool, tail string, follow bool) (io.ReadCloser, error) {
+	options := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Since:      since,
+		Timestamps: timestamps,
+		Follow:     follow,
+		Tail:       tail,
+	}
+	return c.docker.ContainerLogs(ctx, containerID, options)
+}
