@@ -257,17 +257,20 @@ func (u *Updater) finalCleanup(ctx context.Context, uctx *updateContext) {
 		zap.String("oldContainerID", uctx.containerID),
 		zap.String("newContainerID", uctx.newID))
 
-	// 先清理旧容器相关的镜像、网络、卷等资源（在删除容器前）
-	logger.Logger.Info("安全清理旧容器的相关资源", zap.String("oldImageID", uctx.oldInfo.Image))
-	err := u.docker.CleanupContainerResources(ctx, uctx.oldInfo)
+	// 先删除旧容器（必须先删除容器，否则镜像检查时会发现容器还在使用镜像而无法删除）
+	err := u.docker.RemoveContainerWithVolumes(ctx, uctx.containerID, true)
 	if err != nil {
-		logger.Logger.Warn("清理旧容器资源失败，继续删除容器", zap.String("containerID", uctx.containerID), zap.Error(err))
+		logger.Logger.Warn("删除旧容器失败，但继续清理资源", zap.String("containerID", uctx.containerID), zap.Error(err))
+	} else {
+		logger.Logger.Info("旧容器删除成功", zap.String("containerID", uctx.containerID))
 	}
 
-	// 删除旧容器
-	err = u.docker.RemoveContainerWithVolumes(ctx, uctx.containerID, true)
+	// 删除容器后，再清理旧容器相关的镜像、网络、卷等资源
+	logger.Logger.Info("安全清理旧容器的相关资源", zap.String("oldImageID", uctx.oldInfo.Image))
+	err = u.docker.CleanupContainerResources(ctx, uctx.oldInfo)
 	if err != nil {
-		logger.Logger.Warn("删除旧容器失败，继续清理资源", zap.String("containerID", uctx.containerID), zap.Error(err))
+		logger.Logger.Warn("清理旧容器资源失败", zap.String("containerID", uctx.containerID), zap.Error(err))
 	}
+
 	logger.Logger.Info("容器更新完成", zap.String("containerName", uctx.oldName), zap.String("imageRef", uctx.imageRef))
 }

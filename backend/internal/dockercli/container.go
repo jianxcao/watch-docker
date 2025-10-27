@@ -234,9 +234,9 @@ func (c *Client) SafeRemoveImage(ctx context.Context, imageID string) error {
 			return nil
 		}
 	}
-
+	logger.Logger.Info("没有其他容器使用，可以安全删除镜像", zap.String("imageID", imageID))
 	// 没有其他容器使用，可以安全删除
-	_, err = c.docker.ImageRemove(ctx, imageID, image.RemoveOptions{Force: false})
+	_, err = c.docker.ImageRemove(ctx, imageID, image.RemoveOptions{Force: true})
 	return err
 }
 
