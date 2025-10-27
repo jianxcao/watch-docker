@@ -85,6 +85,7 @@ watchEffect(() => {
 onMounted(async () => {
   await appStore.checkHealth()
   Promise.all([
+    settingStore.fetchSystemInfo(),
     containerStore.fetchContainers(true, false),
     imageStore.fetchImages(),
     containerStore.statsWebSocket.connect(),
@@ -94,6 +95,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   imageStore.stopImagesPolling()
+
   containerStore.statsWebSocket.disconnect()
 })
 
