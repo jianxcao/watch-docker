@@ -1,54 +1,161 @@
-# Watch Docker
+<div align="center">
 
-一个强大的 Docker 容器监控和自动更新工具，提供现代化的 Web 界面和 API 接口。
+# 🐳 Watch Docker
 
-## 📖 概述
+### 让 Docker 容器管理变得简单而优雅
 
-Watch Docker 是一个功能全面的 Docker 管理工具，提供容器监控、镜像管理、Docker Compose 项目管理、Shell 终端访问等功能。它具有更强的可观测性、灵活的策略控制和现代化的 Web 界面。支持自动监控运行中的容器，检测镜像更新，并支持自动或手动更新容器。同时提供完整的 Docker Compose 项目管理能力和安全的远程 Shell 访问功能。
+**一站式 Docker 容器监控 · 智能更新 · 可视化管理**
+
+[![GitHub](https://img.shields.io/github/license/jianxcao/watch-docker)](LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/jianxcao/watch-docker)](https://hub.docker.com/r/jianxcao/watch-docker)
+[![GitHub Stars](https://img.shields.io/github/stars/jianxcao/watch-docker)](https://github.com/jianxcao/watch-docker/stargazers)
+
+[快速开始](#-快速开始) · [功能特性](#-主要功能) · [文档](./doc) · [问题反馈](https://github.com/jianxcao/watch-docker/issues)
+
+</div>
+
+---
+
+## 💡 为什么选择 Watch Docker？
+
+你是否遇到过这些痛点？
+
+- ⏰ **手动更新容器太繁琐** - 每次都要 pull、stop、rm、run，步骤多且容易出错
+- 👀 **容器状态难以监控** - 不知道哪个容器有更新，哪个正在运行
+- 📦 **Compose 项目管理混乱** - 多个项目散落各处，启停重启都要敲命令
+- 🔒 **缺少安全的远程管理** - 需要登录服务器才能操作，不方便且不安全
+- 📊 **资源使用不透明** - 想知道哪个容器占用资源多需要各种命令
+
+**Watch Docker 让这一切变得简单！**
+
+通过现代化的 Web 界面，你可以：
+
+- ✅ **一键更新** - 自动检测镜像更新，点击即可完成容器更新，失败自动回滚
+- ✅ **实时监控** - 容器状态、资源使用、运行日志，一目了然
+- ✅ **智能策略** - 灵活的更新策略，保护重要服务不被误更新
+- ✅ **统一管理** - Compose 项目、独立容器、镜像，集中管理
+- ✅ **安全便捷** - 支持二次验证、Token 认证，随时随地安全访问
+
+## 📖 项目概述
+
+Watch Docker 是一个**现代化的 Docker 容器管理平台**，专为简化 Docker 日常运维而设计。它不仅提供容器监控和镜像更新功能，还集成了 Docker Compose 项目管理、Shell 终端访问、二次验证等企业级特性。
+
+**🎯 核心特性**：
+
+- 🔄 **智能更新** - 自动检测远端镜像更新，支持定时任务和手动触发
+- 📊 **实时监控** - WebSocket 实时推送容器状态和资源使用情况
+- 🐳 **Compose 管理** - 可视化管理所有 Docker Compose 项目
+- 💻 **终端访问** - 内置 Web Shell，无需 SSH 直接管理主机
+- 🔐 **企业安全** - 支持 OTP/WebAuthn 二次验证，保护重要操作
+
+**💼 适用场景**：
+
+- 🏠 **家庭服务器** - 管理 NAS 上的各种 Docker 应用（Jellyfin、qBittorrent 等）
+- 🔧 **开发测试** - 快速部署和更新测试环境容器
+- 📡 **小型服务** - 监控和维护个人/小团队的在线服务
+- 🎓 **学习实践** - 了解 Docker 容器生命周期管理最佳实践
 
 ## ✨ 主要功能
 
+<table>
+<tr>
+<td width="50%">
+
 ### 🔍 容器监控
 
-- **实时状态监控** - 监控所有 Docker 容器的运行状态
-- **镜像更新检测** - 自动检查远端镜像仓库的更新
-- **资源使用监控** - 实时显示容器的 CPU 和内存使用情况
-- **详细日志查看** - 支持实时查看容器日志 （待实现）
+📈 **全方位状态追踪**
 
-### 🔄 自动更新
+- 实时监控所有容器运行状态
+- 自动检测远端镜像更新
+- CPU/内存使用率实时图表
+- 容器启停历史记录
 
-- **智能更新策略** - 支持多种跳过和强制策略
-- **定时更新** - 支持 Cron 表达式和间隔时间调度
-- **安全回滚** - 更新失败时自动回滚到原容器
-- **批量操作** - 支持一键批量更新多个容器
+💡 _不再需要反复执行 `docker ps` 命令_
+
+</td>
+<td width="50%">
+
+### 🔄 智能更新
+
+🎯 **安全可靠的更新机制**
+
+- 一键更新或批量更新
+- 支持 Cron 定时自动更新
+- 更新失败自动回滚
+- 保留原容器配置
+
+💡 _告别手动 pull/stop/rm/run 的繁琐流程_
+
+</td>
+</tr>
+<tr>
+<td width="50%">
 
 ### 🎯 策略控制
 
-- **标签策略** - 通过 label 控制容器是否跳过或强制更新
-- **版本固定** - 自动识别并跳过固定版本的镜像
-- **本地构建** - 自动跳过本地构建的镜像
-- **Compose 保护** - 支持跳过 Docker Compose 管理的容器
+🛡️ **灵活的更新保护**
+
+- Label 标签控制更新行为
+- 自动识别固定版本镜像
+- 保护本地构建容器
+- Compose 项目智能识别
+
+💡 _确保关键服务不会被误更新_
+
+</td>
+<td width="50%">
+
+### 🐳 Compose 管理
+
+📦 **项目级别统一管理**
+
+- 自动发现所有 Compose 项目
+- 可视化查看服务状态
+- 一键启停/重启项目
+- 实时日志流查看
+
+💡 _无需记住各种 docker-compose 命令_
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 💻 Web 终端
+
+🖥️ **浏览器中的 Shell**
+
+- 无需 SSH 直接访问主机
+- 完整的 TTY 终端体验
+- 支持彩色输出和中文
+- 终端大小自适应调整
+
+💡 _随时随地管理服务器，无需额外工具_
+
+</td>
+<td width="50%">
+
+### 🔐 安全认证
+
+🔒 **企业级安全保护**
+
+- OTP 一次性密码验证
+- WebAuthn 生物识别登录
+- 指纹/Face ID/安全密钥
+- 多域名凭据管理
+
+💡 _双重验证保护，账户安全无忧_
+
+</td>
+</tr>
+</table>
 
 ### 🌐 现代化界面
 
-- **响应式设计** - 完美支持桌面和移动设备
-- **实时数据** - WebSocket 连接提供实时更新
-- **直观操作** - 简洁易用的用户界面
-- **多主题支持** - 支持亮色和暗色主题
-
-### 🐳 Docker Compose 管理
-
-- **项目发现** - 自动扫描并识别 Docker Compose 项目
-- **统一管理** - 查看、启动、停止、重启 Compose 项目
-- **服务监控** - 实时查看项目中各服务的运行状态
-- **日志查看** - 通过 WebSocket 实时查看项目日志
-
-### 💻 Shell 终端访问
-
-- **交互式终端** - 通过 Web 界面访问容器主机 Shell
-- **安全控制** - 需要身份验证和显式配置才能开启
-- **完整 TTY** - 支持彩色输出和交互式命令
-- **实时通信** - 基于 WebSocket 的实时终端通信
+- 📱 **完美响应式** - 桌面、平板、手机全适配
+- ⚡ **实时推送** - WebSocket 连接，状态秒级更新
+- 🎨 **主题切换** - 亮色/暗色主题随心切换
+- 🚀 **流畅体验** - Vue 3 + TypeScript，性能卓越
 
 ## ⚠️ 风险提示
 
@@ -82,11 +189,15 @@ Watch Docker 是一个功能全面的 Docker 管理工具，提供容器监控�
 
 > **免责声明：本工具仅供学习和测试使用。使用本工具导致的任何直接或间接损失，开发者不承担任何责任。生产环境使用请自行评估风险。**
 
+---
+
 ## 🚀 快速开始
 
-### Docker Compose（推荐）
+### 方式一：Docker Compose（推荐）
 
-创建 `docker-compose.yaml` 文件：
+只需 3 步，即可启动：
+
+**1. 创建 `docker-compose.yaml` 文件：**
 
 ```yaml
 services:
@@ -120,13 +231,19 @@ services:
     restart: unless-stopped
 ```
 
-启动服务：
+**2. 启动服务：**
 
 ```bash
 docker-compose up -d
 ```
 
-### Docker 命令
+**3. 访问界面：**
+
+打开浏览器访问 `http://localhost:8080`，使用默认账户 `admin/admin` 登录。
+
+🎉 **就这么简单！** 现在你可以开始管理你的 Docker 容器了。
+
+### 方式二：Docker 命令
 
 ```bash
 docker run -d \
@@ -148,25 +265,29 @@ docker run -d \
   -e IS_SECONDARY_VERIFICATION=false \
   --restart unless-stopped \
   jianxcao/watch-docker:latest
-
 ```
 
-访问 `http://localhost:8080` 并使用默认账户 `admin/admin` 登录。
+> 💡 **提示**：首次访问请使用默认账户 `admin/admin` 登录，建议登录后立即修改密码。
 
 ## ⚙️ 配置
 
 ### 环境变量
 
-| 变量名                      | 默认值          | 描述                                 |
-| --------------------------- | --------------- | ------------------------------------ |
-| `CONFIG_PATH`               | `/config`       | 配置文件目录                         |
-| `CONFIG_FILE`               | `config.yaml`   | 配置文件名                           |
-| `USER_NAME`                 | `admin`         | 登录用户名                           |
-| `USER_PASSWORD`             | `admin`         | 登录密码                             |
-| `TZ`                        | `Asia/Shanghai` | 时区设置                             |
-| `PORT`                      | `8088`          | 服务端口                             |
-| `IS_OPEN_DOCKER_SHELL`      | `false`         | 是否开启 Shell 终端功能（⚠️ 高风险） |
-| `IS_SECONDARY_VERIFICATION` | `false`         | 是否开启二次验证                     |
+| 变量名                      | 默认值          | 描述                                                  |
+| --------------------------- | --------------- | ----------------------------------------------------- |
+| `CONFIG_PATH`               | `/config`       | 配置文件目录                                          |
+| `CONFIG_FILE`               | `config.yaml`   | 配置文件名                                            |
+| `USER_NAME`                 | `admin`         | 登录用户名                                            |
+| `USER_PASSWORD`             | `admin`         | 登录密码                                              |
+| `TZ`                        | `Asia/Shanghai` | 时区设置                                              |
+| `PORT`                      | `8088`          | 服务端口                                              |
+| `IS_OPEN_DOCKER_SHELL`      | `false`         | 是否开启 Shell 终端功能（⚠️ 高风险）                  |
+| `IS_SECONDARY_VERIFICATION` | `false`         | 是否开启二次验证（OTP/WebAuthn）                      |
+| `TWOFA_ALLOWED_DOMAINS`     | ` `             | WebAuthn 允许的域名白名单（逗号分隔，为空则允许所有） |
+| `APP_PATH`                  | ` `             | Docker Compose 项目所在目录                           |
+| `PUID`                      | `0`             | 运行进程的用户 ID                                     |
+| `PGID`                      | `0`             | 运行进程的组 ID                                       |
+| `UMASK`                     | `0000`          | 文件权限掩码                                          |
 
 ### 配置文件示例
 
@@ -408,25 +529,224 @@ services:
 
 或重启容器时不传递该环境变量。
 
+## 🔐 二次验证（Two-Factor Authentication）
+
+Watch Docker 支持二次验证功能，为您的管理界面提供额外的安全保护。支持两种主流的验证方式。
+
+### 功能特性
+
+Watch Docker 提供了两种二次验证方式：
+
+1. **OTP（一次性密码）**
+
+   - 基于 TOTP（时间型一次性密码）协议
+   - 支持 Google Authenticator、Authy、微软身份验证器等应用
+   - 30 秒刷新一次的 6 位验证码
+   - 扫描二维码即可快速设置
+
+2. **WebAuthn（生物验证）**
+   - 基于 FIDO2 标准的硬件认证
+   - 支持指纹识别、Face ID、Windows Hello
+   - 支持硬件安全密钥（如 YubiKey）
+   - 多域名凭据管理，适配不同访问场景
+   - 防钓鱼攻击，安全性更高
+
+### 启用二次验证
+
+在 Docker Compose 配置中设置环境变量：
+
+```yaml
+services:
+  watch-docker:
+    image: jianxcao/watch-docker:latest
+    environment:
+      - USER_NAME=admin
+      - USER_PASSWORD=your_strong_password
+      - IS_SECONDARY_VERIFICATION=true # 启用二次验证
+      - TWOFA_ALLOWED_DOMAINS= # 可选：WebAuthn 域名白名单
+```
+
+或使用 Docker 命令：
+
+```bash
+docker run -d \
+  --name watch-docker \
+  -e USER_NAME=admin \
+  -e USER_PASSWORD=your_strong_password \
+  -e IS_SECONDARY_VERIFICATION=true \
+  jianxcao/watch-docker:latest
+```
+
+### 首次设置流程
+
+1. **启用功能后首次登录**
+
+   - 输入用户名和密码
+   - 系统提示设置二次验证
+
+2. **选择验证方式**
+
+   **OTP 方式：**
+
+   - 选择"OTP (一次性密码)"
+   - 点击"生成二维码"
+   - 使用身份验证器应用扫描二维码
+   - 输入应用显示的 6 位验证码
+   - 完成设置
+
+   **WebAuthn 方式：**
+
+   - 选择"WebAuthn (生物验证)"
+   - 点击"开始设置"
+   - 按照浏览器提示完成生物识别注册
+   - 完成设置
+
+3. **后续登录**
+   - 输入用户名和密码后
+   - 根据设置的方式完成二次验证
+
+### 使用说明
+
+#### OTP 验证
+
+- 每次登录时打开身份验证器应用
+- 输入当前显示的 6 位验证码
+- 验证码每 30 秒自动更新
+- 建议在多个设备上添加相同密钥作为备份
+
+#### WebAuthn 验证
+
+- 每次登录时点击"使用生物验证"按钮
+- 按照浏览器提示完成生物识别
+- 支持在不同域名下注册不同的凭据
+- 浏览器要求：Chrome/Firefox/Safari/Edge 最新版本
+
+### 配置存储
+
+二次验证配置保存在主配置文件中：
+
+```yaml
+# config.yaml
+twofa:
+  users:
+    admin:
+      method: "otp" # 或 "webauthn"
+      otpSecret: "BASE32_SECRET" # OTP 密钥
+      webauthnCredentials: [] # WebAuthn 凭据列表
+      isSetup: true
+```
+
+**注意**：配置文件包含敏感信息，请妥善保管，不要泄露给他人。
+
+### 管理二次验证
+
+在 Web 界面的"系统设置"页面可以：
+
+- 查看当前二次验证状态
+- 查看已设置的验证方式
+- 禁用二次验证（需要完整登录后操作）
+
+### 安全建议
+
+1. **OTP 密钥备份**
+
+   - 首次设置时保存二维码截图或密钥
+   - 可以在多个设备上添加相同的密钥
+   - 密钥丢失将无法登录，需要重新配置
+
+2. **WebAuthn 设备管理**
+
+   - 建议注册多个生物识别设备
+   - 定期检查已注册的凭据
+   - 更换设备时记得重新设置
+
+3. **强密码配合**
+
+   - 二次验证是在密码基础上的额外保护
+   - 仍需设置强密码（建议 16 位以上）
+   - 两层防护共同保障账户安全
+
+4. **域名白名单**（WebAuthn）
+   - 生产环境建议配置 `TWOFA_ALLOWED_DOMAINS`
+   - 限制只有可信域名可以使用 WebAuthn
+   - 多个域名用逗号分隔，如：`example.com,app.example.com`
+
+### 故障排除
+
+**OTP 验证码错误**
+
+- 确保设备时间准确（OTP 基于时间生成）
+- 等待下一个验证码再试
+- 检查是否输入了正确的 6 位数字
+
+**WebAuthn 不可用**
+
+- 确认浏览器支持 WebAuthn
+- 检查是否已开启生物识别功能
+- 某些浏览器在 HTTP 环境下限制 WebAuthn（建议使用 HTTPS）
+- 清除浏览器缓存后重试
+
+**无法登录**
+
+- 确认 `IS_SECONDARY_VERIFICATION` 环境变量正确设置
+- 检查配置文件是否被意外修改
+- 如果完全无法访问，可以临时禁用二次验证环境变量后重新设置
+
+### 禁用二次验证
+
+如果不再需要二次验证功能：
+
+1. **在 Web 界面中禁用**（推荐）
+
+   - 登录后进入"系统设置"
+   - 点击"禁用二次验证"按钮
+
+2. **通过环境变量禁用**
+   ```bash
+   IS_SECONDARY_VERIFICATION=false
+   ```
+   或移除该环境变量，然后重启容器
+
+**注意**：禁用后需要重新设置才能再次启用。
+
+---
+
 ## 🔧 开发
 
-### 技术栈
+### 🛠️ 技术栈
 
-**后端:**
+<table>
+<tr>
+<td width="50%" valign="top">
 
-- Go 1.25+
-- Gin Web 框架
-- Docker SDK
-- Zap 日志库
-- Cron 调度器
+**后端架构**
 
-**前端:**
+- 🔷 **Go 1.25+** - 高性能并发处理
+- 🚀 **Gin** - 轻量级 Web 框架
+- 🐳 **Docker SDK** - 原生容器 API
+- 📝 **Zap** - 高性能结构化日志
+- ⏰ **Cron** - 灵活的任务调度
+- 🔐 **Viper + Envconfig** - 配置管理
+- 🔑 **OTP** - TOTP 一次性密码
+- 🛡️ **WebAuthn** - FIDO2 生物识别
 
-- Vue 3 + TypeScript
-- Naive UI 组件库
-- Pinia 状态管理
-- Vite 构建工具
-- UnoCSS 样式框架
+</td>
+<td width="50%" valign="top">
+
+**前端架构**
+
+- ⚡ **Vue 3** - 组合式 API
+- 📘 **TypeScript** - 类型安全
+- 🎨 **Naive UI** - 精美组件库
+- 🗂️ **Pinia** - 现代化状态管理
+- ⚙️ **Vite** - 极速构建工具
+- 💅 **UnoCSS** - 原子化 CSS
+- 🔐 **SimpleWebAuthn** - WebAuthn 客户端
+- 📱 **PWA** - 渐进式 Web 应用
+
+</td>
+</tr>
+</table>
 
 ### 本地开发
 
@@ -466,31 +786,88 @@ cd frontend && pnpm build
 docker build -t watch-docker .
 ```
 
+---
+
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request！
+我们欢迎所有形式的贡献！无论是新功能、Bug 修复、文档改进还是建议，都非常感谢。
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交改动 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
+### 如何贡献
 
-## 📄 许可证
+1. 🍴 **Fork** 本仓库
+2. 🔀 **创建**特性分支 (`git checkout -b feature/amazing-feature`)
+3. 💾 **提交**改动 (`git commit -m 'Add some amazing feature'`)
+4. 📤 **推送**到分支 (`git push origin feature/amazing-feature`)
+5. 🎉 **创建** Pull Request
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+### 贡献方向
 
-## 🙏 致谢
-
-- 感谢 [Watchtower](https://github.com/containrrr/watchtower) 项目的启发
-- 感谢所有贡献者的支持
-
-## 📞 支持
-
-- 提交 [Issue](https://github.com/jianxcao/watch-docker/issues)
-- 查看 [Wiki](https://github.com/jianxcao/watch-docker/wiki)
-- 关注项目获取最新动态
+- 🐛 报告 Bug 和安全问题
+- 💡 提出新功能建议
+- 📝 改进文档和示例
+- 🌍 添加多语言支持
+- ✨ 优化 UI/UX 设计
 
 ---
 
-⭐ 如果这个项目对你有帮助，请给个 Star 支持一下！
+## 📄 开源协议
+
+本项目采用 [MIT 许可证](LICENSE) - 自由使用、修改和分发。
+
+---
+
+## 🙏 致谢
+
+- 💡 灵感来源于 [Watchtower](https://github.com/containrrr/watchtower) 项目
+- 🎨 UI 设计参考了现代化 Docker 管理工具的最佳实践
+- 👥 感谢所有贡献者的支持和反馈
+
+---
+
+## 📞 获取帮助
+
+<table>
+<tr>
+<td width="33%" align="center">
+
+### 📝 提交问题
+
+[创建 Issue](https://github.com/jianxcao/watch-docker/issues)
+
+报告 Bug 或提出功能建议
+
+</td>
+<td width="33%" align="center">
+
+### 📚 查看文档
+
+[阅读 Wiki](https://github.com/jianxcao/watch-docker/wiki)
+
+详细使用指南和最佳实践
+
+</td>
+<td width="33%" align="center">
+
+### 💬 参与讨论
+
+[Discussions](https://github.com/jianxcao/watch-docker/discussions)
+
+与社区交流使用心得
+
+</td>
+</tr>
+</table>
+
+---
+
+<div align="center">
+
+## ⭐ Star 历史
+
+[![Star History Chart](https://api.star-history.com/svg?repos=jianxcao/watch-docker&type=Date)](https://star-history.com/#jianxcao/watch-docker&Date)
+
+### 如果这个项目对你有帮助，请点个 ⭐ Star 支持一下！
+
+**你的 Star 是对我们最大的鼓励** 🙏
+
+</div>
