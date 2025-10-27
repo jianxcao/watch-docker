@@ -210,13 +210,17 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
     },
   )
   if (project.status !== 'unknown') {
+    let label = '删除应用'
+    if (project.status === 'draft' || project.status === 'created_stack') {
+      label = '删除配置'
+    }
     options.push(
       {
         type: 'divider',
         key: 'divider2',
       },
       {
-        label: '删除',
+        label: label,
         key: 'delete',
         icon: renderIcon(TrashOutline),
         props: {

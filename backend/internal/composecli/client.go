@@ -233,9 +233,11 @@ func (c *Client) DeleteProject(ctx context.Context, composeFile string, status S
 	}
 
 	// 删除项目目录和配置文件
-	if err := os.RemoveAll(projectPath); err != nil {
-		logger.Logger.Error("删除项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
-		return errors.New("删除项目目录失败: " + err.Error())
+	if status == StatusDraft || status == StatusCreatedStack {
+		if err := os.RemoveAll(projectPath); err != nil {
+			logger.Logger.Error("删除项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
+			return errors.New("删除项目目录失败: " + err.Error())
+		}
 	}
 
 	logger.Logger.Info("删除项目成功",
