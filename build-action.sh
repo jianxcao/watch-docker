@@ -111,17 +111,29 @@ fi
 echo -e "${GREEN}🚀 开始构建...${NC}"
 echo ""
 
+# 记录开始时间
+START_TIME=$(date +%s)
+
 act workflow_dispatch \
     --secret-file "$SECRETS_FILE" \
     --input tag="$TAG" \
     --input push_to_registry="$PUSH" \
     -P ubuntu-latest=catthehacker/ubuntu:act-latest
 
+# 记录结束时间
+END_TIME=$(date +%s)
+
+# 计算耗时
+DURATION=$((END_TIME - START_TIME))
+MINUTES=$((DURATION / 60))
+SECONDS=$((DURATION % 60))
+
 # 检查执行结果
 if [ $? -eq 0 ]; then
     echo ""
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}✅ 构建成功!${NC}"
+    echo -e "${GREEN}⏱️  总耗时: ${MINUTES} 分 ${SECONDS} 秒${NC}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     
     if [ "$PUSH" = "true" ]; then
@@ -131,6 +143,9 @@ if [ $? -eq 0 ]; then
     fi
 else
     echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${RED}❌ 构建失败!${NC}"
+    echo -e "${YELLOW}⏱️  总耗时: ${MINUTES} 分 ${SECONDS} 秒${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     exit 1
 fi
