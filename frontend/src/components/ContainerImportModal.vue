@@ -1,5 +1,10 @@
 <template>
-  <n-modal v-model:show="show" :icon="getIcon()" preset="dialog" style="padding: 12px; width: 90vw; max-width: 600px">
+  <n-modal
+    v-model:show="show"
+    :icon="getIcon()"
+    preset="dialog"
+    style="padding: 12px; width: 90vw; max-width: 600px"
+  >
     <template #header>
       <span>导入容器</span>
     </template>
@@ -16,20 +21,24 @@
         </n-grid>
       </n-form>
 
-      <n-upload ref="uploadRef" :max="1" :file-list="fileList" :custom-request="handleCustomRequest" accept=".tar"
-        :show-file-list="false" directory-dnd @update:file-list="handleFileListUpdate"
-        @before-upload="handleBeforeUpload">
+      <n-upload
+        ref="uploadRef"
+        :max="1"
+        :file-list="fileList"
+        :custom-request="handleCustomRequest"
+        accept=".tar"
+        :show-file-list="false"
+        directory-dnd
+        @update:file-list="handleFileListUpdate"
+        @before-upload="handleBeforeUpload"
+      >
         <n-upload-dragger>
           <div class="upload-area">
             <n-icon size="48" :depth="3">
               <CloudUploadOutline />
             </n-icon>
-            <n-text class="upload-title">
-              点击或者拖动文件到该区域来上传
-            </n-text>
-            <n-p depth="3" class="upload-hint">
-              仅支持 .tar 格式的 Docker 容器文件
-            </n-p>
+            <n-text class="upload-title"> 点击或者拖动文件到该区域来上传 </n-text>
+            <n-p depth="3" class="upload-hint"> 仅支持 .tar 格式的 Docker 容器文件 </n-p>
           </div>
         </n-upload-dragger>
       </n-upload>
@@ -39,9 +48,16 @@
         <n-space vertical>
           <div class="progress-info">
             <n-text>{{ currentFileName }}</n-text>
-            <n-text depth="3">{{ formatFileSize(uploadedSize) }} / {{ formatFileSize(totalSize) }}</n-text>
+            <n-text depth="3"
+              >{{ formatFileSize(uploadedSize) }} / {{ formatFileSize(totalSize) }}</n-text
+            >
           </div>
-          <n-progress type="line" :percentage="uploadProgress" :show-indicator="false" :height="8" />
+          <n-progress
+            type="line"
+            :percentage="uploadProgress"
+            :show-indicator="false"
+            :height="8"
+          />
           <div class="progress-details">
             <n-text depth="3">{{ uploadProgress.toFixed(1) }}% - {{ uploadSpeed }}</n-text>
           </div>
@@ -73,8 +89,12 @@
         <n-button @click="handleCancel" :disabled="uploading">
           {{ uploading ? '上传中...' : '取消' }}
         </n-button>
-        <n-button type="primary" :loading="uploading" :disabled="!selectedFile || !form.repository || uploading"
-          @click="handleImport">
+        <n-button
+          type="primary"
+          :loading="uploading"
+          :disabled="!selectedFile || !form.repository || uploading"
+          @click="handleImport"
+        >
           {{ uploading ? '导入中...' : '开始导入' }}
         </n-button>
       </div>
@@ -97,7 +117,7 @@ const settingStore = useSettingStore()
 const getIcon = () => {
   return renderIcon(CloudUploadOutline, {
     color: theme.value.primaryColor,
-    size: 20
+    size: 20,
   })
 }
 interface Emits {
@@ -124,13 +144,13 @@ const {
   uploadSpeed,
   resetState,
   upload,
-  formatFileSize
+  formatFileSize,
 } = useXhrUpload()
 
 // 表单数据
 const form = ref({
   repository: '',
-  tag: 'latest'
+  tag: 'latest',
 })
 
 // 表单验证规则
@@ -138,11 +158,9 @@ const rules: FormRules = {
   repository: {
     required: true,
     message: '请输入镜像名称',
-    trigger: ['input', 'blur']
-  }
+    trigger: ['input', 'blur'],
+  },
 }
-
-
 
 // 监听弹窗显示状态
 watch(show, (showModal) => {
@@ -150,7 +168,6 @@ watch(show, (showModal) => {
     resetState()
   }
 })
-
 
 const handleBeforeUpload = (data: { file: UploadFileInfo }) => {
   const file = data.file.file
@@ -216,9 +233,8 @@ const handleImport = async () => {
         message.success('容器导入成功')
         emit('success')
         handleCancel()
-      }
+      },
     })
-
   } catch (error: any) {
     console.error('导入失败:', error)
   }
@@ -233,7 +249,7 @@ const handleCancel = () => {
     fileList.value = []
     form.value = {
       repository: '',
-      tag: 'latest'
+      tag: 'latest',
     }
 
     // 清空 upload 组件
@@ -295,7 +311,6 @@ const handleCancel = () => {
   align-items: center;
   gap: 12px;
 }
-
 
 .file-meta {
   display: flex;

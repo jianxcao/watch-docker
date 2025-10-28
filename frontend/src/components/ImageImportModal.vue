@@ -1,24 +1,32 @@
 <template>
-  <n-modal v-model:show="showModal" :icon="getIcon()" preset="dialog"
-    style="padding: 12px; width: 90vw; max-width: 600px">
+  <n-modal
+    v-model:show="showModal"
+    :icon="getIcon()"
+    preset="dialog"
+    style="padding: 12px; width: 90vw; max-width: 600px"
+  >
     <template #header>
       <span>导入镜像</span>
     </template>
     <div class="import-content">
-      <n-upload ref="uploadRef" :max="1" :file-list="fileList" :custom-request="handleCustomRequest" accept=".tar"
-        :show-file-list="false" directory-dnd @update:file-list="handleFileListUpdate"
-        @before-upload="handleBeforeUpload">
+      <n-upload
+        ref="uploadRef"
+        :max="1"
+        :file-list="fileList"
+        :custom-request="handleCustomRequest"
+        accept=".tar"
+        :show-file-list="false"
+        directory-dnd
+        @update:file-list="handleFileListUpdate"
+        @before-upload="handleBeforeUpload"
+      >
         <n-upload-dragger>
           <div class="upload-area">
             <n-icon size="48" :depth="3">
               <CloudUploadOutline />
             </n-icon>
-            <n-text class="upload-title">
-              点击或者拖动文件到该区域来上传
-            </n-text>
-            <n-p depth="3" class="upload-hint">
-              仅支持 .tar 格式的 Docker 镜像文件
-            </n-p>
+            <n-text class="upload-title"> 点击或者拖动文件到该区域来上传 </n-text>
+            <n-p depth="3" class="upload-hint"> 仅支持 .tar 格式的 Docker 镜像文件 </n-p>
           </div>
         </n-upload-dragger>
       </n-upload>
@@ -28,15 +36,21 @@
         <n-space vertical>
           <div class="progress-info">
             <n-text>{{ currentFileName }}</n-text>
-            <n-text depth="3">{{ formatFileSize(uploadedSize) }} / {{ formatFileSize(totalSize) }}</n-text>
+            <n-text depth="3"
+              >{{ formatFileSize(uploadedSize) }} / {{ formatFileSize(totalSize) }}</n-text
+            >
           </div>
-          <n-progress type="line" :percentage="uploadProgress" :show-indicator="false" :height="8" />
+          <n-progress
+            type="line"
+            :percentage="uploadProgress"
+            :show-indicator="false"
+            :height="8"
+          />
           <div class="progress-details">
             <n-text depth="3">{{ uploadProgress.toFixed(1) }}% - {{ uploadSpeed }}</n-text>
           </div>
         </n-space>
       </div>
-
     </div>
     <template #action>
       <n-space justify="end">
@@ -50,7 +64,12 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { useMessage, useThemeVars, type UploadCustomRequestOptions, type UploadFileInfo } from 'naive-ui'
+import {
+  useMessage,
+  useThemeVars,
+  type UploadCustomRequestOptions,
+  type UploadFileInfo,
+} from 'naive-ui'
 import { CloudUploadOutline } from '@vicons/ionicons5'
 import { renderIcon } from '@/common/utils'
 import { useXhrUpload } from '@/hooks/useXhrUpload'
@@ -62,7 +81,7 @@ const settingStore = useSettingStore()
 const getIcon = () => {
   return renderIcon(CloudUploadOutline, {
     color: theme.value.primaryColor,
-    size: 20
+    size: 20,
   })
 }
 
@@ -86,7 +105,7 @@ const {
   uploadSpeed,
   resetState,
   upload,
-  formatFileSize
+  formatFileSize,
 } = useXhrUpload()
 
 // 监听弹窗显示状态
@@ -143,14 +162,13 @@ const handleCustomRequest = async (options: UploadCustomRequestOptions) => {
       },
       onError: () => {
         onError()
-      }
+      },
     })
   } catch (error) {
     console.error('导入镜像失败:', error)
     onError()
   }
 }
-
 
 // 取消操作
 const handleCancel = () => {

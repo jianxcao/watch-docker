@@ -172,6 +172,22 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
+  // 获取项目的 YAML 内容
+  const getProjectYaml = async (projectName: string, composeFile: string) => {
+    try {
+      const response = await composeApi.getProjectYaml(projectName, composeFile)
+      if (response.code === 0) {
+        return response.data.yamlContent || ''
+      } else {
+        throw new Error(response.msg || '获取 YAML 内容失败')
+      }
+    } catch (error) {
+      console.error('获取项目 YAML 失败:', error)
+      message.error(`获取项目 YAML 失败: ${(error as Error).message}`)
+      throw error
+    }
+  }
+
   // 根据名称查找项目
   const findProject = (name: string) => {
     return computed(() => projects.value.find((p) => p.name === name))
@@ -206,6 +222,7 @@ export const useComposeStore = defineStore('compose', () => {
     createProject,
     saveNewProject,
     getProjectLogs,
+    getProjectYaml,
     clearAll,
   }
 })

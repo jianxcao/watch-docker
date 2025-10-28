@@ -267,10 +267,6 @@ const handleLogout = async () => {
 const handleGithubClick = () => {
   window.open('https://github.com/jianxcao/watch-docker', '_blank')
 }
-
-onMounted(() => {
-  settingStore.fetchSystemInfo()
-})
 </script>
 
 <style scoped lang="less">
@@ -284,7 +280,8 @@ onMounted(() => {
 }
 
 .sider-header {
-  height: 56px;
+  // 加下 border 是56px
+  height: 55px;
   box-sizing: border-box;
   padding: 0 16px;
   border-bottom: 1px solid var(--divider-color);

@@ -265,6 +265,7 @@ defineExpose<YamlEditorExpose>({
 </script>
 
 <style scoped lang="less">
+@import '@/styles/mix.less';
 .yaml-editor-container {
   width: 100%;
   height: 100%;
@@ -281,6 +282,7 @@ defineExpose<YamlEditorExpose>({
 
   :deep(.cm-scroller) {
     overflow: auto;
+    .scrollbar();
   }
 
   // 移动端优化

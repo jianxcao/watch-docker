@@ -1,18 +1,27 @@
 <template>
   <div>
     <div class="log-container" ref="containerRef" :style="{ height: containerHeight }">
-      <n-virtual-list ref="virtualListRef" class="virtual-log-list" :items="reversedLogs" :item-size="estimatedItemSize"
-        key-field="_k" item-resizable>
+      <n-virtual-list
+        ref="virtualListRef"
+        class="virtual-log-list"
+        :items="reversedLogs"
+        :item-size="estimatedItemSize"
+        key-field="_k"
+        item-resizable
+      >
         <template #default="{ item: log }">
           <div class="log-line">
             <div class="log-line-left">
-              <n-tag class="level-chip" size="small" :type="levelColor(log.level)" label>{{ log.level }}</n-tag>
+              <n-tag class="level-chip" size="small" :type="levelColor(log.level)" label>{{
+                log.level
+              }}</n-tag>
               <span class="timestamp">{{ log.time }}</span>
             </div>
             <span class="message">
               <span>{{ log.msg }}</span>
-              <span v-if="Object.keys(_.omit(log, ['level', 'time', 'msg', '_k'])).length > 0">{{ _.omit(log, ['level',
-                'time', 'msg', '_k']) }}</span>
+              <span v-if="Object.keys(_.omit(log, ['level', 'time', 'msg', '_k'])).length > 0">{{
+                _.omit(log, ['level', 'time', 'msg', '_k'])
+              }}</span>
             </span>
           </div>
         </template>
@@ -25,8 +34,6 @@
       </div>
     </Teleport>
   </div>
-
-
 </template>
 
 <script setup lang="ts">
@@ -48,7 +55,9 @@ interface LogEntry {
 const logs = ref<LogEntry[]>([])
 const virtualListRef = ref()
 const containerRef = ref<HTMLDivElement | null>(null)
-const containerHeight = computed(() => `calc(100vh - ${settingStore.headerHeight + settingStore.safeArea.top + settingStore.safeArea.bottom + 18}px)`)
+const containerHeight = computed(
+  () => `calc(100vh - ${settingStore.contentSafeTop + settingStore.safeArea.bottom}px)`,
+)
 
 // 估算的每个日志项高度（像素）
 const estimatedItemSize = 85
@@ -72,8 +81,6 @@ let nextId = 1
 // watch(logs, () => {
 //   scrollToBottom()
 // }, { deep: true })
-
-
 
 function levelColor(level: string) {
   switch (level) {
@@ -152,7 +159,6 @@ onBeforeUnmount(() => {
   font-size: 0.9rem;
   line-height: 1.4;
   border-bottom: 1px solid var(--border-color);
-
 
   .level-chip {
     width: 70px;

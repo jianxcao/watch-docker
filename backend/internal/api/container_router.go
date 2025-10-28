@@ -20,6 +20,7 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.GET("/containers", s.handleListContainers())
 	protected.POST("/containers/stats", s.handleGetContainersStats())
 	protected.GET("/containers/stats/ws", s.handleStatsWebSocket())
+	protected.GET("/containers/logs/:containerID/ws", s.handleContainerLogsWebSocket())
 	protected.POST("/containers/:id/update", s.handleUpdateContainer())
 	protected.POST("/updates/run", s.handleBatchUpdate())
 	protected.POST("/containers/:id/stop", s.handleStopContainer())
@@ -271,7 +272,7 @@ func (s *Server) handleExportContainer() gin.HandlerFunc {
 
 // handleStatsWebSocket 处理容器统计 WebSocket 连接
 func (s *Server) handleStatsWebSocket() gin.HandlerFunc {
-	return s.wsStatsManager.HandleWebSocket
+	return s.wsStatsManager.HandleStatsWebSocket
 }
 
 func (s *Server) handleUpdateAll() gin.HandlerFunc {

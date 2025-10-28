@@ -234,9 +234,9 @@ func (c *Client) SafeRemoveImage(ctx context.Context, imageID string) error {
 			return nil
 		}
 	}
-
+	logger.Logger.Info("没有其他容器使用，可以安全删除镜像", zap.String("imageID", imageID))
 	// 没有其他容器使用，可以安全删除
-	_, err = c.docker.ImageRemove(ctx, imageID, image.RemoveOptions{Force: false})
+	_, err = c.docker.ImageRemove(ctx, imageID, image.RemoveOptions{Force: true})
 	return err
 }
 
@@ -356,4 +356,17 @@ func (c *Client) CleanupContainerResources(ctx context.Context, containerInfo co
 	}
 
 	return nil
+}
+
+// ContainerLogs 获取容器日志流
+func (c *Client) ContainerLogs(ctx context.Context, containerID string, since string, timestamps bool, tail string, follow bool) (io.ReadCloser, error) {
+	options := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Since:      since,
+		Timestamps: timestamps,
+		Follow:     follow,
+		Tail:       tail,
+	}
+	return c.docker.ContainerLogs(ctx, containerID, options)
 }

@@ -17,7 +17,7 @@
     :closable="true"
     @after-leave="handleClose"
   >
-    <logs-stream-view ref="logsStreamViewRef" :project="project" :socket-url="socketUrl" />
+    <logs-stream-view ref="logsStreamViewRef" :socket-url="socketUrl" />
     <template #action>
       <n-space justify="end">
         <n-button @click="handleReconnect" :disabled="isConnecting || isConnected">
@@ -44,7 +44,7 @@
 
 <script setup lang="ts">
 import ComposeIcon from '@/assets/svg/compose.svg?component'
-import type { ComposeProject } from '@/common/types'
+import type { ContainerStatus } from '@/common/types'
 import { renderIcon } from '@/common/utils'
 import LogsStreamView from '@/components/LogsStreamView.vue'
 import { useSettingStore } from '@/store/setting'
@@ -53,7 +53,7 @@ import { useThemeVars } from 'naive-ui'
 import { computed } from 'vue'
 
 interface Props {
-  project: ComposeProject | null
+  container: ContainerStatus | null
 }
 
 const props = defineProps<Props>()
@@ -65,10 +65,10 @@ const isConnecting = computed(() => logsStreamViewRef.value?.isConnecting)
 const isConnected = computed(() => logsStreamViewRef.value?.isConnected)
 
 const title = computed(() => {
-  if (!props.project) {
-    return 'Compose 日志'
+  if (!props.container?.name) {
+    return '容器日志'
   }
-  return `Compose 日志 - ${props.project.name}`
+  return `容器日志 - ${props.container.name}`
 })
 
 const getIcon = () => {
@@ -79,13 +79,13 @@ const getIcon = () => {
 }
 
 const socketUrl = computed(() => {
-  if (!props.project) {
+  if (!props.container) {
     return undefined
   }
   const token = settingStore.getToken()
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1/compose/logs/${props.project.name}/ws?token=${token}&composeFile=${encodeURIComponent(props.project.composeFile)}&projectName=${encodeURIComponent(props.project.name)}`
+  return `${protocol}//${host}/api/v1/containers/logs/${props.container.id}/ws?token=${token}&id=${encodeURIComponent(props.container.id)}&projectName=${encodeURIComponent(props.container.name)}`
 })
 
 const handleClose = () => {

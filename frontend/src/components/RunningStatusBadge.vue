@@ -9,10 +9,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import {
-  PlayCircleOutline,
-  StopCircleOutline,
-} from '@vicons/ionicons5'
+import { PlayCircleOutline, StopCircleOutline } from '@vicons/ionicons5'
 import type { ContainerStatus } from '@/common/types'
 
 interface Props {

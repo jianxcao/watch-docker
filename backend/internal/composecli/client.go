@@ -57,7 +57,7 @@ func (c *Client) ScanProjects(ctx context.Context) []ComposeProject {
 	})
 	if err != nil {
 		logger.Logger.Error("扫描项目失败", logger.ZapErr(err))
-		return nil
+		return projects
 	}
 
 	return projects
@@ -233,9 +233,11 @@ func (c *Client) DeleteProject(ctx context.Context, composeFile string, status S
 	}
 
 	// 删除项目目录和配置文件
-	if err := os.RemoveAll(projectPath); err != nil {
-		logger.Logger.Error("删除项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
-		return errors.New("删除项目目录失败: " + err.Error())
+	if status == StatusDraft || status == StatusCreatedStack {
+		if err := os.RemoveAll(projectPath); err != nil {
+			logger.Logger.Error("删除项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
+			return errors.New("删除项目目录失败: " + err.Error())
+		}
 	}
 
 	logger.Logger.Info("删除项目成功",
@@ -305,4 +307,23 @@ func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent st
 		zap.Bool("force", force))
 
 	return composeFile, nil
+}
+
+// GetProjectYaml 读取项目的 docker-compose.yaml 文件内容
+func (c *Client) GetProjectYaml(composeFile string) (string, error) {
+	// 检查文件是否存在
+	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
+		logger.Logger.Error("Compose 文件不存在", zap.String("file", composeFile))
+		return "", errors.New("compose 文件不存在")
+	}
+
+	// 读取文件内容
+	content, err := os.ReadFile(composeFile)
+	if err != nil {
+		logger.Logger.Error("读取 Compose 文件失败", zap.String("file", composeFile), logger.ZapErr(err))
+		return "", errors.New("读取 Compose 文件失败: " + err.Error())
+	}
+
+	logger.Logger.Info("读取 Compose 文件成功", zap.String("file", composeFile))
+	return string(content), nil
 }

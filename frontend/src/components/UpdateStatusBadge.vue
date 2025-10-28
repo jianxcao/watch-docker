@@ -9,11 +9,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import {
-  CheckmarkCircleOutline,
-  AlertCircleOutline,
-  CloseCircleOutline,
-} from '@vicons/ionicons5'
+import { CheckmarkCircleOutline, AlertCircleOutline, CloseCircleOutline } from '@vicons/ionicons5'
 import MinusCircleOutline from '@/assets/svg/minusCircleOutline.svg?component'
 import type { ContainerStatus } from '@/common/types'
 
@@ -23,18 +19,20 @@ interface Props {
 
 const props = defineProps<Props>()
 
-
 // 是否显示更新状态标签
 const shouldShowBadge = computed(() => {
   // 如果容器没有运行，不显示更新状态
-  if (!props.container.running) {return false}
+  if (!props.container.running) {
+    return false
+  }
 
   // 如果没有状态信息或状态为空，不显示
-  if (!props.container.status) {return false}
+  if (!props.container.status) {
+    return false
+  }
 
   return true
 })
-
 
 // 更新状态类型
 const badgeType = computed(() => {

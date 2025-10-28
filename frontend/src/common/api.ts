@@ -145,6 +145,12 @@ export const composeApi = {
   // 创建新项目（保存 YAML 文件）
   saveNewProject: (name: string, yamlContent: string) =>
     axios.post<{ ok: boolean; composeFile: string }>(`/compose/new`, { name, yamlContent }),
+
+  // 获取项目的 YAML 内容
+  getProjectYaml: (projectName: string, composeFile: string) =>
+    axios.get<{ yamlContent: string }>(`/compose/${projectName}/yaml`, {
+      params: { composeFile },
+    }),
 }
 
 // 二次验证 API

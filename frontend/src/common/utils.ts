@@ -136,3 +136,67 @@ export const getDeviceType = (): 'desktop' | 'tablet' | 'mobile' => {
   }
   return 'desktop'
 }
+
+// YAML 校验结果接口
+export interface YamlValidationResult {
+  isValid: boolean
+  errorMessage: string
+}
+
+/**
+ * 校验 Docker Compose YAML 配置
+ * @param yamlContent YAML 内容
+ * @returns 校验结果，包含 isValid 和 errorMessage
+ */
+export const validateComposeYaml = (yamlContent: string): YamlValidationResult => {
+  try {
+    const yaml = yamlContent.trim()
+
+    // 检查是否为空
+    if (!yaml) {
+      return {
+        isValid: false,
+        errorMessage: '请输入 YAML 配置',
+      }
+    }
+
+    // 检查是否包含 services 配置
+    if (!yaml.includes('services:')) {
+      return {
+        isValid: false,
+        errorMessage: '缺少 services 配置',
+      }
+    }
+
+    // 检查缩进和基本语法
+    const lines = yaml.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      // 跳过空行和注释行
+      if (!line.trim() || line.trim().startsWith('#')) {
+        continue
+      }
+
+      // 检查引号是否闭合
+      const singleQuotes = (line.match(/'/g) || []).length
+      const doubleQuotes = (line.match(/"/g) || []).length
+      if (singleQuotes % 2 !== 0 || doubleQuotes % 2 !== 0) {
+        return {
+          isValid: false,
+          errorMessage: `第 ${i + 1} 行：引号未闭合`,
+        }
+      }
+    }
+
+    // 校验通过
+    return {
+      isValid: true,
+      errorMessage: '',
+    }
+  } catch (error) {
+    return {
+      isValid: false,
+      errorMessage: `YAML 格式错误: ${(error as Error).message}`,
+    }
+  }
+}
