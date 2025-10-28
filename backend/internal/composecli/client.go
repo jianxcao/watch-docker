@@ -57,7 +57,7 @@ func (c *Client) ScanProjects(ctx context.Context) []ComposeProject {
 	})
 	if err != nil {
 		logger.Logger.Error("扫描项目失败", logger.ZapErr(err))
-		return nil
+		return projects
 	}
 
 	return projects
