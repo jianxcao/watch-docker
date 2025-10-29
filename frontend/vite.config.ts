@@ -119,7 +119,7 @@ export default defineConfig({
     }),
   ],
   server: {
-    host: '0.0.0.0',
+    host: '::',
     port: 5173,
     // HTTPS 由 @vitejs/plugin-basic-ssl 插件自动启用
     headers: {
