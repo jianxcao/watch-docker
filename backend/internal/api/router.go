@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
-	"github.com/jianxcao/watch-docker/backend/internal/composecli"
+	"github.com/jianxcao/watch-docker/backend/internal/composeapi"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
@@ -32,7 +32,7 @@ type Server struct {
 	updater             *updater.Updater
 	scheduler           *scheduler.Scheduler
 	wsStatsManager      *StatsWebSocketManager
-	composeClient       *composecli.Client
+	composeClient       *composeapi.Client
 	streamManagerString *wsstream.StreamManager[string] // 用于 container stats (JSON 文本)
 	streamManagerBytes  *wsstream.StreamManager[[]byte] // 用于 compose logs (二进制流)
 }
@@ -53,9 +53,13 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 
 	// 创建 Compose 客户端
 	cfg := config.Get()
-	var composeClient *composecli.Client
+	var composeClient *composeapi.Client
 	if cfg.Compose.Enabled {
-		composeClient = composecli.NewClient(docker.GetDockerClient())
+		var err error
+		composeClient, err = composeapi.NewClient()
+		if err != nil {
+			logger.Error("failed to create compose client", zap.Error(err))
+		}
 	}
 
 	s := &Server{

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/jianxcao/watch-docker/backend/internal/composecli"
+	"github.com/jianxcao/watch-docker/backend/internal/composeapi"
 	"go.uber.org/zap"
 )
 
@@ -22,6 +22,30 @@ func (s *Server) setupComposeRoutes(protected *gin.RouterGroup) {
 	protected.GET("/compose/:projectName/yaml", s.handleGetProjectYaml())
 	protected.GET("/compose/logs/:projectName/ws", s.handleComposeLogsWebSocket())
 	protected.GET("/compose/create-and-up/ws", s.handleComposeCreateAndUpWebSocket())
+}
+
+// consumeComposeStream 消费 compose 操作的流式输出
+// 返回 error 表示发生了错误（已经通过 gin context 响应了），调用方应该直接 return
+func (s *Server) consumeComposeStream(ch <-chan composeapi.StreamMessage, c *gin.Context, projectFile string, operation string) error {
+	for msg := range ch {
+		switch msg.Type {
+		case composeapi.MessageTypeError:
+			s.logger.Error(operation+" error",
+				zap.String("project", projectFile),
+				zap.Error(msg.Error))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, msg.Error.Error()))
+			return msg.Error
+		case composeapi.MessageTypeLog:
+			if msg.Content != "" {
+				s.logger.Debug(operation+" log", zap.String("content", msg.Content))
+			}
+		case composeapi.MessageTypeComplete:
+			if msg.Content != "" {
+				s.logger.Info(operation+" complete", zap.String("message", msg.Content))
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleListComposeProjects() gin.HandlerFunc {
@@ -42,7 +66,7 @@ func (s *Server) handleListComposeProjects() gin.HandlerFunc {
 
 func (s *Server) handleStartComposeProject() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var project composecli.ComposeProject
+		var project composeapi.ComposeProject
 		if err := c.ShouldBindJSON(&project); err != nil {
 			s.logger.Error("bind compose projects failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInvalidRequest, err.Error()))
@@ -51,10 +75,16 @@ func (s *Server) handleStartComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.StartProject(ctx, project.ComposeFile); err != nil {
+		ch, err := s.composeClient.StartProject(ctx, project.ComposeFile)
+		if err != nil {
 			s.logger.Error("start compose project failed",
 				zap.String("project", project.ComposeFile), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		// 消费所有流消息
+		if err := s.consumeComposeStream(ch, c, project.ComposeFile, "start project"); err != nil {
 			return
 		}
 
@@ -65,7 +95,7 @@ func (s *Server) handleStartComposeProject() gin.HandlerFunc {
 func (s *Server) handleStopComposeProject() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
-		var project composecli.ComposeProject
+		var project composeapi.ComposeProject
 		if err := c.ShouldBindJSON(&project); err != nil {
 			s.logger.Error("bind compose project failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInvalidRequest, err.Error()))
@@ -74,10 +104,16 @@ func (s *Server) handleStopComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.StopProject(ctx, project.ComposeFile); err != nil {
+		ch, err := s.composeClient.StopProject(ctx, project.ComposeFile)
+		if err != nil {
 			s.logger.Error("stop compose project failed",
 				zap.String("project", project.ComposeFile), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		// 消费所有流消息
+		if err := s.consumeComposeStream(ch, c, project.ComposeFile, "stop project"); err != nil {
 			return
 		}
 
@@ -87,7 +123,7 @@ func (s *Server) handleStopComposeProject() gin.HandlerFunc {
 
 func (s *Server) handleRestartComposeProject() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var project composecli.ComposeProject
+		var project composeapi.ComposeProject
 		if err := c.ShouldBindJSON(&project); err != nil {
 			s.logger.Error("bind compose project failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInvalidRequest, ""))
@@ -97,10 +133,16 @@ func (s *Server) handleRestartComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.RestartProject(ctx, project.ComposeFile); err != nil {
+		ch, err := s.composeClient.RestartProject(ctx, project.ComposeFile)
+		if err != nil {
 			s.logger.Error("restart compose project failed",
 				zap.String("project", project.ComposeFile), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		// 消费所有流消息
+		if err := s.consumeComposeStream(ch, c, project.ComposeFile, "restart project"); err != nil {
 			return
 		}
 
@@ -110,7 +152,7 @@ func (s *Server) handleRestartComposeProject() gin.HandlerFunc {
 
 func (s *Server) handleDeleteComposeProject() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var project composecli.ComposeProject
+		var project composeapi.ComposeProject
 		if err := c.ShouldBindJSON(&project); err != nil {
 			s.logger.Error("bind compose project failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInvalidRequest, err.Error()))
@@ -120,12 +162,18 @@ func (s *Server) handleDeleteComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.DeleteProject(ctx, project.ComposeFile, project.Status); err != nil {
+		ch, err := s.composeClient.DeleteProject(ctx, project.ComposeFile, project.Status)
+		if err != nil {
 			s.logger.Error("delete compose project failed",
 				zap.String("project", project.ComposeFile),
 				zap.String("status", string(project.Status)),
 				zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		// 消费所有流消息
+		if err := s.consumeComposeStream(ch, c, project.ComposeFile, "delete project"); err != nil {
 			return
 		}
 
@@ -135,7 +183,7 @@ func (s *Server) handleDeleteComposeProject() gin.HandlerFunc {
 
 func (s *Server) handleCreateComposeProject() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var project composecli.ComposeProject
+		var project composeapi.ComposeProject
 		if err := c.ShouldBindJSON(&project); err != nil {
 			s.logger.Error("bind compose project failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInvalidRequest, err.Error()))
@@ -145,10 +193,16 @@ func (s *Server) handleCreateComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.CreateProject(ctx, project.ComposeFile, project.RunningCount > 0, false); err != nil {
+		ch, err := s.composeClient.CreateProject(ctx, project.ComposeFile, project.RunningCount > 0, false)
+		if err != nil {
 			s.logger.Error("create compose project failed",
 				zap.String("project", project.ComposeFile), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		// 消费所有流消息
+		if err := s.consumeComposeStream(ch, c, project.ComposeFile, "create project"); err != nil {
 			return
 		}
 

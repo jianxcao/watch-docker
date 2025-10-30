@@ -64,10 +64,10 @@ func (s *Server) handleComposeCreateAndUpWebSocketCustom(c *gin.Context, appPath
 
 	logger.Logger.Info("Compose create and up request", zap.String("name", req.Name))
 	composeDir := filepath.Join(appPath, req.Name)
-	// 获取或创建 Hub（使用二进制模式）
+	// 获取或创建 Hub（使用字符串模式）
 	key := fmt.Sprintf("compose-up-%s", req.Name)
-	s.streamManagerBytes.StartHub(conn, key, func() wsstream.StreamSource[[]byte] {
-		return wsstream.NewComposeCreateUpSource(wsstream.ComposeCreateUpSourceOptions{
+	s.streamManagerString.StartHub(conn, key, func() wsstream.StreamSource[string] {
+		return wsstream.NewComposeCreateUpApiSource(wsstream.ComposeCreateUpApiSourceOptions{
 			ProjectName:   req.Name,
 			YamlContent:   req.YamlContent,
 			Force:         req.Force,
