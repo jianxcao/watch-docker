@@ -104,17 +104,23 @@
                 <n-card size="small">
                   <n-form :model="auth" label-placement="left" label-width="80px">
                     <n-form-item label="主机">
-                      <n-input v-model:value="auth.host" placeholder="registry.example.com" />
+                      <n-select
+                        v-model:value="auth.host"
+                        :options="registryHostOptions"
+                        filterable
+                        tag
+                        placeholder="选择或输入 registry 主机"
+                      />
                     </n-form-item>
                     <n-form-item label="用户名">
                       <n-input v-model:value="auth.username" placeholder="username" />
                     </n-form-item>
-                    <n-form-item label="密码">
+                    <n-form-item label="令牌">
                       <n-input
-                        v-model:value="auth.password"
+                        v-model:value="auth.token"
                         type="password"
                         show-password-on="click"
-                        placeholder="password"
+                        placeholder="access token"
                       />
                     </n-form-item>
                   </n-form>
@@ -138,7 +144,16 @@
             </n-space>
 
             <n-alert title="仓库说明" type="info" class="mt-4">
-              私有仓库需要认证才需要配置
+              <div>
+                <div><strong>内置支持：</strong></div>
+                <ul class="registry-tips">
+                  <li><strong>Docker Hub：</strong>选择 "dockerhub" 或 "docker.io"</li>
+                  <li><strong>GitHub：</strong>选择 "ghcr.io"</li>
+                  <li>
+                    <strong>自定义：</strong>直接输入私有 registry 地址（如 registry.example.com）
+                  </li>
+                </ul>
+              </div>
             </n-alert>
           </div>
         </n-card>
@@ -250,12 +265,26 @@ const notifyMethodOptions = [
   { label: 'POST', value: 'POST' },
 ]
 
+// Registry 主机选项
+const registryHostOptions = [
+  {
+    label: 'docker.io',
+    value: 'docker.io',
+    description: 'Docker Hub 官方域名',
+  },
+  {
+    label: 'GitHub Container Registry',
+    value: 'ghcr.io',
+    description: 'GitHub 容器镜像仓库',
+  },
+]
+
 // 添加仓库认证
 const addAuth = () => {
   configForm.registry.auth.push({
     host: '',
     username: '',
-    password: '',
+    token: '',
   })
 }
 
@@ -330,6 +359,16 @@ onMounted(async () => {
     .auth-item {
       margin-bottom: 16px;
     }
+  }
+}
+
+.registry-tips {
+  margin: 8px 0 0 0;
+  padding-left: 20px;
+
+  li {
+    margin: 4px 0;
+    color: var(--n-text-color);
   }
 }
 

@@ -10,6 +10,7 @@ import (
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/jianxcao/watch-docker/backend/internal/policy"
 	"github.com/jianxcao/watch-docker/backend/internal/registry"
+	"go.uber.org/zap"
 )
 
 type ContainerStatus struct {
@@ -44,33 +45,102 @@ func New(d *dockercli.Client, r *registry.Client) *Scanner {
 // 关键流程：
 // 1) 通过 Docker 客户端获取容器列表
 // 2) 对每个容器先做策略评估（policy.Evaluate），尽早跳过无需查询 registry 的容器
-// 3) 对需要检查的容器，并发获取远端 digest（受 concurrency 限制）
+// 3) 批量获取所有需要检查的镜像的远端 digest（使用批量模式）
 // 4) 与本地 RepoDigest 对比，生成 UpToDate/UpdateAvailable/Skipped/Error 状态
 func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency int, isUserCache bool, isHaveUpdate bool) ([]ContainerStatus, error) {
 	containers, err := s.docker.ListContainers(ctx, includeStopped)
 	if err != nil {
 		return nil, err
 	}
-	if concurrency <= 0 {
-		concurrency = 4
-	}
-	if concurrency > 64 {
-		concurrency = 64
-	}
 	now := time.Now()
 	result := make([]ContainerStatus, len(containers))
+	cfg := config.Get()
 
-	type job struct{ idx int }
-	jobs := make(chan job)
-	done := make(chan struct{})
+	// 1. 策略评估 + 收集需要查询的镜像
+	type containerInfo struct {
+		containerIdx  int
+		image         string
+		repoDigests   []string
+		skippedUpdate bool
+	}
+	imageToContainers := make(map[string][]containerInfo)
 
-	// worker 按序从 jobs 中取任务。每个任务对应一个容器：
-	// - 优先进行策略评估（避免不必要的远端请求）
-	// - 需要检查时访问 registry 获取最新 digest
-	// - 写入对应下标的结果，保持与输入容器顺序一致
-	worker := func() {
-		for j := range jobs {
-			ct := containers[j.idx]
+	for i, ct := range containers {
+		st := ContainerStatus{
+			ID:            ct.ID,
+			Name:          ct.Name,
+			Image:         ct.Image,
+			Running:       strings.EqualFold(ct.State, "running"),
+			Labels:        ct.Labels,
+			LastCheckedAt: now,
+			StartedAt:     ct.StartedAt,
+			Ports:         ct.Ports,
+		}
+
+		// policy evaluation
+		dec := policy.Evaluate(policy.Input{
+			ImageRef:           ct.Image,
+			RepoDigests:        ct.RepoDigests,
+			Labels:             ct.Labels,
+			FloatingTags:       cfg.Policy.FloatingTags,
+			SkipLocal:          cfg.Policy.SkipLocalBuild,
+			SkipPinned:         cfg.Policy.SkipPinnedDigest,
+			SkipSemver:         cfg.Policy.SkipSemverPinned,
+			OnlyLabels:         cfg.Policy.OnlyLabels,
+			SkipLabels:         cfg.Policy.SkipLabels,
+			AllowComposeUpdate: cfg.Scan.AllowComposeUpdate,
+		})
+
+		if dec.Skipped && !dec.Force {
+			st.Skipped = true
+			st.SkipReason = dec.Reason
+			st.Status = "Skipped"
+			st.CurrentDigest = ct.RepoDigests
+			result[i] = st
+			continue
+		}
+
+		// 需要查询的容器
+		if isHaveUpdate {
+			imageToContainers[ct.Image] = append(imageToContainers[ct.Image], containerInfo{
+				containerIdx:  i,
+				image:         ct.Image,
+				repoDigests:   ct.RepoDigests,
+				skippedUpdate: dec.SkippedUpdate,
+			})
+		} else {
+			// 只从缓存读取
+			imageToContainers[ct.Image] = append(imageToContainers[ct.Image], containerInfo{
+				containerIdx:  i,
+				image:         ct.Image,
+				repoDigests:   ct.RepoDigests,
+				skippedUpdate: dec.SkippedUpdate,
+			})
+		}
+	}
+
+	// 2. 批量查询所有镜像
+	if len(imageToContainers) == 0 {
+		return result, nil
+	}
+
+	imagesToQuery := make([]string, 0, len(imageToContainers))
+	for img := range imageToContainers {
+		imagesToQuery = append(imagesToQuery, img)
+	}
+
+	logger.Logger.Debug("批量扫描镜像",
+		zap.Int("totalContainers", len(containers)),
+		zap.Int("uniqueImages", len(imagesToQuery)))
+
+	digestResults := s.registry.GetRemoteDigestsBatch(ctx, imagesToQuery, isUserCache, concurrency)
+
+	// 3. 填充结果
+	for image, infos := range imageToContainers {
+		digestResult := digestResults[image]
+
+		for _, info := range infos {
+			ct := containers[info.containerIdx]
 			st := ContainerStatus{
 				ID:            ct.ID,
 				Name:          ct.Name,
@@ -80,84 +150,35 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				LastCheckedAt: now,
 				StartedAt:     ct.StartedAt,
 				Ports:         ct.Ports,
+				CurrentDigest: info.repoDigests,
+				SkippedUpdate: info.skippedUpdate,
 			}
 
-			// policy evaluation
-			cfg := config.Get()
-			dec := policy.Evaluate(policy.Input{
-				ImageRef:           ct.Image,
-				RepoDigests:        ct.RepoDigests,
-				Labels:             ct.Labels,
-				FloatingTags:       cfg.Policy.FloatingTags,
-				SkipLocal:          cfg.Policy.SkipLocalBuild,
-				SkipPinned:         cfg.Policy.SkipPinnedDigest,
-				SkipSemver:         cfg.Policy.SkipSemverPinned,
-				OnlyLabels:         cfg.Policy.OnlyLabels,
-				SkipLabels:         cfg.Policy.SkipLabels,
-				AllowComposeUpdate: cfg.Scan.AllowComposeUpdate,
-			})
-			if dec.Skipped && !dec.Force {
-				st.Skipped = true
-				st.SkipReason = dec.Reason
-				st.Status = "Skipped"
-				result[j.idx] = st
-				continue
-			}
-			if dec.SkippedUpdate {
-				st.SkippedUpdate = true
-			}
-			st.CurrentDigest = ct.RepoDigests
-			var indexDigest, childDigest string
-			var err error
-			if isHaveUpdate {
-				// 获取远端 digest：indexDigest 为清单索引，多架构镜像；childDigest 为匹配当前平台的子 manifest
-				indexDigest, childDigest, err = s.registry.GetRemoteDigests(ctx, ct.Image, isUserCache)
-			} else {
-				indexDigest, err = s.registry.GetRemoteDigestByCache(ctx, ct.Image)
-			}
-			if err != nil {
-				logger.Logger.Error("get remote digest", logger.ZapErr(err))
+			if digestResult.Error != nil {
+				logger.Logger.Error("get remote digest",
+					zap.String("image", image),
+					logger.ZapErr(digestResult.Error))
 				st.Status = "Error"
-				st.SkipReason = "registry: " + err.Error()
-				result[j.idx] = st
+				st.SkipReason = "registry: " + digestResult.Error.Error()
+				result[info.containerIdx] = st
 				continue
 			}
-			chosen := indexDigest
+
+			chosen := digestResult.IndexDigest
 			if chosen == "" {
-				chosen = childDigest
+				chosen = digestResult.ChildDigest
 			}
 			st.RemoteDigest = chosen
+
 			if len(st.CurrentDigest) == 0 || (st.RemoteDigest != "" && !compareDigests(st.CurrentDigest, st.RemoteDigest)) {
 				st.Status = "UpdateAvailable"
 			} else {
 				st.Status = "UpToDate"
 			}
-			result[j.idx] = st
+			result[info.containerIdx] = st
 		}
-		done <- struct{}{}
 	}
 
-	// 启动固定数量的 worker，限制并发请求的数量
-	for w := 0; w < concurrency; w++ {
-		go worker()
-	}
-	// 投递扫描任务；支持 ctx 取消
-	go func() {
-		for i := range containers {
-			select {
-			case jobs <- job{idx: i}:
-			case <-ctx.Done():
-				close(jobs)
-				return
-			}
-		}
-		close(jobs)
-	}()
-
-	// 等待所有 worker 退出（消费完 jobs）
-	for w := 0; w < concurrency; w++ {
-		<-done
-	}
 	return result, nil
 }
 
@@ -169,4 +190,9 @@ func compareDigests(currentDigests []string, remoteDigest string) bool {
 		}
 	}
 	return false
+}
+
+// GetRegistryClient 返回 registry 客户端（用于动态更新凭据）
+func (s *Scanner) GetRegistryClient() *registry.Client {
+	return s.registry
 }

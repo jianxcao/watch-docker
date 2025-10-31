@@ -2,12 +2,8 @@ package registry
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -15,13 +11,11 @@ import (
 
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/distribution/reference"
-	"github.com/go-resty/resty/v2"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	manifestpkg "github.com/docker-make/docker-mainifest/pkg/registry"
 )
 
 type CacheEntry struct {
@@ -30,217 +24,39 @@ type CacheEntry struct {
 }
 
 type Client struct {
-	http  *resty.Client
-	cache map[string]CacheEntry
-	mu    sync.RWMutex
-	sf    singleflight.Group
+	cache          map[string]CacheEntry
+	mu             sync.RWMutex
+	manifestClient *manifestpkg.Client
 }
 
 func New() *Client {
-	httpClient := resty.New().
-		SetHeader("User-Agent", "watch-docker/1.0").
-		SetRetryCount(2).
-		SetRetryWaitTime(500 * time.Millisecond).
-		SetRetryMaxWaitTime(2 * time.Second).
-		SetTimeout(20 * time.Minute)
+	cfg := config.Get()
 
-	// 应用代理配置
-	if cfg := config.Get(); cfg != nil && cfg.Proxy.URL != "" {
-		httpClient.SetProxy(cfg.Proxy.URL)
-	}
-
-	return &Client{http: httpClient, cache: make(map[string]CacheEntry)}
-}
-
-func (c *Client) GetRemoteDigestByCache(ctx context.Context, imageRef string) (digest string, err error) {
-	normalized, _, _, _, err := normalizeImageRef(imageRef)
-	if err != nil {
-		return "", err
-	}
-	if d, ok := c.getCache(normalized); ok {
-		return d, nil
-	}
-	return "", nil
-}
-
-// GetRemoteDigest resolves the digest for the provided image ref (e.g. nginx:latest).
-// It supports manifest lists by selecting the child manifest matching runtime platform.
-// GetRemoteDigests 返回镜像的索引(manifest list)层 digest 与子镜像(平台专属 manifest)层 digest。
-// 对于非多架构镜像，两者相同。
-func (c *Client) GetRemoteDigests(ctx context.Context, imageRef string, isUserCache bool) (indexDigest string, childDigest string, err error) {
-	normalized, host, repo, referenceTag, err := normalizeImageRef(imageRef)
-	if err != nil {
-		return "", "", err
-	}
-
-	// cache key uses normalized ref (host/repo:tag)
-	if isUserCache {
-		if d, ok := c.getCache(normalized); ok {
-			// 缓存中仅存 indexDigest，为了兼容旧缓存此处 childDigest 置空
-			return d, "", nil
-		}
-	}
-
-	type res struct {
-		idx   string
-		child string
-	}
-	v, err, _ := c.sf.Do(normalized, func() (interface{}, error) {
-		endpoint := fmt.Sprintf("https://%s/v2/%s/manifests/%s", host, repo, url.PathEscape(referenceTag))
-
-		req := c.http.R().SetContext(ctx).SetHeader("Accept", strings.Join([]string{
-			"application/vnd.docker.distribution.manifest.list.v2+json",
-			"application/vnd.docker.distribution.manifest.v2+json",
-			"application/vnd.oci.image.index.v1+json",
-			"application/vnd.oci.image.manifest.v1+json",
-		}, ", "))
-
-		if cfg := config.Get(); cfg != nil {
-			for _, a := range cfg.Registry.Auth {
-				if normalizeRegistryHost(a.Host) == host && a.Username != "" {
-					req.SetBasicAuth(a.Username, a.Password)
-					break
-				}
-			}
-		}
-
-		resp, err := req.Get(endpoint)
+	// 创建 manifest 客户端
+	var manifestClient *manifestpkg.Client
+	var err error
+	if cfg != nil && cfg.Proxy.URL != "" {
+		manifestClient, err = manifestpkg.NewClientWithProxy(cfg.Proxy.URL)
 		if err != nil {
-			logger.Logger.Error("get remote digest", logger.ZapField("endpoint", endpoint), zap.Int("StatusCode", resp.StatusCode()), logger.ZapErr(err))
-			return nil, err
+			logger.Logger.Warn("创建 manifest 客户端失败，使用默认配置", zap.Error(err))
+			manifestClient = manifestpkg.NewClient()
 		}
-
-		if resp.StatusCode() == http.StatusUnauthorized {
-			token, terr := c.fetchBearerToken(ctx, host, repo, resp.Header().Get("Www-Authenticate"))
-			if terr != nil {
-				logger.Logger.Error("get remote digest", logger.ZapField("endpoint", endpoint), zap.Int("StatusCode", resp.StatusCode()), logger.ZapErr(terr))
-				return nil, fmt.Errorf("bearer token: %w", terr)
-			}
-			resp, err = req.SetHeader("Authorization", "Bearer "+token).Get(endpoint)
-			if err != nil {
-				logger.Logger.Error("get remote digest", logger.ZapField("endpoint", endpoint), zap.Int("StatusCode", resp.StatusCode()), logger.ZapErr(err))
-				return nil, err
-			}
-		}
-
-		if resp.IsError() {
-			logger.Logger.Error("get remote digest", logger.ZapField("endpoint", endpoint), zap.Int("StatusCode", resp.StatusCode()), logger.ZapErr(fmt.Errorf("registry error: %s", resp.Status())))
-			return nil, fmt.Errorf("registry error: %s", resp.Status())
-		}
-
-		ct := resp.Header().Get("Content-Type")
-		switch {
-		case strings.Contains(ct, "manifest.list") || strings.Contains(ct, "+json") && strings.Contains(string(resp.Body()), "manifests"):
-			var idx v1.Index
-			if err := json.Unmarshal(resp.Body(), &idx); err != nil {
-				return nil, fmt.Errorf("decode index: %w", err)
-			}
-			digest, derr := selectDigestFromIndex(idx)
-			if derr != nil {
-				return nil, derr
-			}
-			indexHeader := resp.Header().Get("Docker-Content-Digest")
-			if indexHeader == "" {
-				sum := sha256.Sum256(resp.Body())
-				indexHeader = "sha256:" + hex.EncodeToString(sum[:])
-			}
-			ttl := time.Minute * 5
-			if cfg := config.Get(); cfg != nil && cfg.Scan.CacheTTL > 0 {
-				ttl = cfg.Scan.CacheTTL.Duration()
-			}
-			c.setCache(normalized, indexHeader, ttl)
-			return res{idx: indexHeader, child: digest}, nil
-		default:
-			d := resp.Header().Get("Docker-Content-Digest")
-			if d == "" {
-				sum := sha256.Sum256(resp.Body())
-				d = "sha256:" + hex.EncodeToString(sum[:])
-			}
-			ttl := time.Minute * 5
-			if cfg := config.Get(); cfg != nil && cfg.Scan.CacheTTL > 0 {
-				ttl = cfg.Scan.CacheTTL.Duration()
-			}
-			c.setCache(normalized, d, ttl)
-			return res{idx: d, child: d}, nil
-		}
-	})
-	if err != nil {
-		return "", "", err
-	}
-	rr := v.(res)
-	return rr.idx, rr.child, nil
-}
-
-func (c *Client) fetchBearerToken(ctx context.Context, host, repo, wwwAuth string) (string, error) {
-	// Example: Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:library/nginx:pull"
-	if !strings.HasPrefix(strings.ToLower(wwwAuth), "bearer ") {
-		return "", fmt.Errorf("unsupported auth: %s", wwwAuth)
-	}
-	params := parseAuthParams(strings.TrimSpace(wwwAuth[len("bearer "):]))
-	realm := params["realm"]
-	service := params["service"]
-	scope := params["scope"]
-	if scope == "" {
-		scope = fmt.Sprintf("repository:%s:pull", repo)
+	} else {
+		manifestClient = manifestpkg.NewClient()
 	}
 
-	u, err := url.Parse(realm)
-	if err != nil {
-		return "", err
-	}
-	q := u.Query()
-	if service != "" {
-		q.Set("service", service)
-	}
-	q.Set("scope", scope)
-	u.RawQuery = q.Encode()
+	// 设置 logger
+	manifestClient.WithLogger(logger.Logger)
 
-	req := c.http.R().SetContext(ctx)
-	// basic auth may be required for private registries token endpoint (dynamic from config)
-	if cfg := config.Get(); cfg != nil {
-		for _, a := range cfg.Registry.Auth {
-			if normalizeRegistryHost(a.Host) == host && a.Username != "" {
-				req.SetBasicAuth(a.Username, a.Password)
-				break
-			}
-		}
+	c := &Client{
+		cache:          make(map[string]CacheEntry),
+		manifestClient: manifestClient,
 	}
-	logger.Logger.Debug("获取 bearer token", logger.ZapField("url", u.String()))
-	tr, err := req.Get(u.String())
-	if err != nil {
-		return "", err
-	}
-	if tr.IsError() {
-		return "", fmt.Errorf("token endpoint error: %s", tr.Status())
-	}
-	var tok struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(tr.Body(), &tok); err != nil {
-		return "", err
-	}
-	if tok.Token == "" {
-		return "", fmt.Errorf("empty token")
-	}
-	return tok.Token, nil
-}
 
-func selectDigestFromIndex(idx v1.Index) (string, error) {
-	os := runtime.GOOS
-	arch := runtime.GOARCH
-	for _, m := range idx.Manifests {
-		if m.Platform == nil {
-			continue
-		}
-		if strings.EqualFold(m.Platform.OS, os) && strings.EqualFold(m.Platform.Architecture, arch) {
-			return m.Digest.String(), nil
-		}
-	}
-	// fallback first digest
-	if len(idx.Manifests) > 0 {
-		return idx.Manifests[0].Digest.String(), nil
-	}
-	return "", fmt.Errorf("no manifests in index")
+	// 初始化凭据
+	c.UpdateManifestCredentials()
+
+	return c
 }
 
 func (c *Client) getCache(key string) (string, bool) {
@@ -290,26 +106,189 @@ func normalizeImageRef(ref string) (normalized, host, repo, tag string, err erro
 	return normalized, host, path, tag, nil
 }
 
-func normalizeRegistryHost(h string) string {
-	switch h {
-	case "docker.io", "index.docker.io":
-		return "registry-1.docker.io"
-	default:
-		return h
+// UpdateManifestCredentials 从全局配置更新 manifestClient 的认证凭据
+func (c *Client) UpdateManifestCredentials() {
+	if c.manifestClient == nil {
+		return
+	}
+
+	cfg := config.Get()
+	if cfg == nil {
+		return
+	}
+
+	// 清空现有凭据（通过重新设置）
+	for _, auth := range cfg.Registry.Auth {
+		registryKey := mapHostToRegistryKey(auth.Host)
+		if registryKey != "" && auth.Username != "" {
+			c.manifestClient.AddCredential(registryKey, auth.Username, auth.Token)
+			logger.Logger.Debug("已更新 manifest 客户端凭据",
+				zap.String("registry", registryKey),
+				zap.String("username", auth.Username))
+		}
 	}
 }
 
-func parseAuthParams(s string) map[string]string {
-	res := make(map[string]string)
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
+// mapHostToRegistryKey 将 host 配置映射到 manifest 库的 registry key
+func mapHostToRegistryKey(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	switch host {
+	case "docker.io", "dockerhub", "registry-1.docker.io", "index.docker.io":
+		return manifestpkg.DockerHubKey
+	case "ghcr.io":
+		return manifestpkg.GHCRKey
+	default:
+		// 自定义 registry 暂不支持批量模式
+		return ""
+	}
+}
+
+// DigestResult 批量查询的单个结果
+type DigestResult struct {
+	IndexDigest string
+	ChildDigest string
+	Error       error
+}
+
+// GetRemoteDigestsBatch 批量获取多个镜像的远程 digest
+// 使用 manifest 库的批量模式，支持批量认证和并发查询
+func (c *Client) GetRemoteDigestsBatch(ctx context.Context, imageRefs []string, isUserCache bool, concurrency int) map[string]DigestResult {
+	results := make(map[string]DigestResult)
+
+	if len(imageRefs) == 0 {
+		return results
+	}
+
+	// 1. 检查缓存，收集需要查询的镜像
+	needQuery := make([]string, 0, len(imageRefs))
+	imageSpecs := make([]manifestpkg.ImageSpec, 0, len(imageRefs))
+	imageRefMap := make(map[string]string) // normalized -> original
+
+	for _, imageRef := range imageRefs {
+		normalized, _, _, tag, err := normalizeImageRef(imageRef)
+		if err != nil {
+			results[imageRef] = DigestResult{Error: err}
 			continue
 		}
-		key := strings.TrimSpace(strings.ToLower(kv[0]))
-		val := strings.Trim(kv[1], "\"")
-		res[key] = val
+
+		imageRefMap[normalized] = imageRef
+
+		// 检查缓存
+		if isUserCache {
+			if d, ok := c.getCache(normalized); ok {
+				results[imageRef] = DigestResult{IndexDigest: d, ChildDigest: ""}
+				continue
+			}
+		}
+
+		// 需要查询
+		needQuery = append(needQuery, imageRef)
+
+		// 提取镜像名和标签
+		imageName := strings.Split(imageRef, ":")[0]
+		imageSpecs = append(imageSpecs, manifestpkg.ImageSpec{
+			Image: imageName,
+			Tag:   tag,
+		})
 	}
-	return res
+
+	// 2. 如果没有需要查询的，直接返回
+	if len(needQuery) == 0 {
+		return results
+	}
+
+	// 3. 使用 manifestClient 批量查询
+	cfg := config.Get()
+	if concurrency <= 0 {
+		concurrency = 3
+	}
+	if concurrency > 64 {
+		concurrency = 64
+	}
+	if cfg != nil && cfg.Scan.Concurrency > 0 {
+		concurrency = cfg.Scan.Concurrency
+	}
+
+	logger.Logger.Debug("批量获取 manifest",
+		zap.Int("total", len(imageSpecs)),
+		zap.Int("concurrency", concurrency))
+
+	manifestResults := c.manifestClient.GetManifestsWithDigest(imageSpecs, concurrency, true, nil)
+
+	// 4. 解析结果并缓存
+	ttl := time.Minute * 5
+	if cfg != nil && cfg.Scan.CacheTTL > 0 {
+		ttl = cfg.Scan.CacheTTL.Duration()
+	}
+
+	for i, manifestResult := range manifestResults {
+		if i >= len(needQuery) {
+			break
+		}
+
+		imageRef := needQuery[i]
+
+		if manifestResult.Error != nil {
+			results[imageRef] = DigestResult{Error: manifestResult.Error}
+			logger.Logger.Error("批量获取 manifest 失败",
+				zap.String("image", imageRef),
+				zap.Error(manifestResult.Error))
+			continue
+		}
+
+		digest := manifestResult.Digest
+		if digest == "" {
+			results[imageRef] = DigestResult{Error: fmt.Errorf("empty digest")}
+			continue
+		}
+
+		// 缓存结果
+		normalized, _, _, _, _ := normalizeImageRef(imageRef)
+		if normalized != "" {
+			c.setCache(normalized, digest, ttl)
+		}
+
+		manifest := manifestResult.Manifest
+		childDigest, _ := parseManifest(manifest)
+		results[imageRef] = DigestResult{
+			IndexDigest: digest,
+			ChildDigest: childDigest,
+		}
+
+		logger.Logger.Debug("批量获取 manifest 成功",
+			zap.String("image", imageRef),
+			zap.String("digest", digest))
+	}
+
+	return results
+}
+
+func parseManifest(manifest string) (childDigest string, err error) {
+	var idx v1.Index
+	if err := json.Unmarshal([]byte(manifest), &idx); err != nil {
+		return "", fmt.Errorf("decode index: %w", err)
+	}
+	digest, derr := selectDigestFromIndex(idx)
+	if derr != nil {
+		return "", derr
+	}
+	return digest, nil
+}
+
+func selectDigestFromIndex(idx v1.Index) (string, error) {
+	os := runtime.GOOS
+	arch := runtime.GOARCH
+	for _, m := range idx.Manifests {
+		if m.Platform == nil {
+			continue
+		}
+		if strings.EqualFold(m.Platform.OS, os) && strings.EqualFold(m.Platform.Architecture, arch) {
+			return m.Digest.String(), nil
+		}
+	}
+	// fallback first digest
+	if len(idx.Manifests) > 0 {
+		return idx.Manifests[0].Digest.String(), nil
+	}
+	return "", fmt.Errorf("no manifests in index")
 }
