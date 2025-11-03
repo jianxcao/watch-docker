@@ -3,6 +3,7 @@ package dockercli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -212,7 +213,7 @@ func (sm *StatsManager) statsMonitoringLoop(ctx context.Context) {
 func (sm *StatsManager) collectAllContainerStats(ctx context.Context) {
 	// 获取所有运行中的容器
 	containers, err := sm.dockerClient.ContainerList(ctx, container.ListOptions{})
-	if err != nil {
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		logger.Logger.Error("获取运行中容器失败", zap.Error(err))
 		return
 	}
