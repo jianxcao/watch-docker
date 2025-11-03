@@ -73,7 +73,7 @@ export interface ImageInfo {
 export interface RegistryAuth {
   host: string
   username: string
-  password: string
+  token: string
 }
 
 // 配置类型

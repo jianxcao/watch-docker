@@ -86,11 +86,13 @@ type PolicyConfig struct {
 }
 
 // RegistryAuth per-registry 凭据配置
-// host/username/password: 访问私有仓库需要的账号密码（如 ghcr.io）
+// host: registry 主机地址，支持 "dockerhub"/"docker.io"、"ghcr.io" 或自定义私有仓库
+// username: 用户名
+// token: 访问令牌或密码
 type RegistryAuth struct {
 	Host     string `mapstructure:"host" json:"host"`
 	Username string `mapstructure:"username" json:"username"`
-	Password string `mapstructure:"password" json:"password"`
+	Token    string `mapstructure:"token" json:"token"`
 }
 
 // RegistryConfig registry 相关配置容器

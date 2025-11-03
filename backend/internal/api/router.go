@@ -184,6 +184,12 @@ func (s *Server) handleSaveConfig() gin.HandlerFunc {
 		// 设置为全局配置（这会触发保存到文件）
 		config.SetGlobal(&cfg)
 
+		// 动态更新 registry 客户端的认证凭据
+		if s.scanner != nil {
+			s.scanner.GetRegistryClient().UpdateManifestCredentials()
+			s.logger.Info("registry credentials updated")
+		}
+
 		// 重启调度器以应用新的配置
 		if s.scheduler != nil {
 			s.logger.Info("restarting scheduler to apply new configuration")
