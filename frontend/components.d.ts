@@ -84,6 +84,7 @@ declare module 'vue' {
     TwoFASetup: typeof import('./src/components/TwoFASetup.vue')['default']
     TwoFAVerify: typeof import('./src/components/TwoFAVerify.vue')['default']
     UpdateStatusBadge: typeof import('./src/components/UpdateStatusBadge.vue')['default']
+    VolumeCard: typeof import('./src/components/VolumeCard.vue')['default']
     YamlEditor: typeof import('./src/components/YamlEditor/index.vue')['default']
   }
 }

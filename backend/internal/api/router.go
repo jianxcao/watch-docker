@@ -111,6 +111,9 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 			s.setupComposeRoutes(protected)
 		}
 
+		// 设置 Volume 相关路由
+		s.setupVolumeRoutes(protected)
+
 		// 其他路由
 		protected.GET("/config", s.handleGetConfig())
 		protected.POST("/config", s.handleSaveConfig())

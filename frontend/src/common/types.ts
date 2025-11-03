@@ -189,3 +189,72 @@ export type ComposeProjectStatus =
   | 'draft'
   | 'created_stack'
   | 'unknown'
+
+// ============= Volume 相关类型 =============
+
+// Volume使用数据
+export interface VolumeUsageData {
+  size: number // 字节
+  refCount: number // 引用计数
+}
+
+// Volume信息类型
+export interface VolumeInfo {
+  name: string
+  driver: string
+  mountpoint: string
+  createdAt: string
+  labels: Record<string, string>
+  scope: string
+  options: Record<string, string>
+  status: Record<string, any>
+  usageData?: VolumeUsageData
+}
+
+// Volume列表响应
+export interface VolumeListResponse {
+  volumes: VolumeInfo[]
+  totalCount: number
+  totalSize: number
+  usedCount: number
+  unusedCount: number
+}
+
+// 容器引用信息
+export interface ContainerRef {
+  id: string
+  name: string
+  image: string
+  running: boolean
+  destination: string // 容器内挂载路径
+  mode: string // 读写模式
+}
+
+// Volume详情响应
+export interface VolumeDetailResponse {
+  volume: VolumeInfo
+  containers: ContainerRef[]
+}
+
+// Volume统计信息
+export interface VolumeStats {
+  total: number
+  used: number
+  unused: number
+  totalSize: number
+  formattedTotalSize: string
+}
+
+// Volume创建请求
+export interface VolumeCreateRequest {
+  name: string
+  driver?: string
+  driverOpts?: Record<string, string>
+  labels?: Record<string, string>
+}
+
+// Volume清理响应
+export interface VolumePruneResponse {
+  volumesDeleted: string[]
+  spaceReclaimed: number
+}

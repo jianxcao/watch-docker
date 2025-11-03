@@ -92,6 +92,7 @@ import {
   LogOutOutline,
   LogoGithub,
   TerminalOutline,
+  SaveOutline,
 } from '@vicons/ionicons5'
 import ComposeIcon from '@/assets/svg/compose.svg?component'
 import LogIcon from '@/assets/svg/log.svg?component'
@@ -129,6 +130,9 @@ const activeKey = computed(() => {
   }
   if (path === '/compose') {
     return 'compose'
+  }
+  if (path.startsWith('/volumes')) {
+    return 'volumes'
   }
   if (path === '/logs') {
     return 'logs'
@@ -180,6 +184,11 @@ const menuOptions = computed<MenuOption[]>(
         key: 'images',
         icon: () => h(ArchiveOutline),
       },
+      {
+        label: 'Volume 管理',
+        key: 'volumes',
+        icon: () => h(SaveOutline),
+      },
 
       {
         label: '日志',
@@ -213,6 +222,9 @@ const handleMenuSelect = (key: string) => {
       break
     case 'compose':
       router.push('/compose')
+      break
+    case 'volumes':
+      router.push('/volumes')
       break
     case 'logs':
       router.push('/logs')

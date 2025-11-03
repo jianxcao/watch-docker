@@ -7,6 +7,10 @@ import type {
   ContainerStatus,
   ImageInfo,
   SystemInfo,
+  VolumeListResponse,
+  VolumeDetailResponse,
+  VolumeCreateRequest,
+  VolumePruneResponse,
 } from './types'
 
 // 健康检查相关
@@ -169,6 +173,25 @@ export const twoFAApi = {
   disable: () => axios.post('/2fa/disable'),
 }
 
+// Volume 相关API
+export const volumeApi = {
+  // 获取Volume列表
+  getVolumes: () => axios.get<VolumeListResponse>('/volumes'),
+
+  // 获取Volume详情
+  getVolume: (name: string) => axios.get<VolumeDetailResponse>(`/volumes/${name}`),
+
+  // 创建Volume
+  createVolume: (data: VolumeCreateRequest) => axios.post<{ volume: any }>('/volumes', data),
+
+  // 删除Volume
+  deleteVolume: (name: string, force: boolean = false) =>
+    axios.delete<{ ok: boolean }>(`/volumes/${name}`, { params: { force } }),
+
+  // 清理未使用的Volume
+  pruneVolumes: () => axios.post<VolumePruneResponse>('/volumes/prune'),
+}
+
 // 导出所有API
 export const api = {
   health: healthApi,
@@ -178,6 +201,7 @@ export const api = {
   config: configApi,
   compose: composeApi,
   twoFA: twoFAApi,
+  volume: volumeApi,
 }
 
 export default api
