@@ -4,36 +4,69 @@
       <div v-if="volumeDetail" class="detail-container">
         <!-- 基本信息 -->
         <n-card title="基本信息" class="info-card">
-          <n-descriptions :column="2" label-placement="left">
-            <n-descriptions-item label="Volume 名称">
-              {{ volumeDetail.volume.name }}
-            </n-descriptions-item>
-            <n-descriptions-item label="驱动类型">
-              <n-tag :bordered="false" type="info">{{ volumeDetail.volume.driver }}</n-tag>
-            </n-descriptions-item>
-            <n-descriptions-item label="作用域">
-              <n-tag
-                :bordered="false"
-                :type="volumeDetail.volume.scope === 'local' ? 'success' : 'info'"
-              >
-                {{ volumeDetail.volume.scope === 'local' ? '本地' : '全局' }}
-              </n-tag>
-            </n-descriptions-item>
-            <n-descriptions-item label="创建时间">
-              {{ formatCreatedTime(volumeDetail.volume.createdAt) }}
-            </n-descriptions-item>
-            <n-descriptions-item label="挂载点" :span="2">
-              <n-text code>{{ volumeDetail.volume.mountpoint }}</n-text>
-            </n-descriptions-item>
-            <n-descriptions-item label="大小">
-              {{ formatBytes(volumeDetail.volume.usageData?.size || 0) }}
-            </n-descriptions-item>
-            <n-descriptions-item label="引用次数">
-              <n-tag :bordered="false" type="warning">
-                {{ volumeDetail.volume.usageData?.refCount || 0 }} 个容器
-              </n-tag>
-            </n-descriptions-item>
-          </n-descriptions>
+          <div class="info-grid">
+            <div class="info-item">
+              <div class="info-label">
+                <n-icon size="16">
+                  <volumeIcon class="name-icon" />
+                </n-icon>
+                Volume 名称
+              </div>
+              <div class="info-value">{{ volumeDetail.volume.name }}</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">
+                <n-icon size="16"> <diskIcon class="disk-icon" /> </n-icon>驱动类型
+              </div>
+              <div class="info-value">
+                <n-tag :bordered="false" type="default" round>{{
+                  volumeDetail.volume.driver
+                }}</n-tag>
+              </div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">
+                <n-icon size="16"> <GlobeOutline class="scope-icon" /> </n-icon>作用域
+              </div>
+              <div class="info-value">
+                <n-tag
+                  :bordered="false"
+                  :type="volumeDetail.volume.scope === 'local' ? 'success' : 'info'"
+                  round
+                >
+                  {{ volumeDetail.volume.scope === 'local' ? '本地' : '全局' }}
+                </n-tag>
+              </div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">
+                <n-icon size="14"> <CalendarIcon class="calendar-icon" /> </n-icon>创建时间
+              </div>
+              <div class="info-value">{{ formatCreatedTime(volumeDetail.volume.createdAt) }}</div>
+            </div>
+            <div class="info-item info-item-full">
+              <div class="info-label">
+                <n-icon size="16"> <LayersOutline class="layers-icon" /> </n-icon>挂载点
+              </div>
+              <div class="info-value">
+                <n-text code>{{ volumeDetail.volume.mountpoint }}</n-text>
+              </div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">大小</div>
+              <div class="info-value">
+                {{ formatBytes(volumeDetail.volume.usageData?.size || 0) }}
+              </div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">引用次数</div>
+              <div class="info-value">
+                <n-tag :bordered="true" type="warning" round>
+                  {{ volumeDetail.volume.usageData?.refCount || 0 }} 个容器
+                </n-tag>
+              </div>
+            </div>
+          </div>
         </n-card>
 
         <!-- 标签信息 -->
@@ -50,22 +83,12 @@
           </n-space>
         </n-card>
 
-        <!-- 驱动选项 -->
-        <n-card v-if="hasOptions" title="驱动选项" class="info-card">
-          <n-descriptions :column="1" label-placement="left">
-            <n-descriptions-item
-              v-for="(value, key) in volumeDetail.volume.options"
-              :key="key"
-              :label="key"
-            >
-              {{ value }}
-            </n-descriptions-item>
-          </n-descriptions>
-        </n-card>
-
         <!-- 已连接的容器 -->
         <n-card title="已连接的容器" class="info-card">
-          <div v-if="volumeDetail.containers.length === 0" class="empty-container">
+          <div
+            v-if="!volumeDetail.containers || volumeDetail.containers.length === 0"
+            class="empty-container"
+          >
             <n-empty description="没有容器使用此 Volume" />
           </div>
           <div v-else class="container-list">
@@ -119,21 +142,23 @@
     <!-- Teleport 到页面头部 -->
     <Teleport to="#header" defer>
       <div class="welcome-card">
-        <div>
-          <n-h2 class="m-0 text-lg">Volume 详情</n-h2>
-          <n-text depth="3" class="text-xs max-md:hidden">
-            {{ volumeName }}
-          </n-text>
-        </div>
-        <div class="flex gap-2">
+        <div class="flex items-center gap-3">
           <!-- 返回按钮 -->
-          <n-button @click="handleBack" circle size="tiny">
+          <n-button @click="handleBack" text circle>
             <template #icon>
-              <n-icon>
+              <n-icon size="20">
                 <ArrowBackOutline />
               </n-icon>
             </template>
           </n-button>
+          <div>
+            <n-h2 class="m-0 text-lg">Volume 详情</n-h2>
+            <n-text depth="3" class="text-xs max-md:hidden">
+              {{ volumeName }}
+            </n-text>
+          </div>
+        </div>
+        <div class="flex gap-2">
           <!-- 刷新按钮 -->
           <n-button @click="handleRefresh" :loading="loading" circle size="tiny">
             <template #icon>
@@ -143,7 +168,7 @@
             </template>
           </n-button>
           <!-- 删除按钮 -->
-          <n-button @click="handleDelete" circle size="tiny" type="error">
+          <n-button @click="handleDelete" circle size="tiny" tertiary type="error">
             <template #icon>
               <n-icon>
                 <TrashOutline />
@@ -162,6 +187,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { volumeApi } from '@/common/api'
 import type { VolumeDetailResponse, ContainerRef } from '@/common/types'
 import { formatBytes } from '@/common/utils'
+import volumeIcon from '@/assets/svg/volume.svg?component'
+import diskIcon from '@/assets/svg/disk.svg?component'
 import {
   RefreshOutline,
   TrashOutline,
@@ -169,6 +196,9 @@ import {
   CubeOutline,
   FolderOpenOutline,
   ChevronForwardOutline,
+  GlobeOutline,
+  LayersOutline,
+  CalendarOutline as CalendarIcon,
 } from '@vicons/ionicons5'
 import { useDialog, useMessage } from 'naive-ui'
 import dayjs from 'dayjs'
@@ -185,10 +215,6 @@ const volumeName = computed(() => route.params.name as string)
 
 const hasLabels = computed(() => {
   return volumeDetail.value && Object.keys(volumeDetail.value.volume.labels || {}).length > 0
-})
-
-const hasOptions = computed(() => {
-  return volumeDetail.value && Object.keys(volumeDetail.value.volume.options || {}).length > 0
 })
 
 // 格式化创建时间
@@ -230,7 +256,9 @@ const handleRefresh = async () => {
 
 // 处理删除
 const handleDelete = () => {
-  if (!volumeDetail.value) return
+  if (!volumeDetail.value) {
+    return
+  }
 
   const refCount = volumeDetail.value.volume.usageData?.refCount || 0
 
@@ -266,8 +294,9 @@ const handleDelete = () => {
 
 // 处理容器点击
 const handleContainerClick = (container: ContainerRef) => {
+  console.log('jumpto', container)
   // 这里可以跳转到容器详情页面（如果有的话）
-  message.info(`容器 ${container.name} 详情功能待实现`)
+  // message.info(`容器 ${container.name} 详情功能待实现`)
 }
 
 // 页面初始化
@@ -295,6 +324,46 @@ onMounted(async () => {
 
     .info-card {
       box-shadow: var(--box-shadow-1);
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px 32px;
+      .info-item {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+
+        &.info-item-full {
+          grid-column: 1 / -1;
+        }
+        .info-label {
+          font-size: 14px;
+          line-height: 20px;
+          color: var(--text-color-3);
+          font-weight: 500;
+          white-space: nowrap;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          .name-icon,
+          .scope-icon,
+          .layers-icon,
+          .calendar-icon {
+            color: var(--primary-color);
+          }
+          .disk-icon {
+            color: #2b7fff;
+          }
+        }
+
+        .info-value {
+          font-size: 14px;
+          color: var(--n-text-color-1);
+          word-break: break-all;
+        }
+      }
     }
 
     .empty-container {
@@ -359,8 +428,18 @@ onMounted(async () => {
   .volume-detail-page {
     .detail-container {
       gap: 12px;
+
+      .info-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+
+        .info-item {
+          &.info-item-full {
+            grid-column: 1;
+          }
+        }
+      }
     }
   }
 }
 </style>
-

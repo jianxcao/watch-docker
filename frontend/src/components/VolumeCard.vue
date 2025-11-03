@@ -5,42 +5,40 @@
     :class="{ 'card-used': isUsed }"
     @click="handleCardClick"
   >
-    <!-- 状态指示条 -->
-    <div class="status-bar" :class="isUsed ? 'used' : 'unused'"></div>
+    <!-- 顶部渐变条 -->
+    <div v-if="isUsed" class="gradient-bar"></div>
+
     <div class="card-content">
       <!-- Volume头部信息 -->
       <div class="volume-header">
-        <div class="volume-logo">
-          <n-icon size="24">
-            <DatabaseIcon />
-          </n-icon>
-          <div class="absolute -top-1 -right-1">
-            <div
-              class="w-4 h-4 rounded-full flex items-center justify-center"
-              :class="statusConfig.color"
-            >
-              <div
-                v-if="isUsed"
-                class="w-2 h-2 rounded-full"
-                :class="statusConfig.pulseColor"
-              ></div>
-            </div>
-          </div>
+        <div class="volume-logo" :class="{ 'logo-used': isUsed }">
+          <n-icon size="20"><VolumeIcon /></n-icon>
         </div>
-        <div class="volume-basic-info">
+        <div class="volume-info">
           <n-tooltip :delay="500">
             <template #trigger>
               <div class="volume-name">{{ volume.name }}</div>
             </template>
             <span>{{ volume.name }}</span>
           </n-tooltip>
-          <div class="volume-driver">
-            <n-tag :bordered="false" size="small" type="info">
-              {{ volume.driver }}
-            </n-tag>
+          <div class="volume-metadata">
+            <div class="metadata-item">
+              <CpuIcon />
+              <span class="metadata-label">驱动:</span>
+              <n-tag round :type="isUsed ? 'success' : 'default'" size="small" :bordered="true">
+                {{ volume.driver }}
+              </n-tag>
+            </div>
+            <div class="metadata-divider"></div>
+            <div class="metadata-item">
+              <span class="metadata-label">作用域:</span>
+              <n-tag round type="default" size="small" :bordered="true">
+                {{ volume.scope === 'local' ? '本地' : '全局' }}
+              </n-tag>
+            </div>
           </div>
         </div>
-        <div class="volume-status">
+        <div class="volume-menu">
           <n-dropdown :options="dropdownOptions" @select="handleMenuSelect" trigger="click">
             <n-button quaternary circle @click.stop>
               <template #icon>
@@ -53,75 +51,28 @@
         </div>
       </div>
 
-      <!-- Volume详细信息 -->
-      <div class="volume-details">
-        <div class="detail-row">
-          <div class="detail-item">
-            <div class="detail-label">
-              <n-icon size="16">
-                <TimeOutline />
-              </n-icon>
-              创建时间
-            </div>
-            <div class="detail-label">
-              <n-icon size="16">
-                <GlobeIcon />
-              </n-icon>
-              作用域
-            </div>
+      <!-- 信息卡片 -->
+      <div class="info-cards">
+        <div class="info-card">
+          <div class="info-label">
+            <n-icon size="14">
+              <CalendarIcon />
+            </n-icon>
+            <span>创建时间</span>
           </div>
-          <div class="detail-item">
-            <div class="detail-value min-w-[152px]">
-              {{ formatCreatedTime(volume.createdAt) }}
-            </div>
-            <div class="detail-value">
-              <n-tag
-                :bordered="false"
-                size="small"
-                :type="volume.scope === 'local' ? 'success' : 'info'"
-              >
-                {{ volume.scope === 'local' ? '本地' : '全局' }}
-              </n-tag>
-            </div>
-          </div>
+          <div class="info-value">{{ formatCreatedTime(volume.createdAt) }}</div>
         </div>
-      </div>
-
-      <!-- 使用情况 -->
-      <div class="volume-stats">
-        <div class="flex flex-row justify-between items-center mb-2">
-          <div class="stats-title">使用情况</div>
-        </div>
-        <div class="stats-grid">
-          <div class="stat-item">
-            <div class="stat-header">
-              <n-icon size="12">
-                <CubeIcon />
-              </n-icon>
-              <span>容器数</span>
-            </div>
-            <div class="stat-value">{{ volume.usageData?.refCount || 0 }}</div>
+        <div class="info-card">
+          <div class="info-label">
+            <n-icon size="14">
+              <CubeIcon />
+            </n-icon>
+            <span>使用容器</span>
           </div>
-
-          <div class="stat-item">
-            <div class="stat-header">
-              <n-icon size="12">
-                <ArchiveIcon />
-              </n-icon>
-              <span>大小</span>
-            </div>
-            <div class="stat-value">{{ formatBytes(volume.usageData?.size || 0) }}</div>
+          <div class="info-value-container">
+            <div class="info-value">{{ volume.usageData?.refCount || 0 }}</div>
+            <div v-if="isUsed" class="usage-indicator"></div>
           </div>
-          <!--
-          <div class="stat-item">
-            <div class="stat-header">
-              <n-icon size="12">
-                <FolderIcon />
-              </n-icon>
-              <span>挂载点</span>
-            </div>
-            <div class="mountpoint">{{ formatMountpoint(volume.mountpoint) }}</div>
-          </div> -->
         </div>
       </div>
     </div>
@@ -129,18 +80,16 @@
 </template>
 
 <script setup lang="ts">
-import DatabaseIcon from '@/assets/svg/containerLogo.svg?component'
 import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
+import VolumeIcon from '@/assets/svg/volume.svg?component'
+import CpuIcon from '@/assets/svg/cpu.svg?component'
 import type { VolumeInfo } from '@/common/types'
-import { formatBytes } from '@/common/utils'
 import { useSettingStore } from '@/store/setting'
 import {
-  TimeOutline,
   TrashOutline,
+  CalendarOutline as CalendarIcon,
   InformationCircleOutline,
   CubeOutline as CubeIcon,
-  ArchiveOutline as ArchiveIcon,
-  GlobeOutline as GlobeIcon,
 } from '@vicons/ionicons5'
 import dayjs from 'dayjs'
 import { NIcon, useThemeVars } from 'naive-ui'
@@ -164,13 +113,6 @@ const emits = defineEmits<Emits>()
 // 是否正在使用
 const isUsed = computed(() => (props.volume.usageData?.refCount || 0) > 0)
 
-const statusConfig = computed(() => {
-  return {
-    color: isUsed.value ? 'bg-emerald-500' : 'bg-slate-500',
-    pulseColor: isUsed.value ? 'bg-emerald-400' : 'bg-slate-400',
-  }
-})
-
 // 格式化创建时间
 const formatCreatedTime = (createdAt: string): string => {
   if (!createdAt) {
@@ -178,19 +120,6 @@ const formatCreatedTime = (createdAt: string): string => {
   }
   return dayjs(createdAt).format('YYYY-MM-DD HH:mm')
 }
-
-// 格式化挂载点
-// const formatMountpoint = (mountpoint: string): string => {
-//   if (!mountpoint) {
-//     return '-'
-//   }
-//   // 只显示最后两级目录
-//   const parts = mountpoint.split('/')
-//   if (parts.length > 2) {
-//     return '.../' + parts.slice(-2).join('/')
-//   }
-//   return mountpoint
-// }
 
 // 下拉菜单选项
 const dropdownOptions = computed(() => [
@@ -238,63 +167,58 @@ const handleCardClick = () => {
 
 <style scoped lang="less">
 .volume-card {
-  position: relative;
-  border-radius: 16px;
-  transition: all 0.3s ease;
-  position: relative;
-  overflow: hidden;
-  color: var(--text-color-1);
-  box-shadow: var(--box-shadow-1);
-  min-width: 320px;
-  cursor: pointer;
+  &[data-theme='light'] {
+    --volume-card-background-color: #ffffff;
+    --volume-info-background-color: rgba(251, 249, 250, 0.7);
+    &.card-used {
+      background-color: transparent;
+      background-image: linear-gradient(
+        to right bottom,
+        oklch(0.979 0.021 166.113) 0%,
+        rgb(255, 255, 255) 100%
+      );
+    }
+  }
 
+  --volume-card-background-color: #0a0a0a;
+  --volume-geen-color: #00bc7d;
+  --volume-info-background-color: oklab(0.269 0 0 / 0.3);
+  position: relative;
+  border-radius: 14px;
+  padding: 12px;
+  transition: all 0.3s ease;
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  min-width: 320px;
+  background-color: var(--volume-card-background-color);
   &:hover {
     transform: translateY(-2px);
   }
 
-  &:has(.status-bar.used) {
-    border: 2px solid rgba(0, 188, 125, 0.2);
-    background: linear-gradient(135deg, rgba(0, 188, 125, 0.05) 0%, rgba(0, 201, 80, 0.05) 100%);
+  // 使用中的卡片样式
+  &.card-used {
+    border: 1px solid color-mix(in srgb, var(--volume-geen-color) 50%, transparent);
+    box-shadow:
+      0px 4px 6px -4px color-mix(in srgb, var(--volume-geen-color) 10%, transparent),
+      0px 10px 15px -3px color-mix(in srgb, var(--volume-geen-color) 10%, transparent);
   }
 
-  &[data-theme='light']:has(.status-bar.used) {
-    border: 2px solid rgba(0, 188, 125, 0.2);
-    background: linear-gradient(135deg, rgba(0, 188, 125, 0.05) 0%, rgba(0, 201, 80, 0.05) 100%);
-  }
-
-  &:has(.status-bar.unused) {
+  // 顶部渐变条
+  .gradient-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
     background: linear-gradient(
-      135deg,
-      rgba(98, 116, 142, 0.05) 0%,
-      rgba(106, 114, 130, 0.05) 100%
+      90deg,
+      var(--volume-geen-color) 0%,
+      color-mix(in srgb, var(--volume-geen-color) 90%, transparent) 100%
     );
-    border-color: rgba(98, 116, 142, 0.2);
-  }
-
-  &[data-theme='light']:has(.status-bar.unused) {
-    border: 2px solid rgba(98, 116, 142, 0.2);
-    background: linear-gradient(
-      135deg,
-      rgba(98, 116, 142, 0.05) 0%,
-      rgba(106, 114, 130, 0.05) 100%
-    );
-  }
-
-  .status-bar {
-    height: 4px;
-    width: 100%;
-
-    &.used {
-      background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0) 100%), #00bc7d;
-    }
-
-    &.unused {
-      background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0) 100%), #62748e;
-    }
   }
 
   .card-content {
-    padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -302,161 +226,113 @@ const handleCardClick = () => {
 
   .volume-header {
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
     gap: 12px;
-    white-space: nowrap;
-    flex-wrap: nowrap;
+    align-items: flex-start;
 
     .volume-logo {
-      position: relative;
-      width: 48px;
-      height: 48px;
-      border-radius: 14px;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
-      border-radius: 14px;
-      align-self: center;
-      border: 1px solid rgba(0, 188, 125, 0.2);
-      background: linear-gradient(
-        135deg,
-        rgba(250, 250, 250, 0.1) 0%,
-        rgba(250, 250, 250, 0.05) 100%
-      );
+      border: 1px solid var(--border-color);
+      &.logo-used {
+        color: var(--volume-geen-color);
+        background: color-mix(in srgb, var(--volume-geen-color) 10%, transparent);
+        border: 1px solid color-mix(in srgb, var(--volume-geen-color) 10%, transparent);
+      }
     }
 
-    .volume-basic-info {
+    .volume-info {
       flex: 1;
       display: flex;
       flex-direction: column;
       gap: 8px;
       overflow: hidden;
+      min-width: 0;
 
       .volume-name {
-        font-weight: 600;
         font-size: 16px;
-        line-height: 1.25;
-        color: var(--text-base);
+        font-weight: 400;
+        line-height: 1.5;
+        color: var(--text-color-1);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        max-width: 100%;
-        width: fit-content;
+        cursor: pointer;
       }
 
-      .volume-driver {
-        display: inline-block;
-        width: fit-content;
-      }
-    }
-  }
-
-  &[data-theme='light'] .volume-header {
-    .volume-logo {
-      border: 1px solid rgba(0, 188, 125, 0.2);
-      background: linear-gradient(135deg, rgba(3, 2, 19, 0.1) 0%, rgba(3, 2, 19, 0.05) 100%);
-    }
-  }
-
-  .volume-details {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-
-    .detail-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-direction: column;
-      gap: 12px;
-
-      .detail-item {
+      .volume-metadata {
         display: flex;
-        flex: 1;
-        width: 100%;
-        gap: 8px;
-        flex: 0;
         align-items: center;
+        gap: 8px;
+        height: 22px;
 
-        .detail-label,
-        .detail-value {
-          flex: 0 1 50%;
-          width: fit-content;
+        .metadata-item {
           display: flex;
-          gap: 4px;
           align-items: center;
+          gap: 6px;
         }
-
-        .detail-label {
+        .metadata-label {
           color: var(--text-color-3);
         }
 
-        .detail-value {
-          border-radius: 10px;
-          border: 1px solid var(--border-color);
-          padding: 8px 12px;
+        .metadata-divider {
+          width: 1px;
+          height: 12px;
+          background: var(--border-color);
         }
       }
     }
+
+    .volume-menu {
+      flex-shrink: 0;
+    }
   }
 
-  .volume-status {
+  .info-cards {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 8px;
-  }
-}
+    gap: 12px;
 
-.volume-stats {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--divider-color);
-
-  .stats-title {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-color-3);
-  }
-
-  .stat-header {
-    display: flex;
-    flex-direction: row;
-    gap: 4px;
-    align-items: center;
-    color: var(--text-color-3);
-    font-size: 12px;
-  }
-
-  .stats-grid {
-    display: flex;
-    flex-direction: row;
-    gap: 8px;
-    justify-content: space-between;
-
-    .stat-item {
+    .info-card {
       display: flex;
-      flex-direction: column;
-      gap: 8px;
-      justify-content: center;
-      align-items: flex-start;
-      flex: 0 0 33.33%;
-    }
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 12px;
+      background: var(--volume-info-background-color);
+      border-radius: 10px;
+      min-height: 40px;
 
-    .stat-value {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--text-color-1);
-    }
+      .info-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 400;
+        color: var(--text-color-3);
+      }
 
-    .mountpoint {
-      font-size: 12px;
-      color: var(--text-color-3);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 100%;
+      .info-value {
+        font-size: 14px;
+        font-weight: 400;
+        color: var(--text-color-1);
+      }
+
+      .info-value-container {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+
+        .usage-indicator {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: var(--volume-geen-color);
+          opacity: 0.8;
+        }
+      }
     }
   }
 }

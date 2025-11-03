@@ -200,6 +200,9 @@ func (sm *StatsManager) statsMonitoringLoop(ctx context.Context) {
 
 	for {
 		select {
+		case <-ctx.Done():
+			logger.Logger.Info("信息统计监控停止")
+			return
 		case <-sm.stopChan:
 			logger.Logger.Info("信息统计监控停止")
 			return

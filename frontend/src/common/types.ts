@@ -233,7 +233,7 @@ export interface ContainerRef {
 // Volume详情响应
 export interface VolumeDetailResponse {
   volume: VolumeInfo
-  containers: ContainerRef[]
+  containers?: ContainerRef[] | null
 }
 
 // Volume统计信息

@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
 import { useAuthStore } from '@/store/auth'
@@ -92,10 +92,11 @@ import {
   LogOutOutline,
   LogoGithub,
   TerminalOutline,
-  SaveOutline,
 } from '@vicons/ionicons5'
 import ComposeIcon from '@/assets/svg/compose.svg?component'
 import LogIcon from '@/assets/svg/log.svg?component'
+import VolumeIcon from '@/assets/svg/volume.svg?component'
+import { renderIcon } from '@/common/utils'
 
 interface Props {
   onMenuSelect?: () => void // 菜单选择后的回调，用于移动端关闭抽屉
@@ -167,43 +168,43 @@ const menuOptions = computed<MenuOption[]>(
       {
         label: '首页',
         key: 'home',
-        icon: () => h(HomeOutline),
+        icon: renderIcon(HomeOutline, { size: 20 }),
       },
       {
         label: 'Compose 项目',
         key: 'compose',
-        icon: () => h(ComposeIcon),
+        icon: renderIcon(ComposeIcon, { size: 20 }),
       },
       {
         label: '容器管理',
         key: 'containers',
-        icon: () => h(LayersOutline),
+        icon: renderIcon(LayersOutline, { size: 20 }),
       },
       {
         label: '镜像管理',
         key: 'images',
-        icon: () => h(ArchiveOutline),
+        icon: renderIcon(ArchiveOutline, { size: 20 }),
       },
       {
         label: 'Volume 管理',
         key: 'volumes',
-        icon: () => h(SaveOutline),
+        icon: renderIcon(VolumeIcon, { size: 20 }),
       },
 
       {
         label: '日志',
         key: 'logs',
-        icon: () => h(LogIcon),
+        icon: renderIcon(LogIcon, { size: 20 }),
       },
       settingStore.systemInfo?.isOpenDockerShell && {
         label: '终端',
         key: 'terminal',
-        icon: () => h(TerminalOutline),
+        icon: renderIcon(TerminalOutline, { size: 20 }),
       },
       {
         label: '系统设置',
         key: 'settings',
-        icon: () => h(SettingsOutline),
+        icon: renderIcon(SettingsOutline, { size: 20 }),
       },
     ].filter(Boolean) as MenuOption[],
 )

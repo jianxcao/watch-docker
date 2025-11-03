@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/volume"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"go.uber.org/zap"
 )
 
 // VolumeInfo Volume信息
@@ -75,21 +76,23 @@ func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list volumes: %w", err)
 	}
-	diskUsage, err := c.docker.DiskUsage(ctx, types.DiskUsageOptions{
-		Types: []types.DiskUsageObject{types.VolumeObject},
-	})
-	fmt.Println(diskUsage)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list volumes: %w", err)
-	}
 
-	// 获取所有容器以计算引用计数（使用 Docker API 直接获取，包含 Mounts 信息）
+	// 使用 ContainerList 统计 Volume 引用计数（性能更好）
+	startTime := time.Now()
 	containers, err := c.docker.ContainerList(ctx, container.ListOptions{All: true})
+	elapsed := time.Since(startTime)
+
 	if err != nil {
+		logger.Logger.Error("ContainerList API 调用失败",
+			zap.Duration("elapsed", elapsed),
+			zap.Error(err))
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
+	logger.Logger.Info("ContainerList API 调用成功",
+		zap.Duration("elapsed", elapsed),
+		zap.Int("containerCount", len(containers)))
 
-	// 构建Volume名称到引用计数的映射
+	// 构建 Volume 名称到引用计数的映射
 	volumeRefCount := make(map[string]int)
 	for _, ctr := range containers {
 		for _, mount := range ctr.Mounts {
@@ -104,9 +107,10 @@ func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
 	var usedCount, unusedCount int
 
 	for _, vol := range volumeList.Volumes {
+		// 从 volumeRefCount 中获取引用计数
 		refCount := volumeRefCount[vol.Name]
 
-		// 获取Volume大小（如果可用）
+		// 获取 Volume 大小（如果可用）
 		var size int64
 		if vol.UsageData != nil {
 			size = vol.UsageData.Size
@@ -131,7 +135,7 @@ func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
 		}
 
 		// 添加使用数据
-		if vol.UsageData != nil || refCount > 0 {
+		if size > 0 || refCount > 0 {
 			volumeInfo.UsageData = &VolumeUsageData{
 				Size:     size,
 				RefCount: refCount,

@@ -93,7 +93,7 @@
             </template>
           </n-button>
           <!-- 清理按钮 -->
-          <n-button @click="handlePrune" circle size="tiny">
+          <n-button @click="handlePrune" circle tertiary size="tiny">
             <template #icon>
               <n-icon>
                 <TrashOutline />
@@ -290,17 +290,20 @@ const handleDelete = async (volume: VolumeInfo) => {
     return
   }
 
-  dialog.warning({
+  const d = dialog.warning({
     title: '确认删除',
     content: `确定要删除 Volume "${volume.name}" 吗？此操作不可恢复。`,
     positiveText: '删除',
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
+        d.loading = true
         await volumeStore.deleteVolume(volume.name, false)
         message.success('Volume 删除成功')
       } catch (error: any) {
         message.error(`删除失败：${error.message || '未知错误'}`)
+      } finally {
+        d.loading = false
       }
     },
   })
@@ -329,18 +332,21 @@ const handlePrune = () => {
     return
   }
 
-  dialog.warning({
+  const d = dialog.warning({
     title: '确认清理',
     content: `确定要清理 ${unusedCount} 个未使用的 Volume 吗？此操作不可恢复。`,
     positiveText: '清理',
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
+        d.loading = true
         const result = await volumeStore.pruneVolumes()
         const deletedCount = result.volumesDeleted?.length || 0
         message.success(`清理成功，删除了 ${deletedCount} 个 Volume`)
       } catch (error: any) {
         message.error(`清理失败：${error.message || '未知错误'}`)
+      } finally {
+        d.loading = false
       }
     },
   })
