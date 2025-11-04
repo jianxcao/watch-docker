@@ -271,13 +271,14 @@ const handleDelete = () => {
     return
   }
 
-  dialog.warning({
+  const d = dialog.warning({
     title: '确认删除',
     content: `确定要删除 Volume "${volumeName.value}" 吗？此操作不可恢复。`,
     positiveText: '删除',
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
+        d.loading = true
         const response = await volumeApi.deleteVolume(volumeName.value, false)
         if (response.code === 0) {
           message.success('Volume 删除成功')
@@ -287,6 +288,8 @@ const handleDelete = () => {
         }
       } catch (error: any) {
         message.error(`删除失败：${error.message || '未知错误'}`)
+      } finally {
+        d.loading = false
       }
     },
   })

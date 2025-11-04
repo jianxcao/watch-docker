@@ -81,6 +81,22 @@ const router = createRouter({
           },
         },
         {
+          path: '/networks',
+          name: 'networks',
+          component: () => import('@/pages/NetworksView.vue'),
+          meta: { title: '网络管理', requiresAuth: true, layoutClass: 'layout-networks' },
+        },
+        {
+          path: '/networks/:id',
+          name: 'network-detail',
+          component: () => import('@/pages/NetworkDetailView.vue'),
+          meta: {
+            title: '网络详情',
+            requiresAuth: true,
+            layoutClass: 'layout-network-detail',
+          },
+        },
+        {
           path: '/settings',
           component: () => import('@/pages/SettingsView.vue'),
           meta: { title: '系统设置', requiresAuth: true, layoutClass: 'layout-settings' },

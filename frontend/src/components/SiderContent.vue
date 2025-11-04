@@ -96,6 +96,7 @@ import {
 import ComposeIcon from '@/assets/svg/compose.svg?component'
 import LogIcon from '@/assets/svg/log.svg?component'
 import VolumeIcon from '@/assets/svg/volume.svg?component'
+import NetworkIcon from '@/assets/svg/network.svg?component'
 import { renderIcon } from '@/common/utils'
 
 interface Props {
@@ -134,6 +135,9 @@ const activeKey = computed(() => {
   }
   if (path.startsWith('/volumes')) {
     return 'volumes'
+  }
+  if (path.startsWith('/networks')) {
+    return 'networks'
   }
   if (path === '/logs') {
     return 'logs'
@@ -186,11 +190,15 @@ const menuOptions = computed<MenuOption[]>(
         icon: renderIcon(ArchiveOutline, { size: 20 }),
       },
       {
+        label: '网络管理',
+        key: 'networks',
+        icon: renderIcon(NetworkIcon, { size: 20 }),
+      },
+      {
         label: 'Volume 管理',
         key: 'volumes',
         icon: renderIcon(VolumeIcon, { size: 20 }),
       },
-
       {
         label: '日志',
         key: 'logs',
@@ -226,6 +234,9 @@ const handleMenuSelect = (key: string) => {
       break
     case 'volumes':
       router.push('/volumes')
+      break
+    case 'networks':
+      router.push('/networks')
       break
     case 'logs':
       router.push('/logs')

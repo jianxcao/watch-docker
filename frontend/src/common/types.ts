@@ -258,3 +258,124 @@ export interface VolumePruneResponse {
   volumesDeleted: string[]
   spaceReclaimed: number
 }
+
+// ============= Network 相关类型 =============
+
+// 网络 IPAM 配置
+export interface NetworkIPAMConfig {
+  subnet?: string
+  gateway?: string
+  ipRange?: string
+  auxAddress?: Record<string, string>
+}
+
+// 网络 IPAM 信息
+export interface NetworkIPAM {
+  driver: string
+  options?: Record<string, string>
+  config?: NetworkIPAMConfig[]
+}
+
+// 网络信息类型
+export interface NetworkInfo {
+  id: string
+  name: string
+  driver: string
+  scope: string
+  internal: boolean
+  attachable: boolean
+  ingress: boolean
+  enableIPv6: boolean
+  ipam: NetworkIPAM
+  created: string
+  labels: Record<string, string>
+  options: Record<string, string>
+  containerCount: number
+}
+
+// 网络容器信息
+export interface NetworkContainer {
+  id: string
+  name: string
+  image: string
+  running: boolean
+  ipv4Address?: string
+  ipv6Address?: string
+  macAddress?: string
+  endpointId?: string
+}
+
+// 网络列表响应
+export interface NetworkListResponse {
+  networks: NetworkInfo[]
+  totalCount: number
+  usedCount: number
+  unusedCount: number
+  builtInCount: number
+  customCount: number
+}
+
+// 网络详情响应
+export interface NetworkDetailResponse {
+  network: NetworkInfo
+  containers: NetworkContainer[]
+}
+
+// 网络统计信息
+export interface NetworkStats {
+  total: number
+  used: number
+  unused: number
+  builtIn: number
+  custom: number
+}
+
+// 网络 IPAM 创建配置
+export interface NetworkIPAMConfigCreate {
+  subnet?: string
+  ipRange?: string
+  gateway?: string
+  auxAddress?: Record<string, string>
+}
+
+// 网络 IPAM 创建请求
+export interface NetworkIPAMCreateRequest {
+  driver?: string
+  config?: NetworkIPAMConfigCreate[]
+  options?: Record<string, string>
+}
+
+// 网络创建请求
+export interface NetworkCreateRequest {
+  name: string
+  driver?: string
+  scope?: string
+  internal?: boolean
+  attachable?: boolean
+  ingress?: boolean
+  enableIPv6?: boolean
+  ipam?: NetworkIPAMCreateRequest
+  options?: Record<string, string>
+  labels?: Record<string, string>
+}
+
+// 网络清理响应
+export interface NetworkPruneResponse {
+  networksDeleted: string[]
+}
+
+// 网络连接容器请求
+export interface NetworkConnectRequest {
+  container: string
+  ipv4Address?: string
+  ipv6Address?: string
+  links?: string[]
+  aliases?: string[]
+  driverOpts?: Record<string, string>
+}
+
+// 网络断开容器请求
+export interface NetworkDisconnectRequest {
+  container: string
+  force: boolean
+}
