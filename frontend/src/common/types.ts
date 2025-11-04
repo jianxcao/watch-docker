@@ -36,6 +36,120 @@ export interface ContainerStats {
   pidsLimit: number
 }
 
+// 详细的容器统计信息（Docker API 原始格式）
+export interface ContainerDetailStats {
+  id: string
+  name: string
+  read: string
+  preread: string
+  pids_stats: {
+    current: number
+    limit: number
+  }
+  blkio_stats: {
+    io_service_bytes_recursive: Array<{
+      major: number
+      minor: number
+      op: string
+      value: number
+    }> | null
+    io_serviced_recursive: any
+    io_queue_recursive: any
+    io_service_time_recursive: any
+    io_wait_time_recursive: any
+    io_merged_recursive: any
+    io_time_recursive: any
+    sectors_recursive: any
+  }
+  cpu_stats: {
+    cpu_usage: {
+      total_usage: number
+      usage_in_kernelmode: number
+      usage_in_usermode: number
+      percpu_usage?: number[]
+    }
+    system_cpu_usage: number
+    online_cpus: number
+    throttling_data: {
+      periods: number
+      throttled_periods: number
+      throttled_time: number
+    }
+  }
+  precpu_stats: {
+    cpu_usage: {
+      total_usage: number
+      usage_in_kernelmode: number
+      usage_in_usermode: number
+      percpu_usage?: number[]
+    }
+    system_cpu_usage: number
+    online_cpus: number
+    throttling_data: {
+      periods: number
+      throttled_periods: number
+      throttled_time: number
+    }
+  }
+  memory_stats: {
+    usage: number
+    max_usage?: number
+    stats: {
+      active_anon?: number
+      active_file?: number
+      anon?: number
+      anon_thp?: number
+      file?: number
+      file_dirty?: number
+      file_mapped?: number
+      file_writeback?: number
+      inactive_anon?: number
+      inactive_file?: number
+      kernel_stack?: number
+      pgactivate?: number
+      pgdeactivate?: number
+      pgfault?: number
+      pglazyfree?: number
+      pglazyfreed?: number
+      pgmajfault?: number
+      pgrefill?: number
+      pgscan?: number
+      pgsteal?: number
+      shmem?: number
+      slab?: number
+      slab_reclaimable?: number
+      slab_unreclaimable?: number
+      sock?: number
+      thp_collapse_alloc?: number
+      thp_fault_alloc?: number
+      unevictable?: number
+      workingset_activate?: number
+      workingset_nodereclaim?: number
+      workingset_refault?: number
+      cache?: number
+      total_cache?: number
+    }
+    limit: number
+    commitlimit?: number
+    committed_as?: number
+    failcnt?: number
+  }
+  networks: {
+    [key: string]: {
+      rx_bytes: number
+      rx_packets: number
+      rx_errors: number
+      rx_dropped: number
+      tx_bytes: number
+      tx_packets: number
+      tx_errors: number
+      tx_dropped: number
+    }
+  }
+  num_procs?: number
+  storage_stats?: any
+}
+
 // 端口映射信息
 export interface PortInfo {
   ip: string
@@ -378,4 +492,167 @@ export interface NetworkConnectRequest {
 export interface NetworkDisconnectRequest {
   container: string
   force: boolean
+}
+
+// ============= Container Detail 相关类型 =============
+
+// 容器端口绑定
+export interface ContainerPortBinding {
+  HostIp: string
+  HostPort: string
+}
+
+// 容器挂载点
+export interface ContainerMount {
+  Type: string // "bind" | "volume" | "tmpfs"
+  Name?: string
+  Source: string
+  Destination: string
+  Driver?: string
+  Mode: string
+  RW: boolean
+  Propagation: string
+}
+
+// 容器网络设置
+export interface ContainerNetworkSettings {
+  Bridge: string
+  Gateway: string
+  IPAddress: string
+  IPPrefixLen: number
+  MacAddress: string
+  Networks: Record<string, ContainerNetworkEndpoint>
+  Ports: Record<string, ContainerPortBinding[] | null>
+}
+
+// 容器网络端点
+export interface ContainerNetworkEndpoint {
+  IPAMConfig: any
+  Links: string[] | null
+  Aliases: string[] | null
+  NetworkID: string
+  EndpointID: string
+  Gateway: string
+  IPAddress: string
+  IPPrefixLen: number
+  IPv6Gateway: string
+  GlobalIPv6Address: string
+  GlobalIPv6PrefixLen: number
+  MacAddress: string
+  DriverOpts: Record<string, string> | null
+}
+
+// 容器状态
+export interface ContainerStateDetail {
+  Status: string
+  Running: boolean
+  Paused: boolean
+  Restarting: boolean
+  OOMKilled: boolean
+  Dead: boolean
+  Pid: number
+  ExitCode: number
+  Error: string
+  StartedAt: string
+  FinishedAt: string
+}
+
+// 容器配置
+export interface ContainerConfig {
+  Hostname: string
+  Domainname: string
+  User: string
+  AttachStdin: boolean
+  AttachStdout: boolean
+  AttachStderr: boolean
+  Tty: boolean
+  OpenStdin: boolean
+  StdinOnce: boolean
+  Env: string[]
+  Cmd: string[] | null
+  Image: string
+  Volumes: Record<string, any> | null
+  WorkingDir: string
+  Entrypoint: string[] | null
+  OnBuild: string[] | null
+  Labels: Record<string, string>
+  ExposedPorts: Record<string, any> | null
+}
+
+// 容器主机配置
+export interface ContainerHostConfig {
+  Binds: string[] | null
+  NetworkMode: string
+  PortBindings: Record<string, ContainerPortBinding[] | null>
+  RestartPolicy: {
+    Name: string
+    MaximumRetryCount: number
+  }
+  AutoRemove: boolean
+  VolumeDriver: string
+  VolumesFrom: string[] | null
+  CapAdd: string[] | null
+  CapDrop: string[] | null
+  Dns: string[] | null
+  DnsOptions: string[] | null
+  DnsSearch: string[] | null
+  ExtraHosts: string[] | null
+  GroupAdd: string[] | null
+  IpcMode: string
+  Cgroup: string
+  Links: string[] | null
+  OomScoreAdj: number
+  PidMode: string
+  Privileged: boolean
+  PublishAllPorts: boolean
+  ReadonlyRootfs: boolean
+  SecurityOpt: string[] | null
+  UTSMode: string
+  UsernsMode: string
+  ShmSize: number
+  Runtime: string
+  ConsoleSize: [number, number]
+  Isolation: string
+  CpuShares: number
+  Memory: number
+  CpusetCpus: string
+  CpusetMems: string
+  CpuQuota: number
+  CpuPeriod: number
+  BlkioWeight: number
+}
+
+// 容器详情
+export interface ContainerDetail {
+  Id: string
+  Created: string
+  Path: string
+  Args: string[]
+  State: ContainerStateDetail
+  Image: string
+  ResolvConfPath: string
+  HostnamePath: string
+  HostsPath: string
+  LogPath: string
+  Name: string
+  RestartCount: number
+  Driver: string
+  Platform: string
+  MountLabel: string
+  ProcessLabel: string
+  AppArmorProfile: string
+  ExecIDs: string[] | null
+  HostConfig: ContainerHostConfig
+  GraphDriver: {
+    Name: string
+    Data: Record<string, string>
+  }
+  Mounts: ContainerMount[]
+  Config: ContainerConfig
+  NetworkSettings: ContainerNetworkSettings
+}
+
+// 容器详情响应
+export interface ContainerDetailResponse {
+  container: ContainerDetail
 }

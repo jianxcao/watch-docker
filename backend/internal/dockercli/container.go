@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -369,4 +370,27 @@ func (c *Client) ContainerLogs(ctx context.Context, containerID string, since st
 		Tail:       tail,
 	}
 	return c.docker.ContainerLogs(ctx, containerID, options)
+}
+
+// ContainerExecCreate 在容器中创建 exec 实例
+func (c *Client) ContainerExecCreate(ctx context.Context, containerID string, config container.ExecOptions) (container.ExecCreateResponse, error) {
+	return c.docker.ContainerExecCreate(ctx, containerID, config)
+}
+
+// ContainerExecAttach 附加到 exec 实例
+func (c *Client) ContainerExecAttach(ctx context.Context, execID string, config container.ExecStartOptions) (types.HijackedResponse, error) {
+	return c.docker.ContainerExecAttach(ctx, execID, config)
+}
+
+// ContainerExecResize 调整 exec 实例的终端大小
+func (c *Client) ContainerExecResize(ctx context.Context, execID string, options container.ResizeOptions) error {
+	return c.docker.ContainerExecResize(ctx, execID, options)
+}
+
+func (c *Client) ContainerStats(ctx context.Context, containerID string, stream bool) (container.StatsResponseReader, error) {
+	resp, err := c.docker.ContainerStats(ctx, containerID, stream)
+	if err != nil {
+		return container.StatsResponseReader{}, err
+	}
+	return resp, nil
 }

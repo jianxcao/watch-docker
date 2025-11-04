@@ -68,6 +68,7 @@
             @delete="() => handleDelete(container)"
             @export="() => handleExport(container)"
             @logs="() => handleLogs(container)"
+            @detail="() => handleDetail(container)"
           />
         </div>
       </n-spin>
@@ -148,6 +149,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useContainerStore } from '@/store/container'
 import { useContainer } from '@/hooks/useContainer'
 import { useResponsive } from '@/hooks/useResponsive'
@@ -175,6 +177,7 @@ import {
 } from '@vicons/ionicons5'
 import { useAppStore } from '@/store/app'
 
+const router = useRouter()
 const containerStore = useContainerStore()
 const containerHooks = useContainer()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
@@ -391,6 +394,10 @@ const handleExport = async (container: ContainerStatus) => {
 const handleLogs = async (container: ContainerStatus) => {
   currentContainer.value = container
   showLogsModal.value = true
+}
+
+const handleDetail = (container: ContainerStatus) => {
+  router.push({ name: 'container-detail', params: { id: container.id } })
 }
 
 const handleBatchUpdate = async () => {

@@ -34,6 +34,16 @@ const router = createRouter({
           meta: { title: '容器管理', requiresAuth: true, layoutClass: 'layout-containers' },
         },
         {
+          path: '/containers/:id',
+          name: 'container-detail',
+          component: () => import('@/pages/ContainerDetail/ContainerDetailView.vue'),
+          meta: {
+            title: '容器详情',
+            requiresAuth: true,
+            layoutClass: 'layout-container-detail',
+          },
+        },
+        {
           path: '/images',
           component: () => import('@/pages/ImagesView.vue'),
           meta: { title: '镜像管理', requiresAuth: true, layoutClass: 'layout-images' },

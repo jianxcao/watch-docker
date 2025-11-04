@@ -10,6 +10,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
+	"github.com/jianxcao/watch-docker/backend/internal/wsstream"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -18,9 +19,12 @@ import (
 // setupContainerRoutes 设置容器相关的路由
 func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.GET("/containers", s.handleListContainers())
+	protected.GET("/containers/:id", s.handleGetContainerDetail())
 	protected.POST("/containers/stats", s.handleGetContainersStats())
 	protected.GET("/containers/stats/ws", s.handleStatsWebSocket())
+	protected.GET("/containers/:id/stats/ws", s.handleContainerDetailStatsWebSocket())
 	protected.GET("/containers/logs/:containerID/ws", s.handleContainerLogsWebSocket())
+	protected.GET("/containers/:id/shell/ws", s.handleContainerShellWebSocket())
 	protected.POST("/containers/:id/update", s.handleUpdateContainer())
 	protected.POST("/updates/run", s.handleBatchUpdate())
 	protected.POST("/containers/:id/stop", s.handleStopContainer())
@@ -121,6 +125,29 @@ func codeForUpdateErr(err error) int {
 	}
 }
 
+func (s *Server) handleGetContainerDetail() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		if id == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "container id required"))
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+
+		// 获取容器详细信息
+		containerDetail, err := s.docker.InspectContainer(ctx, id)
+		if err != nil {
+			s.logger.Error("inspect container", zap.String("containerID", id), zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "获取容器详情失败: "+err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"container": containerDetail}))
+	}
+}
+
 func (s *Server) handleListContainers() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
@@ -167,6 +194,34 @@ func (s *Server) handleGetContainersStats() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"stats": statsMap}))
+	}
+}
+
+// handleContainerDetailStatsWebSocket 处理单个容器详细统计的 WebSocket 连接
+func (s *Server) handleContainerDetailStatsWebSocket() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 从路径参数获取容器 ID
+		containerID := c.Param("id")
+
+		if containerID == "" {
+			s.logger.Error("Missing containerID parameter")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing containerID parameter"})
+			return
+		}
+
+		s.logger.Info("Container detail stats WebSocket connection request",
+			zap.String("containerID", containerID))
+
+		// 使用 StreamManager 处理 WebSocket 连接
+		// 每个容器的统计流是独立的，使用 containerID 作为唯一标识
+		key := fmt.Sprintf("container-detail-stats-%s", containerID)
+		s.streamManagerString.HandleWebSocket(c, key, func() wsstream.StreamSource[string] {
+			return wsstream.NewContainerDetailStatsSource(wsstream.ContainerDetailStatsSourceOptions{
+				ContainerID:  containerID,
+				DockerClient: s.docker,
+				Key:          key,
+			})
+		})
 	}
 }
 

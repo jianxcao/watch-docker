@@ -1,0 +1,348 @@
+// ContainerDetail 共享样式
+
+.tab-content {
+  height: 100%;
+  overflow-y: auto;
+
+  &.logs-tab,
+  &.shell-tab {
+    padding: 0;
+    overflow: hidden;
+
+    .logs-stream-view {
+      height: 100%;
+    }
+  }
+}
+
+.detail-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+
+  .info-card {
+    box-shadow: var(--box-shadow-1);
+  }
+
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px 32px;
+
+    .info-item {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+
+      &.info-item-full {
+        grid-column: 1 / -1;
+      }
+
+      .info-label {
+        font-size: 14px;
+        line-height: 20px;
+        color: var(--text-color-3);
+        font-weight: 500;
+      }
+
+      .info-value {
+        font-size: 14px;
+        color: var(--n-text-color-1);
+        word-break: break-all;
+      }
+    }
+  }
+
+  .port-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .env-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+
+    .env-item {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 8px;
+      border-radius: 8px;
+      background: var(--n-color-embedded);
+
+      .env-key {
+        font-weight: 600;
+        font-size: 14px;
+      }
+
+      .env-value {
+        font-size: 13px;
+      }
+    }
+  }
+
+  .network-list {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+
+    .network-item {
+      min-width: 360px;
+      padding: 12px;
+      box-sizing: border-box;
+      border-radius: 8px;
+      background: var(--n-color-embedded);
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+
+      .network-header {
+        margin-bottom: 12px;
+      }
+
+      .network-details {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+
+        .network-detail-item {
+          display: flex;
+          gap: 8px;
+          font-size: 14px;
+
+          .label {
+            color: var(--text-color-3);
+            min-width: 80px;
+          }
+        }
+      }
+    }
+  }
+
+  .port-mapping-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .mount-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+
+    .mount-item {
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--n-color-embedded);
+
+      .mount-header {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .mount-details {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+
+        .mount-detail-item {
+          display: flex;
+          gap: 8px;
+          font-size: 14px;
+
+          .label {
+            color: var(--text-color-3);
+            min-width: 80px;
+          }
+        }
+      }
+    }
+  }
+}
+
+.dashboard-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  .overview-card {
+    .stats-overview {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+
+      .overview-item {
+        .overview-label {
+          font-size: 14px;
+          color: var(--text-color-3);
+          margin-bottom: 8px;
+        }
+
+        .overview-value {
+          font-size: 24px;
+          font-weight: 600;
+          margin-bottom: 12px;
+          display: flex;
+          align-items: baseline;
+        }
+      }
+    }
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+
+    .stat-card {
+      .stat-value {
+        font-size: 24px;
+        font-weight: 600;
+        margin-bottom: 16px;
+      }
+
+      .stat-detail {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        font-size: 14px;
+      }
+
+      .detail-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+
+        .detail-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 8px 12px;
+          border-radius: 6px;
+          background: var(--n-color-embedded);
+
+          &.highlight {
+            background: var(--n-color-embedded-popover);
+            font-weight: 500;
+          }
+
+          .detail-label {
+            color: var(--text-color-3);
+            font-size: 13px;
+
+            &.sub {
+              padding-left: 12px;
+              font-size: 12px;
+            }
+          }
+
+          .detail-value {
+            font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+            font-size: 13px;
+          }
+        }
+      }
+
+      .large-stat {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+
+        .large-stat-value {
+          font-size: 48px;
+          font-weight: 700;
+          color: var(--n-primary-color);
+        }
+
+        .large-stat-label {
+          font-size: 14px;
+          color: var(--text-color-3);
+          margin-top: 8px;
+        }
+      }
+    }
+  }
+
+  .network-card {
+    .network-interfaces {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+
+      .network-interface {
+        padding: 16px;
+        border-radius: 8px;
+        background: var(--n-color-embedded);
+
+        .interface-name {
+          font-size: 16px;
+          font-weight: 600;
+          margin-bottom: 12px;
+          color: var(--n-primary-color);
+        }
+
+        .interface-stats {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+
+          .interface-stat {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+
+            .stat-label {
+              color: var(--text-color-3);
+            }
+
+            .stat-value {
+              font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+.loading-container,
+.error-container,
+.empty-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .detail-container {
+    .info-grid {
+      grid-template-columns: 1fr;
+      gap: 20px;
+
+      .info-item.info-item-full {
+        grid-column: 1;
+      }
+    }
+  }
+
+  .dashboard-content {
+    .stats-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  .network-list {
+    .network-item {
+      width: 100%;
+    }
+  }
+}

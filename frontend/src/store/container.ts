@@ -234,6 +234,21 @@ export const useContainerStore = defineStore('container', () => {
     }
   }
 
+  // 方法：获取容器详情
+  const getContainerDetail = async (id: string): Promise<any> => {
+    try {
+      const data = await containerApi.getContainerDetail(id)
+      if (data.code === 0) {
+        return data.data.container
+      } else {
+        throw new Error(data.msg)
+      }
+    } catch (error) {
+      console.error('获取容器详情失败:', error)
+      throw error
+    }
+  }
+
   return {
     // 状态
     containers,
@@ -264,6 +279,7 @@ export const useContainerStore = defineStore('container', () => {
     getProjectContainers,
     isContainerUpdating,
     exportContainer,
+    getContainerDetail,
     statsWebSocket,
   }
 })

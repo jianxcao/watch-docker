@@ -12,13 +12,16 @@ export const API_ENDPOINTS = {
 
   // 容器相关
   CONTAINERS: '/containers',
+  CONTAINER_DETAIL: (id: string) => `/containers/${id}`,
   CONTAINERS_STATS: '/containers/stats',
+  CONTAINER_STATS_WS: (id: string) => `/containers/${id}/stats/ws`,
   CONTAINER_UPDATE: (id: string) => `/containers/${id}/update`,
   CONTAINER_START: (id: string) => `/containers/${id}/start`,
   CONTAINER_STOP: (id: string) => `/containers/${id}/stop`,
   CONTAINER_DELETE: (id: string) => `/containers/${id}`,
   CONTAINER_EXPORT: (id: string) => `/containers/${id}/export`,
   CONTAINER_IMPORT: '/containers/import',
+  CONTAINER_SHELL_WS: (id: string, shell: string) => `/containers/${id}/shell/ws?shell=${shell}`,
 
   // 批量操作
   BATCH_UPDATE: '/updates/run',

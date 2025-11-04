@@ -37,6 +37,7 @@ body {
       border-radius: var(--n-border-radius);
       animation: none;
     }
+
     .n-popover-arrow-wrapper .n-popover-arrow{
       background-color: color-mix(in srgb, var(--n-color) 5%, transparent);
       backdrop-filter: blur(20px) brightness(95%);
@@ -45,5 +46,10 @@ body {
   .n-dialog {
     background-color: color-mix(in srgb, var(--n-color) 30%, transparent);
     backdrop-filter: blur(20px) brightness(95%);
+  }
+  [data-theme='light'] {
+    .n-popover:not(.n-popover--raw), .n-dropdown-menu{
+      color: var(--n-color);
+    }
   }
 }

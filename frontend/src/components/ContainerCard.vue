@@ -3,6 +3,7 @@
     class="container-card"
     :data-theme="settingStore.setting.theme"
     :class="{ 'card-updating': isUpdating }"
+    @click="handleCardClick"
   >
     <!-- 状态指示条 -->
     <div class="status-bar" :class="container.running ? 'running' : 'stopped'"></div>
@@ -172,6 +173,7 @@ import {
   TimeOutline,
   TrashOutline,
   DownloadOutline,
+  InformationCircleOutline,
 } from '@vicons/ionicons5'
 import LogIcon from '@/assets/svg/log.svg?component'
 import dayjs from 'dayjs'
@@ -191,6 +193,7 @@ interface Emits {
   (e: 'delete'): void
   (e: 'export'): void
   (e: 'logs'): void
+  (e: 'detail'): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -255,6 +258,26 @@ const formatPorts = (ports: any[]): string => {
 // 下拉菜单选项
 const dropdownOptions = computed(() => [
   {
+    key: 'detail',
+    label: '查看详情',
+    icon: () =>
+      h(NIcon, null, {
+        default: () => h(InformationCircleOutline),
+      }),
+  },
+  {
+    key: 'logs',
+    label: '查看日志',
+    icon: () =>
+      h(NIcon, null, {
+        default: () => h(LogIcon),
+      }),
+  },
+  {
+    type: 'divider',
+    key: 'divider1',
+  },
+  {
     key: props.container.running ? 'stop' : 'start',
     label: props.container.running ? '停止容器' : '启动容器',
     icon: () =>
@@ -272,6 +295,10 @@ const dropdownOptions = computed(() => [
       }),
   },
   {
+    type: 'divider',
+    key: 'divider2',
+  },
+  {
     key: 'delete',
     label: '删除容器',
     icon: () =>
@@ -286,19 +313,14 @@ const dropdownOptions = computed(() => [
       ),
     disabled: props.loading,
   },
-  {
-    key: 'logs',
-    label: '查看日志',
-    icon: () =>
-      h(NIcon, null, {
-        default: () => h(LogIcon),
-      }),
-  },
 ])
 
 // 处理下拉菜单选择
 const handleMenuSelect = (key: string) => {
   switch (key) {
+    case 'detail':
+      emits('detail')
+      break
     case 'start':
       emits('start')
       break
@@ -316,6 +338,11 @@ const handleMenuSelect = (key: string) => {
       break
   }
 }
+
+// 处理卡片点击
+const handleCardClick = () => {
+  emits('detail')
+}
 </script>
 
 <style scoped lang="less">
@@ -328,9 +355,11 @@ const handleMenuSelect = (key: string) => {
   color: var(--text-color-1);
   box-shadow: var(--box-shadow-1);
   min-width: 320px;
+  cursor: pointer;
 
   &:hover {
     transform: translateY(-2px);
+    box-shadow: var(--box-shadow-2);
   }
 
   &:has(.status-bar.running) {
