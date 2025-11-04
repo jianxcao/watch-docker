@@ -31,6 +31,14 @@ export const API_ENDPOINTS = {
 
   // 配置相关
   CONFIG: '/config',
+
+  // 网络相关
+  NETWORKS: '/networks',
+  NETWORK_DETAIL: (id: string) => `/networks/${id}`,
+  NETWORK_DELETE: (id: string) => `/networks/${id}`,
+  NETWORK_PRUNE: '/networks/prune',
+  NETWORK_CONNECT: (id: string) => `/networks/${id}/connect`,
+  NETWORK_DISCONNECT: (id: string) => `/networks/${id}/disconnect`,
 } as const
 
 // 错误码常量

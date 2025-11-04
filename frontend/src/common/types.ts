@@ -189,3 +189,193 @@ export type ComposeProjectStatus =
   | 'draft'
   | 'created_stack'
   | 'unknown'
+
+// ============= Volume 相关类型 =============
+
+// Volume使用数据
+export interface VolumeUsageData {
+  size: number // 字节
+  refCount: number // 引用计数
+}
+
+// Volume信息类型
+export interface VolumeInfo {
+  name: string
+  driver: string
+  mountpoint: string
+  createdAt: string
+  labels: Record<string, string>
+  scope: string
+  options: Record<string, string>
+  status: Record<string, any>
+  usageData?: VolumeUsageData
+}
+
+// Volume列表响应
+export interface VolumeListResponse {
+  volumes: VolumeInfo[]
+  totalCount: number
+  totalSize: number
+  usedCount: number
+  unusedCount: number
+}
+
+// 容器引用信息
+export interface ContainerRef {
+  id: string
+  name: string
+  image: string
+  running: boolean
+  destination: string // 容器内挂载路径
+  mode: string // 读写模式
+}
+
+// Volume详情响应
+export interface VolumeDetailResponse {
+  volume: VolumeInfo
+  containers?: ContainerRef[] | null
+}
+
+// Volume统计信息
+export interface VolumeStats {
+  total: number
+  used: number
+  unused: number
+  totalSize: number
+  formattedTotalSize: string
+}
+
+// Volume创建请求
+export interface VolumeCreateRequest {
+  name: string
+  driver?: string
+  driverOpts?: Record<string, string>
+  labels?: Record<string, string>
+}
+
+// Volume清理响应
+export interface VolumePruneResponse {
+  volumesDeleted: string[]
+  spaceReclaimed: number
+}
+
+// ============= Network 相关类型 =============
+
+// 网络 IPAM 配置
+export interface NetworkIPAMConfig {
+  subnet?: string
+  gateway?: string
+  ipRange?: string
+  auxAddress?: Record<string, string>
+}
+
+// 网络 IPAM 信息
+export interface NetworkIPAM {
+  driver: string
+  options?: Record<string, string>
+  config?: NetworkIPAMConfig[]
+}
+
+// 网络信息类型
+export interface NetworkInfo {
+  id: string
+  name: string
+  driver: string
+  scope: string
+  internal: boolean
+  attachable: boolean
+  ingress: boolean
+  enableIPv6: boolean
+  ipam: NetworkIPAM
+  created: string
+  labels: Record<string, string>
+  options: Record<string, string>
+  containerCount: number
+}
+
+// 网络容器信息
+export interface NetworkContainer {
+  id: string
+  name: string
+  image: string
+  running: boolean
+  ipv4Address?: string
+  ipv6Address?: string
+  macAddress?: string
+  endpointId?: string
+}
+
+// 网络列表响应
+export interface NetworkListResponse {
+  networks: NetworkInfo[]
+  totalCount: number
+  usedCount: number
+  unusedCount: number
+  builtInCount: number
+  customCount: number
+}
+
+// 网络详情响应
+export interface NetworkDetailResponse {
+  network: NetworkInfo
+  containers: NetworkContainer[]
+}
+
+// 网络统计信息
+export interface NetworkStats {
+  total: number
+  used: number
+  unused: number
+  builtIn: number
+  custom: number
+}
+
+// 网络 IPAM 创建配置
+export interface NetworkIPAMConfigCreate {
+  subnet?: string
+  ipRange?: string
+  gateway?: string
+  auxAddress?: Record<string, string>
+}
+
+// 网络 IPAM 创建请求
+export interface NetworkIPAMCreateRequest {
+  driver?: string
+  config?: NetworkIPAMConfigCreate[]
+  options?: Record<string, string>
+}
+
+// 网络创建请求
+export interface NetworkCreateRequest {
+  name: string
+  driver?: string
+  scope?: string
+  internal?: boolean
+  attachable?: boolean
+  ingress?: boolean
+  enableIPv6?: boolean
+  ipam?: NetworkIPAMCreateRequest
+  options?: Record<string, string>
+  labels?: Record<string, string>
+}
+
+// 网络清理响应
+export interface NetworkPruneResponse {
+  networksDeleted: string[]
+}
+
+// 网络连接容器请求
+export interface NetworkConnectRequest {
+  container: string
+  ipv4Address?: string
+  ipv6Address?: string
+  links?: string[]
+  aliases?: string[]
+  driverOpts?: Record<string, string>
+}
+
+// 网络断开容器请求
+export interface NetworkDisconnectRequest {
+  container: string
+  force: boolean
+}

@@ -65,6 +65,38 @@ const router = createRouter({
           },
         },
         {
+          path: '/volumes',
+          name: 'volumes',
+          component: () => import('@/pages/VolumesView.vue'),
+          meta: { title: 'Volume 管理', requiresAuth: true, layoutClass: 'layout-volumes' },
+        },
+        {
+          path: '/volumes/:name',
+          name: 'volume-detail',
+          component: () => import('@/pages/VolumeDetailView.vue'),
+          meta: {
+            title: 'Volume 详情',
+            requiresAuth: true,
+            layoutClass: 'layout-volume-detail',
+          },
+        },
+        {
+          path: '/networks',
+          name: 'networks',
+          component: () => import('@/pages/NetworksView.vue'),
+          meta: { title: '网络管理', requiresAuth: true, layoutClass: 'layout-networks' },
+        },
+        {
+          path: '/networks/:id',
+          name: 'network-detail',
+          component: () => import('@/pages/NetworkDetailView.vue'),
+          meta: {
+            title: '网络详情',
+            requiresAuth: true,
+            layoutClass: 'layout-network-detail',
+          },
+        },
+        {
           path: '/settings',
           component: () => import('@/pages/SettingsView.vue'),
           meta: { title: '系统设置', requiresAuth: true, layoutClass: 'layout-settings' },

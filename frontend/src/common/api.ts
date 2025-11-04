@@ -7,6 +7,16 @@ import type {
   ContainerStatus,
   ImageInfo,
   SystemInfo,
+  VolumeListResponse,
+  VolumeDetailResponse,
+  VolumeCreateRequest,
+  VolumePruneResponse,
+  NetworkListResponse,
+  NetworkDetailResponse,
+  NetworkCreateRequest,
+  NetworkPruneResponse,
+  NetworkConnectRequest,
+  NetworkDisconnectRequest,
 } from './types'
 
 // 健康检查相关
@@ -169,6 +179,53 @@ export const twoFAApi = {
   disable: () => axios.post('/2fa/disable'),
 }
 
+// Volume 相关API
+export const volumeApi = {
+  // 获取Volume列表
+  getVolumes: () => axios.get<VolumeListResponse>('/volumes'),
+
+  // 获取Volume详情
+  getVolume: (name: string) => axios.get<VolumeDetailResponse>(`/volumes/${name}`),
+
+  // 创建Volume
+  createVolume: (data: VolumeCreateRequest) => axios.post<{ volume: any }>('/volumes', data),
+
+  // 删除Volume
+  deleteVolume: (name: string, force: boolean = false) =>
+    axios.delete<{ ok: boolean }>(`/volumes/${name}`, { params: { force } }),
+
+  // 清理未使用的Volume
+  pruneVolumes: () => axios.post<VolumePruneResponse>('/volumes/prune'),
+}
+
+// 网络相关API
+export const networkApi = {
+  // 获取网络列表
+  getNetworks: () => axios.get<NetworkListResponse>(API_ENDPOINTS.NETWORKS),
+
+  // 获取网络详情
+  getNetwork: (id: string) => axios.get<NetworkDetailResponse>(API_ENDPOINTS.NETWORK_DETAIL(id)),
+
+  // 创建网络
+  createNetwork: (data: NetworkCreateRequest) =>
+    axios.post<{ network: any }>(API_ENDPOINTS.NETWORKS, data),
+
+  // 删除网络
+  deleteNetwork: (id: string) =>
+    axios.delete<{ ok: boolean }>(API_ENDPOINTS.NETWORK_DELETE(id)),
+
+  // 清理未使用的网络
+  pruneNetworks: () => axios.post<NetworkPruneResponse>(API_ENDPOINTS.NETWORK_PRUNE),
+
+  // 连接容器到网络
+  connectContainer: (id: string, data: NetworkConnectRequest) =>
+    axios.post<{ ok: boolean }>(API_ENDPOINTS.NETWORK_CONNECT(id), data),
+
+  // 从网络断开容器
+  disconnectContainer: (id: string, data: NetworkDisconnectRequest) =>
+    axios.post<{ ok: boolean }>(API_ENDPOINTS.NETWORK_DISCONNECT(id), data),
+}
+
 // 导出所有API
 export const api = {
   health: healthApi,
@@ -178,6 +235,8 @@ export const api = {
   config: configApi,
   compose: composeApi,
   twoFA: twoFAApi,
+  volume: volumeApi,
+  network: networkApi,
 }
 
 export default api

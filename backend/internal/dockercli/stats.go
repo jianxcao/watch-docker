@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
@@ -60,7 +59,7 @@ type StatsManagerConfig struct {
 
 // DockerClientInterface Docker客户端接口，用于解耦
 type DockerClientInterface interface {
-	ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error)
+	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
 	ContainerStatsOneShot(ctx context.Context, containerID string) (container.StatsResponseReader, error)
 }
 
@@ -200,6 +199,9 @@ func (sm *StatsManager) statsMonitoringLoop(ctx context.Context) {
 
 	for {
 		select {
+		case <-ctx.Done():
+			logger.Logger.Info("信息统计监控停止")
+			return
 		case <-sm.stopChan:
 			logger.Logger.Info("信息统计监控停止")
 			return
