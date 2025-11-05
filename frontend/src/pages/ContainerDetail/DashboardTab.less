@@ -1,0 +1,496 @@
+// DashboardTab 专用样式
+@import '@/styles/mix.less';
+/* Dashboard Theme Variables */
+[data-theme='dark'] {
+  .dashboard-tab {
+    /* 背景颜色 */
+    --dashboard-bg: #000000;
+    --dashboard-card-bg: rgba(16, 24, 40, 0.8);
+    --dashboard-card-embedded-bg: rgba(30, 41, 57, 0.5);
+
+    /* 边框颜色 */
+    --dashboard-border-color: #1e2939;
+
+    /* 文字颜色 */
+    --dashboard-text-primary: #ffffff;
+    --dashboard-text-secondary: #d1d5dc;
+    --dashboard-text-tertiary: #99a1af;
+
+    /* CPU 卡片 - 蓝色主题 */
+    --dashboard-cpu-gradient: linear-gradient(
+      135deg,
+      rgba(21, 93, 252, 0.2) 0%,
+      rgba(20, 71, 230, 0.1) 100%
+    );
+    --dashboard-cpu-border: rgba(43, 127, 255, 0.3);
+    --dashboard-cpu-icon-bg: rgba(43, 127, 255, 0.2);
+    --dashboard-cpu-badge-border: rgba(81, 162, 255, 0.5);
+    --dashboard-cpu-badge-text: #8ec5ff;
+    --dashboard-cpu-icon-color: #51a2ff;
+
+    /* 内存卡片 - 紫色主题 */
+    --dashboard-memory-gradient: linear-gradient(
+      135deg,
+      rgba(152, 16, 250, 0.2) 0%,
+      rgba(130, 0, 219, 0.1) 100%
+    );
+    --dashboard-memory-border: rgba(173, 70, 255, 0.3);
+    --dashboard-memory-icon-bg: rgba(173, 70, 255, 0.2);
+    --dashboard-memory-badge-border: rgba(194, 122, 255, 0.5);
+    --dashboard-memory-badge-text: #c27aff;
+    --dashboard-memory-icon-color: #c27aff;
+
+    /* 进度条颜色 */
+    --dashboard-progress-bg: #1e2939;
+    --dashboard-progress-fill: #030213;
+
+    /* 进程数量卡片 - 绿色主题 */
+    --dashboard-process-gradient: linear-gradient(
+      135deg,
+      rgba(0, 153, 102, 0.2) 0%,
+      rgba(0, 122, 85, 0.1) 100%
+    );
+    --dashboard-process-border: rgba(0, 188, 125, 0.3);
+    --dashboard-process-icon-color: #00d492;
+
+    /* 网络接口徽章 */
+    --dashboard-interface-badge-border: rgba(0, 213, 190, 0.5);
+    --dashboard-interface-badge-text: #46ecd5;
+
+    /* 卡片悬停阴影 */
+    --dashboard-card-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+  }
+}
+
+[data-theme='light'] {
+  .dashboard-tab {
+    /* 背景颜色 */
+    --dashboard-bg: #ffffff;
+    --dashboard-card-bg: #f9fafb;
+    --dashboard-card-embedded-bg: #ffffff;
+
+    /* 边框颜色 */
+    --dashboard-border-color: #e5e7eb;
+
+    /* 文字颜色 */
+    --dashboard-text-primary: #101828;
+    --dashboard-text-secondary: #364153;
+    --dashboard-text-tertiary: #4a5565;
+
+    /* CPU 卡片 - 蓝色主题 */
+    --dashboard-cpu-gradient: linear-gradient(
+      135deg,
+      rgba(239, 246, 255, 1) 0%,
+      rgba(219, 234, 254, 0.5) 100%
+    );
+    --dashboard-cpu-border: #bedbff;
+    --dashboard-cpu-icon-bg: rgba(190, 219, 255, 0.5);
+    --dashboard-cpu-badge-border: #51a2ff;
+    --dashboard-cpu-badge-text: #1447e6;
+    --dashboard-cpu-icon-color: #155dfc;
+
+    /* 内存卡片 - 紫色主题 */
+    --dashboard-memory-gradient: linear-gradient(
+      135deg,
+      rgba(250, 245, 255, 1) 0%,
+      rgba(243, 232, 255, 0.5) 100%
+    );
+    --dashboard-memory-border: #e9d4ff;
+    --dashboard-memory-icon-bg: rgba(233, 212, 255, 0.5);
+    --dashboard-memory-badge-border: #ad46ff;
+    --dashboard-memory-badge-text: #9810fa;
+    --dashboard-memory-icon-color: #9810fa;
+
+    /* 进度条颜色 */
+    --dashboard-progress-bg: #e5e7eb;
+    --dashboard-progress-fill: #030213;
+
+    /* 进程数量卡片 - 绿色主题 */
+    --dashboard-process-gradient: linear-gradient(
+      135deg,
+      rgba(236, 253, 245, 1) 0%,
+      rgba(208, 250, 229, 0.5) 100%
+    );
+    --dashboard-process-border: #a4f4cf;
+    --dashboard-process-icon-color: #009966;
+
+    /* 网络接口徽章 */
+    --dashboard-interface-badge-border: #00bba7;
+    --dashboard-interface-badge-text: #00786f;
+
+    /* 卡片悬停阴影 */
+    --dashboard-card-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+  }
+}
+
+.dashboard-tab {
+  padding: 0;
+  background: var(--dashboard-bg);
+  height: 100%;
+  .scrollbar();
+  overflow-y: auto;
+}
+
+.dashboard-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  // 顶部资源概览卡片
+  .overview-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+
+    .overview-card {
+      border-radius: 14px;
+      border: 1px solid;
+      overflow: hidden;
+      transition: all 0.3s ease;
+
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--dashboard-card-shadow);
+      }
+
+      // CPU 卡片 - 蓝色主题
+      &.cpu-card {
+        background: var(--dashboard-cpu-gradient);
+        border-color: var(--dashboard-cpu-border);
+
+        .overview-icon {
+          background: var(--dashboard-cpu-icon-bg);
+          color: var(--dashboard-cpu-icon-color);
+        }
+
+        .overview-badge {
+          border-color: var(--dashboard-cpu-badge-border);
+          color: var(--dashboard-cpu-badge-text);
+        }
+      }
+
+      // 内存卡片 - 紫色主题
+      &.memory-card {
+        background: var(--dashboard-memory-gradient);
+        border-color: var(--dashboard-memory-border);
+
+        .overview-icon {
+          background: var(--dashboard-memory-icon-bg);
+          color: var(--dashboard-memory-icon-color);
+        }
+
+        .overview-badge {
+          border-color: var(--dashboard-memory-badge-border);
+          color: var(--dashboard-memory-badge-text);
+        }
+      }
+
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 25px 25px 0;
+        margin-bottom: 40px;
+
+        .header-left {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+
+          .overview-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+          }
+
+          .overview-title {
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 20px;
+            color: var(--dashboard-text-secondary);
+          }
+        }
+
+        .overview-badge {
+          padding: 2px 8px;
+          border-radius: 8px;
+          border: 1px solid;
+          font-size: 12px;
+          font-weight: 500;
+          line-height: 16px;
+        }
+
+        .memory-info {
+          font-size: 14px;
+          line-height: 20px;
+          color: var(--dashboard-text-tertiary);
+        }
+      }
+
+      .card-content {
+        padding: 0 25px 25px;
+
+        .overview-value {
+          font-size: 36px;
+          font-weight: 400;
+          line-height: 40px;
+          margin-bottom: 12px;
+          letter-spacing: 0.01em;
+          color: var(--dashboard-text-primary);
+        }
+
+        .overview-progress {
+          height: 8px;
+          border-radius: 16777200px;
+          overflow: hidden;
+          position: relative;
+          background: var(--dashboard-progress-bg);
+
+          .progress-fill {
+            position: relative;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--dashboard-progress-fill);
+            transition: width 0.3s ease;
+          }
+        }
+      }
+    }
+  }
+
+  // 统计卡片网格
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+
+    .stat-card {
+      border-radius: 14px;
+      border: 1px solid var(--dashboard-border-color);
+      background: var(--dashboard-card-bg);
+      padding: 24px;
+      transition: all 0.3s ease;
+
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--dashboard-card-shadow);
+      }
+
+      // 进程数量卡片特殊样式
+      &.process-card {
+        background: var(--dashboard-process-gradient);
+        border-color: var(--dashboard-process-border);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 48px;
+
+        .card-header {
+          padding: 0;
+          margin: 0;
+        }
+
+        .card-icon {
+          color: var(--dashboard-process-icon-color);
+        }
+      }
+
+      .card-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 40px;
+
+        .card-icon {
+          width: 20px;
+          height: 20px;
+          color: var(--dashboard-text-primary);
+        }
+
+        .card-title {
+          font-size: 18px;
+          font-weight: 400;
+          line-height: 28px;
+          letter-spacing: -0.02em;
+          color: var(--dashboard-text-primary);
+        }
+      }
+
+      .detail-section {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+
+        .detail-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          min-height: 20px;
+
+          .detail-label {
+            font-size: 14px;
+            line-height: 20px;
+            color: var(--dashboard-text-tertiary);
+          }
+
+          .detail-value {
+            font-size: 14px;
+            line-height: 20px;
+            font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+            color: var(--dashboard-text-primary);
+          }
+
+          &.highlight {
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: var(--dashboard-card-embedded-bg);
+            border: 1px solid var(--dashboard-border-color);
+          }
+        }
+      }
+
+      // 大数字展示（进程数量）
+      .large-stat {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+
+        .large-stat-value {
+          font-size: 60px;
+          font-weight: 400;
+          line-height: 60px;
+          letter-spacing: 0.004em;
+          color: var(--dashboard-text-primary);
+        }
+
+        .large-stat-label {
+          font-size: 14px;
+          line-height: 20px;
+          color: var(--dashboard-text-tertiary);
+          margin-top: 8px;
+        }
+      }
+    }
+  }
+
+  // 网络接口卡片
+  .network-card {
+    border-radius: 14px;
+    border: 1px solid var(--dashboard-border-color);
+    background: var(--dashboard-card-bg);
+    padding: 24px;
+    transition: all 0.3s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--dashboard-card-shadow);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 40px;
+
+      .card-icon {
+        width: 20px;
+        height: 20px;
+        color: var(--dashboard-text-primary);
+      }
+
+      .card-title {
+        font-size: 18px;
+        font-weight: 400;
+        line-height: 28px;
+        letter-spacing: -0.02em;
+        color: var(--dashboard-text-primary);
+      }
+    }
+
+    .network-interfaces {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+
+      .network-interface {
+        padding: 16px;
+        border-radius: 10px;
+        background: var(--dashboard-card-embedded-bg);
+        border: 1px solid var(--dashboard-border-color);
+        transition: all 0.3s ease;
+
+        &:hover {
+          transform: translateY(-2px);
+        }
+
+        .interface-header {
+          display: flex;
+          align-items: center;
+          margin-bottom: 12px;
+
+          .interface-badge {
+            padding: 2px 8px;
+            border-radius: 8px;
+            border: 1px solid var(--dashboard-interface-badge-border);
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 16px;
+            color: var(--dashboard-interface-badge-text);
+          }
+        }
+
+        .interface-stats {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+
+          .interface-stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            line-height: 20px;
+
+            .stat-label {
+              color: var(--dashboard-text-tertiary);
+            }
+
+            .stat-value {
+              font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+              color: var(--dashboard-text-primary);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// 响应式设计
+@media (max-width: 768px) {
+  .dashboard-content {
+    padding: 12px;
+    gap: 12px;
+
+    .overview-cards {
+      grid-template-columns: 1fr;
+    }
+
+    .stats-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .network-card {
+      .network-interfaces {
+        grid-template-columns: 1fr;
+      }
+    }
+  }
+}

@@ -297,9 +297,7 @@ const handleDelete = () => {
 
 // 处理容器点击
 const handleContainerClick = (container: ContainerRef) => {
-  console.log('jumpto', container)
-  // 这里可以跳转到容器详情页面（如果有的话）
-  // message.info(`容器 ${container.name} 详情功能待实现`)
+  router.push(`/containers/${container.id}`)
 }
 
 // 页面初始化

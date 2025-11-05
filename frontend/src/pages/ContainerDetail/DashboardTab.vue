@@ -5,7 +5,7 @@
     </div>
     <div v-else-if="loading" class="loading-container">
       <n-spin size="large" />
-      <div style="margin-top: 16px">正在加载资源数据...</div>
+      <div style="mt-4">正在加载资源数据...</div>
     </div>
     <div v-else-if="error" class="error-container">
       <n-result status="error" title="连接失败" :description="error">
@@ -15,162 +15,191 @@
       </n-result>
     </div>
     <div v-else-if="detailStats" class="dashboard-content">
-      <!-- 顶部资源概览 -->
-      <n-card title="资源仪表盘" class="overview-card">
-        <template #header-extra>
-          <n-text depth="3">实时性能指标和资源利用情况</n-text>
-        </template>
-        <div class="stats-overview">
-          <div class="overview-item">
-            <div class="overview-label">CPU使用率</div>
-            <div class="overview-value">{{ cpuPercent.toFixed(2) }}%</div>
-            <n-progress
-              type="line"
-              :percentage="cpuPercent"
-              :show-indicator="false"
-              :color="cpuPercent > 80 ? '#f5222d' : cpuPercent > 60 ? '#fa8c16' : '#52c41a'"
-            />
-          </div>
-          <div class="overview-item">
-            <div class="overview-label">内存使用率</div>
-            <div class="overview-value">
-              {{ memoryPercent.toFixed(2) }}%
-              <n-text depth="3" style="font-size: 12px; margin-left: 8px">
-                {{ formatBytes(detailStats.memory_stats.usage) }} /
-                {{ formatBytes(detailStats.memory_stats.limit) }}
-              </n-text>
+      <!-- 顶部资源概览卡片 -->
+      <div class="overview-cards">
+        <!-- CPU 使用率卡片 -->
+        <div class="overview-card cpu-card">
+          <div class="card-header">
+            <div class="header-left">
+              <div class="overview-icon">
+                <CpuUsageIcon />
+              </div>
+              <div class="overview-title">CPU使用率</div>
             </div>
-            <n-progress
-              type="line"
-              :percentage="memoryPercent"
-              :show-indicator="false"
-              :color="memoryPercent > 80 ? '#f5222d' : memoryPercent > 60 ? '#fa8c16' : '#18a058'"
-            />
+            <div class="overview-badge">实时</div>
+          </div>
+          <div class="card-content">
+            <div class="overview-value">{{ cpuPercent.toFixed(2) }}%</div>
+            <div class="overview-progress">
+              <div class="progress-fill" :style="{ width: cpuPercent + '%' }"></div>
+            </div>
           </div>
         </div>
-      </n-card>
+
+        <!-- 内存使用率卡片 -->
+        <div class="overview-card memory-card">
+          <div class="card-header">
+            <div class="header-left">
+              <div class="overview-icon">
+                <MemoryUsageIcon />
+              </div>
+              <div class="overview-title">内存使用率</div>
+            </div>
+            <div class="memory-info">
+              {{ formatBytes(detailStats.memory_stats.usage) }} /
+              {{ formatBytes(detailStats.memory_stats.limit) }}
+            </div>
+          </div>
+          <div class="card-content">
+            <div class="overview-value">{{ memoryPercent.toFixed(2) }}%</div>
+            <div class="overview-progress">
+              <div class="progress-fill" :style="{ width: memoryPercent + '%' }"></div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div class="stats-grid">
         <!-- CPU 详细信息 -->
-        <n-card title="CPU 详细信息" class="stat-card">
+        <div class="stat-card">
+          <div class="card-header">
+            <CpuUsageIcon class="card-icon" />
+            <div class="card-title">CPU 详细信息</div>
+          </div>
           <div class="detail-section">
             <div class="detail-item">
-              <span class="detail-label">CPU 限制:</span>
+              <span class="detail-label">CPU 型号</span>
               <span class="detail-value">{{ detailStats.cpu_stats.online_cpus }} CPU</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">系统:</span>
+              <span class="detail-label">系统</span>
               <span class="detail-value">{{
                 formatDuration(detailStats.cpu_stats.system_cpu_usage / 1000000000)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">用户模式:</span>
+              <span class="detail-label">用户模式</span>
               <span class="detail-value">{{
                 formatDuration(detailStats.cpu_stats.cpu_usage.usage_in_usermode / 1000000000)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">内核模式:</span>
+              <span class="detail-label">空闲模式</span>
               <span class="detail-value">{{
                 formatDuration(detailStats.cpu_stats.cpu_usage.usage_in_kernelmode / 1000000000)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">CPU限流周期:</span>
+              <span class="detail-label">CPU线程数(中)</span>
               <span class="detail-value">{{ detailStats.cpu_stats.throttling_data.periods }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">CPU限流时间:</span>
+              <span class="detail-label">CPU线程数(外)</span>
               <span class="detail-value">{{
                 formatDuration(detailStats.cpu_stats.throttling_data.throttled_time / 1000000000)
               }}</span>
             </div>
           </div>
-        </n-card>
+        </div>
 
         <!-- 内存详细信息 -->
-        <n-card title="内存详细信息" class="stat-card">
+        <div class="stat-card">
+          <div class="card-header">
+            <MemoryUsageIcon class="card-icon" />
+            <div class="card-title">内存详细信息</div>
+          </div>
           <div class="detail-section">
             <div class="detail-item">
-              <span class="detail-label">使用情况:</span>
+              <span class="detail-label">使用中</span>
               <span class="detail-value">{{ formatBytes(detailStats.memory_stats.usage) }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">限制:</span>
+              <span class="detail-label">空闲</span>
               <span class="detail-value">{{ formatBytes(detailStats.memory_stats.limit) }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">缓存:</span>
+              <span class="detail-label">缓存</span>
               <span class="detail-value">{{
                 formatBytes(detailStats.memory_stats.stats.cache || 0)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">活动文件:</span>
+              <span class="detail-label">活跃文件</span>
               <span class="detail-value">{{
                 formatBytes(detailStats.memory_stats.stats.active_file || 0)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">非活动文件:</span>
+              <span class="detail-label">非活跃文件</span>
               <span class="detail-value">{{
                 formatBytes(detailStats.memory_stats.stats.inactive_file || 0)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">RSS:</span>
+              <span class="detail-label">页进</span>
               <span class="detail-value">{{
                 formatBytes(detailStats.memory_stats.stats.anon || 0)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">页面故障:</span>
+              <span class="detail-label">主要缺页</span>
               <span class="detail-value">{{
                 formatNumber(detailStats.memory_stats.stats.pgfault || 0)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">主要故障:</span>
+              <span class="detail-label">次要缺页</span>
               <span class="detail-value">{{
                 formatNumber(detailStats.memory_stats.stats.pgmajfault || 0)
               }}</span>
             </div>
           </div>
-        </n-card>
+        </div>
 
-        <!-- 进程数量 -->
-        <n-card title="进程数量" class="stat-card">
+        <!-- 连接数量 -->
+        <div class="stat-card process-card">
+          <div class="card-header">
+            <ConnectionIcon class="card-icon" />
+            <div class="card-title">连接数量</div>
+          </div>
           <div class="large-stat">
             <div class="large-stat-value">{{ detailStats.pids_stats.current }}</div>
-            <div class="large-stat-label">运行中</div>
+            <div class="large-stat-label">当前连接</div>
           </div>
-        </n-card>
+        </div>
 
         <!-- 网络 I/O -->
-        <n-card title="网络 I/O" class="stat-card">
+        <div class="stat-card">
+          <div class="card-header">
+            <NetworkIOIcon class="card-icon" />
+            <div class="card-title">网络 I/O</div>
+          </div>
           <div class="detail-section">
             <div class="detail-item highlight">
-              <span class="detail-label">已接收</span>
+              <span class="detail-label">已接受</span>
               <span class="detail-value">{{ formatBytes(totalNetworkRx) }}</span>
             </div>
-            <div class="detail-item">
-              <span class="detail-label sub">数据包</span>
-              <span class="detail-value">{{ formatNumber(totalNetworkRxPackets) }} 数据包</span>
+            <div class="detail-item highlight">
+              <span class="detail-label">数据包</span>
+              <span class="detail-value">{{ formatNumber(totalNetworkRxPackets) }} </span>
             </div>
             <div class="detail-item highlight">
               <span class="detail-label">已传输</span>
               <span class="detail-value">{{ formatBytes(totalNetworkTx) }}</span>
             </div>
-            <div class="detail-item">
-              <span class="detail-label sub">数据包</span>
-              <span class="detail-value">{{ formatNumber(totalNetworkTxPackets) }} 数据包</span>
+            <div class="detail-item highlight">
+              <span class="detail-label">数据包</span>
+              <span class="detail-value">{{ formatNumber(totalNetworkTxPackets) }} </span>
             </div>
           </div>
-        </n-card>
+        </div>
 
-        <!-- 块 I/O -->
-        <n-card title="块 I/O" class="stat-card">
+        <!-- 磁盘 I/O -->
+        <div class="stat-card">
+          <div class="card-header">
+            <DiskIOIcon class="card-icon" />
+            <div class="card-title">磁盘 I/O</div>
+          </div>
           <div class="detail-section">
             <div class="detail-item highlight">
               <span class="detail-label">读取</span>
@@ -181,22 +210,24 @@
               <span class="detail-value">{{ formatBytes(blockWrite) }}</span>
             </div>
           </div>
-        </n-card>
+        </div>
       </div>
 
       <!-- 网络接口 -->
-      <n-card
-        v-if="Object.keys(detailStats.networks).length > 0"
-        title="网络接口"
-        class="network-card"
-      >
+      <div v-if="Object.keys(detailStats.networks).length > 0" class="network-card">
+        <div class="card-header">
+          <NetworkInterfaceIcon class="card-icon" />
+          <div class="card-title">网络接口</div>
+        </div>
         <div class="network-interfaces">
           <div
             v-for="(network, name) in detailStats.networks"
             :key="name"
             class="network-interface"
           >
-            <div class="interface-name">{{ name }}</div>
+            <div class="interface-header">
+              <div class="interface-badge">{{ name }}</div>
+            </div>
             <div class="interface-stats">
               <div class="interface-stat">
                 <span class="stat-label">RX:</span>
@@ -209,8 +240,9 @@
             </div>
           </div>
         </div>
-      </n-card>
+      </div>
     </div>
+
     <div v-else-if="!isConnected" class="error-container">
       <n-result status="info" title="链接断开">
         <template #footer>
@@ -228,6 +260,15 @@ import { useSettingStore } from '@/store/setting'
 import { useWebSocket } from '@vueuse/core'
 import { useMessage } from 'naive-ui'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+
+// 导入 SVG 图标
+import CpuUsageIcon from '@/assets/svg/cpuUsage.svg?component'
+import MemoryUsageIcon from '@/assets/svg/memoryUsage.svg?component'
+import ConnectionIcon from '@/assets/svg/connection.svg?component'
+import NetworkIOIcon from '@/assets/svg/networkIO.svg?component'
+import DiskIOIcon from '@/assets/svg/diskIO.svg?component'
+import NetworkInterfaceIcon from '@/assets/svg/networkInterface.svg?component'
+import { formatBytes, formatDuration, formatNumber } from '@/common/utils'
 
 interface Props {
   isRunning: boolean
@@ -444,50 +485,6 @@ const blockWrite = computed(() => {
     .reduce((sum, item) => sum + item.value, 0)
 })
 
-// 格式化字节
-const formatBytes = (bytes: number) => {
-  if (bytes === 0) {
-    return '0 B'
-  }
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i]
-}
-
-// 格式化数字
-const formatNumber = (num: number) => {
-  return num.toLocaleString()
-}
-
-// 格式化时长（秒）
-const formatDuration = (seconds: number) => {
-  if (seconds < 1) {
-    return seconds.toFixed(2) + 's'
-  }
-
-  const days = Math.floor(seconds / 86400)
-  const hours = Math.floor((seconds % 86400) / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const secs = Math.floor(seconds % 60)
-
-  const parts = []
-  if (days > 0) {
-    parts.push(`${days}天`)
-  }
-  if (hours > 0) {
-    parts.push(`${hours}小时`)
-  }
-  if (minutes > 0) {
-    parts.push(`${minutes}分`)
-  }
-  if (secs > 0 || parts.length === 0) {
-    parts.push(`${secs}秒`)
-  }
-
-  return parts.join(' ')
-}
-
 // 监听运行状态变化
 watch(
   () => props.isRunning,
@@ -511,5 +508,5 @@ onUnmounted(() => {
 </script>
 
 <style scoped lang="less">
-@import './styles.less';
+@import './DashboardTab.less';
 </style>

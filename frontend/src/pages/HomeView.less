@@ -1,0 +1,543 @@
+// HomeView 专用样式
+@import '@/styles/mix.less';
+
+/* HomeView Theme Variables */
+[data-theme='dark'] {
+  .home-page {
+    /* 背景颜色 */
+    --homeview-bg: linear-gradient(135deg, #0a0a0a 0%, #0a0a0a 50%, rgba(38, 38, 38, 0.2) 100%);
+
+    /* 卡片背景 */
+    --homeview-card-bg: rgba(10, 10, 10, 0.5);
+
+    /* 边框颜色 */
+    --homeview-border-color: rgba(38, 38, 38, 0.5);
+
+    /* 文字颜色 */
+    --homeview-text-primary: rgba(250, 250, 250, 0.9);
+    --homeview-text-secondary: #a1a1a1;
+
+    /* 图标背景 */
+    --homeview-icon-bg: rgba(250, 250, 250, 0.1);
+
+    /* 容器状态卡片 - 蓝色主题 */
+    --homeview-container-gradient: linear-gradient(
+      135deg,
+      rgba(43, 127, 255, 0.1) 0%,
+      rgba(0, 184, 219, 0.1) 100%
+    );
+    --homeview-container-border: rgba(38, 38, 38, 0.5);
+
+    /* 镜像信息卡片 - 紫色主题 */
+    --homeview-image-gradient: linear-gradient(
+      135deg,
+      rgba(173, 70, 255, 0.1) 0%,
+      rgba(246, 51, 154, 0.1) 100%
+    );
+    --homeview-image-border: rgba(38, 38, 38, 0.5);
+
+    /* 系统信息卡片 - 绿色主题 */
+    --homeview-system-gradient: linear-gradient(
+      135deg,
+      rgba(0, 188, 125, 0.1) 0%,
+      rgba(0, 187, 167, 0.1) 100%
+    );
+    --homeview-system-border: rgba(38, 38, 38, 0.5);
+
+    /* 按钮样式 */
+    --homeview-button-warning-bg: linear-gradient(
+      90deg,
+      rgba(254, 154, 0, 0.1) 0%,
+      rgba(255, 105, 0, 0.1) 100%
+    );
+    --homeview-button-warning-border: #262626;
+    --homeview-button-primary-bg: linear-gradient(
+      90deg,
+      rgba(0, 188, 125, 1) 0%,
+      rgba(0, 187, 167, 1) 100%
+    );
+    --homeview-button-primary-text: #171717;
+
+    /* 容器列表 */
+    --homeview-list-item-bg: linear-gradient(
+      90deg,
+      rgba(10, 10, 10, 1) 0%,
+      rgba(10, 10, 10, 0.5) 100%
+    );
+
+    /* Badge 颜色 */
+    --homeview-badge-success-bg: #00c950;
+    --homeview-badge-success-text: #ffffff;
+    --homeview-badge-success-border: transparent;
+    --homeview-badge-stopped-bg: transparent;
+    --homeview-badge-stopped-text: #6a7282;
+    --homeview-badge-stopped-border: #6a7282;
+
+    /* 状态图标背景 */
+    --homeview-icon-success-bg: rgba(0, 201, 80, 0.1);
+    --homeview-icon-stopped-bg: rgba(106, 114, 130, 0.1);
+
+    /* 卡片悬停阴影 */
+    --homeview-card-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+  }
+}
+
+[data-theme='light'] {
+  .home-page {
+    /* 背景颜色 */
+    --homeview-bg: linear-gradient(135deg, #ffffff 0%, #ffffff 50%, rgba(236, 236, 240, 0.2) 100%);
+
+    /* 卡片背景 */
+    --homeview-card-bg: rgba(255, 255, 255, 0.5);
+
+    /* 边框颜色 */
+    --homeview-border-color: rgba(0, 0, 0, 0.05);
+
+    /* 文字颜色 */
+    --homeview-text-primary: rgba(10, 10, 10, 0.9);
+    --homeview-text-secondary: #717182;
+
+    /* 图标背景 */
+    --homeview-icon-bg: rgba(3, 2, 19, 0.1);
+
+    /* 容器状态卡片 - 蓝色主题 */
+    --homeview-container-gradient: linear-gradient(
+      135deg,
+      rgba(43, 127, 255, 0.1) 0%,
+      rgba(0, 184, 219, 0.1) 100%
+    );
+    --homeview-container-border: rgba(0, 0, 0, 0.05);
+
+    /* 镜像信息卡片 - 紫色主题 */
+    --homeview-image-gradient: linear-gradient(
+      135deg,
+      rgba(173, 70, 255, 0.1) 0%,
+      rgba(246, 51, 154, 0.1) 100%
+    );
+    --homeview-image-border: rgba(0, 0, 0, 0.05);
+
+    /* 系统信息卡片 - 绿色主题 */
+    --homeview-system-gradient: linear-gradient(
+      135deg,
+      rgba(0, 188, 125, 0.1) 0%,
+      rgba(0, 187, 167, 0.1) 100%
+    );
+    --homeview-system-border: rgba(0, 0, 0, 0.05);
+
+    /* 按钮样式 */
+    --homeview-button-warning-bg: linear-gradient(
+      90deg,
+      rgba(254, 154, 0, 0.1) 0%,
+      rgba(255, 105, 0, 0.1) 100%
+    );
+    --homeview-button-warning-border: rgba(254, 154, 0, 0.3);
+    --homeview-button-primary-bg: linear-gradient(
+      90deg,
+      rgba(0, 188, 125, 1) 0%,
+      rgba(0, 187, 167, 1) 100%
+    );
+    --homeview-button-primary-text: #ffffff;
+
+    /* 容器列表 */
+    --homeview-list-item-bg: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 1) 0%,
+      rgba(255, 255, 255, 0.5) 100%
+    );
+
+    /* Badge 颜色 */
+    --homeview-badge-success-bg: #00c950;
+    --homeview-badge-success-text: #ffffff;
+    --homeview-badge-success-border: transparent;
+    --homeview-badge-stopped-bg: transparent;
+    --homeview-badge-stopped-text: #6a7282;
+    --homeview-badge-stopped-border: #6a7282;
+
+    /* 状态图标背景 */
+    --homeview-icon-success-bg: rgba(0, 201, 80, 0.1);
+    --homeview-icon-stopped-bg: rgba(106, 114, 130, 0.1);
+
+    /* 卡片悬停阴影 */
+    --homeview-card-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+  }
+}
+
+.home-page {
+  min-height: 100vh;
+  background: var(--homeview-bg);
+  padding: 16px;
+
+  /* 统计卡片网格 */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+
+    .stat-card {
+      border-radius: 14px;
+      border: 1px solid var(--homeview-border-color);
+      padding: 24px;
+      transition: all 0.3s ease;
+      box-shadow:
+        0px 4px 6px -4px rgba(0, 0, 0, 0.1),
+        0px 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--homeview-card-shadow);
+      }
+
+      /* 容器状态卡片 */
+      &.container-card {
+        background: var(--homeview-container-gradient);
+        border-color: var(--homeview-container-border);
+      }
+
+      /* 镜像信息卡片 */
+      &.image-card {
+        background: var(--homeview-image-gradient);
+        border-color: var(--homeview-image-border);
+      }
+
+      /* 系统信息卡片 */
+      &.system-card {
+        background: var(--homeview-system-gradient);
+        border-color: var(--homeview-system-border);
+      }
+
+      .card-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 42px;
+
+        .icon-container {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          background: var(--homeview-icon-bg);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 8px;
+
+          :deep(svg) {
+            width: 20px;
+            height: 20px;
+          }
+        }
+
+        .card-title {
+          font-size: 16px;
+          font-weight: 400;
+          line-height: 1em;
+          color: var(--homeview-text-primary);
+        }
+      }
+
+      .card-content {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+
+        .stat-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+
+          .stat-label {
+            font-size: 14px;
+            line-height: 1.4285714286em;
+            color: var(--homeview-text-secondary);
+          }
+
+          .stat-value {
+            font-size: 16px;
+            line-height: 1.5em;
+            letter-spacing: -0.01953125em;
+            color: var(--homeview-text-primary);
+
+            &.value-blue {
+              color: #2b7fff;
+            }
+
+            &.value-green {
+              color: #00c950;
+            }
+
+            &.value-gray {
+              color: #6a7282;
+            }
+
+            &.value-orange {
+              color: #ff6900;
+            }
+
+            &.value-purple {
+              color: #ad46ff;
+            }
+
+            &.value-pink {
+              color: #f6339a;
+            }
+
+            &.value-teal {
+              color: #00bc7d;
+            }
+          }
+        }
+
+        .system-badge {
+          padding: 2px 8px;
+          border-radius: 8px;
+          border: 1px solid #00c950;
+          font-size: 12px;
+          font-weight: 500;
+          line-height: 1.3333333333em;
+          color: #00c950;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: fit-content;
+        }
+      }
+    }
+  }
+
+  /* 快速操作卡片 */
+  .quick-actions {
+    margin-bottom: 24px;
+    border-radius: 14px;
+    border: 1px solid var(--homeview-border-color);
+    background: var(--homeview-card-bg);
+    padding: 24px;
+    box-shadow:
+      0px 4px 6px -4px rgba(0, 0, 0, 0.1),
+      0px 10px 15px -3px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--homeview-card-shadow);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 30px;
+
+      .header-icon {
+        width: 20px;
+        height: 20px;
+      }
+
+      .card-title {
+        font-size: 16px;
+        font-weight: 400;
+        line-height: 1em;
+        letter-spacing: -0.01953125em;
+        color: var(--homeview-text-primary);
+      }
+    }
+
+    .actions-content {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+
+      :deep(.n-button) {
+        border-radius: 8px;
+        height: 36px;
+        padding: 0 16px;
+
+        &.action-warning {
+          background: var(--homeview-button-warning-bg);
+          border: 1px solid var(--homeview-button-warning-border);
+          color: var(--homeview-text-primary);
+        }
+
+        &.action-primary {
+          background: var(--homeview-button-primary-bg);
+          border: none;
+          color: var(--homeview-button-primary-text);
+          box-shadow:
+            0px 4px 6px -4px rgba(0, 188, 125, 0.2),
+            0px 10px 15px -3px rgba(0, 188, 125, 0.2);
+        }
+      }
+    }
+  }
+
+  /* 最近容器列表卡片 */
+  .recent-containers {
+    border-radius: 14px;
+    border: 1px solid var(--homeview-border-color);
+    background: var(--homeview-card-bg);
+    padding: 24px;
+    box-shadow:
+      0px 4px 6px -4px rgba(0, 0, 0, 0.1),
+      0px 10px 15px -3px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--homeview-card-shadow);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 30px;
+
+      .header-icon {
+        width: 20px;
+        height: 20px;
+      }
+
+      .card-title {
+        font-size: 16px;
+        font-weight: 400;
+        line-height: 1em;
+        letter-spacing: -0.01953125em;
+        color: var(--homeview-text-primary);
+      }
+    }
+
+    .container-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+
+        .container-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 0 16px;
+          height: 60px;
+          border-radius: 10px;
+          border: 1px solid var(--homeview-border-color);
+          background: var(--homeview-list-item-bg);
+          transition: all 0.3s ease;
+          cursor: pointer;
+
+          &:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--homeview-card-shadow);
+          }
+
+        .item-left {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          flex: 1;
+          min-width: 0;
+
+          .container-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            padding: 8px;
+
+            &.status-running {
+              background: var(--homeview-icon-success-bg);
+            }
+
+            &.status-stopped {
+              background: var(--homeview-icon-stopped-bg);
+            }
+
+            :deep(svg) {
+              width: 20px;
+              height: 20px;
+            }
+          }
+
+          .container-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: 1;
+            min-width: 0;
+
+            .container-name {
+              font-size: 16px;
+              line-height: 1.5em;
+              letter-spacing: -0.01953125em;
+              color: var(--homeview-text-primary);
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+
+            .container-image {
+              font-size: 14px;
+              line-height: 1.4285714286em;
+              letter-spacing: -0.0107421875em;
+              color: var(--homeview-text-secondary);
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+          }
+        }
+
+        .item-right {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          flex-shrink: 0;
+
+          .container-badge {
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 1.3333333333em;
+            white-space: nowrap;
+
+            &.badge-running {
+              background: var(--homeview-badge-success-bg);
+              color: var(--homeview-badge-success-text);
+              border: 1px solid var(--homeview-badge-success-border);
+            }
+
+            &.badge-stopped {
+              background: var(--homeview-badge-stopped-bg);
+              color: var(--homeview-badge-stopped-text);
+              border: 1px solid var(--homeview-badge-stopped-border);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// 响应式调整
+@media (max-width: 768px) {
+  .home-page {
+    padding: 12px;
+
+    .stats-grid {
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .quick-actions {
+      .actions-content {
+        flex-direction: column;
+
+        :deep(.n-button) {
+          width: 100%;
+        }
+      }
+    }
+  }
+}
