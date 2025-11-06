@@ -3,6 +3,7 @@ package wsstream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/config"
@@ -97,7 +98,7 @@ func (s *ContainerStatsSource) sendStats(ctx context.Context, messageChan chan s
 
 	// 使用scanner获取完整的容器状态信息
 	containerStatuses, err := s.scanner.ScanOnce(ctx, cfg.Docker.IncludeStopped, cfg.Scan.Concurrency, true, false)
-	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		logger.Logger.Error("获取容器状态失败", zap.Error(err))
 		return err
 	}
