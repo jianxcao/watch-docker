@@ -34,10 +34,30 @@ func (c *Client) ScanProjects(ctx context.Context) []ComposeProject {
 	if appPath == "" {
 		return projects
 	}
+
+	const maxDepth = 2 // 最大遍历深度
+
 	err := filepath.Walk(appPath, func(curPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			logger.Logger.Error("扫描项目失败", logger.ZapErr(err))
 			return nil // 忽略错误，继续扫描
+		}
+
+		// 计算当前路径相对于 appPath 的深度
+		relPath, err := filepath.Rel(appPath, curPath)
+		if err != nil {
+			return nil
+		}
+
+		// 计算深度（根目录为 0）
+		depth := 0
+		if relPath != "." {
+			depth = len(strings.Split(relPath, string(os.PathSeparator)))
+		}
+
+		// 如果是目录且深度已达到限制，跳过该目录
+		if info.IsDir() && depth >= maxDepth {
+			return filepath.SkipDir
 		}
 
 		// 查找 compose 文件

@@ -139,10 +139,10 @@ func NewStreamHub[T MessageType](source StreamSource[T], manager *StreamManager[
 func (h *StreamHub[T]) Run() {
 	defer func() {
 		close(h.done)
-		logger.Logger.Info("StreamHub 退出", zap.String("key", h.key))
+		logger.Logger.Debug("StreamHub 退出", zap.String("key", h.key))
 	}()
 
-	logger.Logger.Info("StreamHub 启动", zap.String("key", h.key))
+	logger.Logger.Debug("StreamHub 启动", zap.String("key", h.key))
 
 	for {
 		select {
@@ -152,7 +152,7 @@ func (h *StreamHub[T]) Run() {
 			clientCount := len(h.clients)
 			h.mu.Unlock()
 
-			logger.Logger.Info("客户端已注册",
+			logger.Logger.Debug("客户端已注册",
 				zap.String("key", h.key),
 				zap.String("clientId", client.id),
 				zap.Int("totalClients", clientCount))
@@ -171,14 +171,14 @@ func (h *StreamHub[T]) Run() {
 			clientCount := len(h.clients)
 			h.mu.Unlock()
 
-			logger.Logger.Info("客户端已注销",
+			logger.Logger.Debug("客户端已注销",
 				zap.String("key", h.key),
 				zap.String("clientId", client.id),
 				zap.Int("remainingClients", clientCount))
 
 			// 如果没有客户端了，停止数据源并通知管理器清理
 			if clientCount == 0 {
-				logger.Logger.Info("所有客户端已断开，停止数据源",
+				logger.Logger.Debug("所有客户端已断开，停止数据源",
 					zap.String("key", h.key))
 				h.stopStreamSource()
 				// 通知管理器移除此 Hub
@@ -190,7 +190,7 @@ func (h *StreamHub[T]) Run() {
 
 		case <-h.ctx.Done():
 			// 外部取消，关闭所有客户端
-			logger.Logger.Info("StreamHub 被取消", zap.String("key", h.key))
+			logger.Logger.Debug("StreamHub 被取消", zap.String("key", h.key))
 			h.mu.Lock()
 			for client := range h.clients {
 				close(client.send)
@@ -214,7 +214,7 @@ func (h *StreamHub[T]) startStreamSource() {
 	h.sourceStarted = true
 	h.mu.Unlock()
 
-	logger.Logger.Info("启动数据源", zap.String("key", h.key))
+	logger.Logger.Debug("启动数据源", zap.String("key", h.key))
 
 	reader, err := h.source.Start(h.ctx)
 	if err != nil {
@@ -230,14 +230,14 @@ func (h *StreamHub[T]) startStreamSource() {
 	for {
 		select {
 		case <-h.ctx.Done():
-			logger.Logger.Info("数据源读取被取消", zap.String("key", h.key))
+			logger.Logger.Debug("数据源读取被取消", zap.String("key", h.key))
 			return
 		default:
 			message, err := reader.Read(h.ctx)
 			if err != nil {
 				// 检查是否是正常的关闭错误
 				if isNormalCloseError(err) {
-					logger.Logger.Info("数据源读取被正常关闭",
+					logger.Logger.Debug("数据源读取被正常关闭",
 						zap.String("key", h.key),
 						zap.String("reason", err.Error()))
 					h.closeAllClients()
@@ -246,7 +246,7 @@ func (h *StreamHub[T]) startStreamSource() {
 
 				// EOF 是数据流正常结束
 				if err == io.EOF {
-					logger.Logger.Info("数据源已结束",
+					logger.Logger.Debug("数据源已结束",
 						zap.String("key", h.key))
 				} else {
 					// 其他错误才是真正的错误
@@ -274,7 +274,7 @@ func (h *StreamHub[T]) stopStreamSource() {
 	}
 	h.mu.Unlock()
 
-	logger.Logger.Info("停止数据源", zap.String("key", h.key))
+	logger.Logger.Debug("停止数据源", zap.String("key", h.key))
 
 	// 取消上下文会停止数据源的读取
 	h.cancel()
@@ -341,7 +341,7 @@ func (h *StreamHub[T]) closeAllClients() {
 	}
 	h.mu.Unlock()
 
-	logger.Logger.Info("关闭所有客户端连接",
+	logger.Logger.Debug("关闭所有客户端连接",
 		zap.String("key", h.key),
 		zap.Int("clientCount", clientCount))
 

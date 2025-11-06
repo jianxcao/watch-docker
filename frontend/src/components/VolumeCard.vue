@@ -23,8 +23,10 @@
           </n-tooltip>
           <div class="volume-metadata">
             <div class="metadata-item">
-              <CpuIcon />
-              <span class="metadata-label">驱动:</span>
+              <n-icon size="14">
+                <CpuIcon />
+              </n-icon>
+              <span class="metadata-label whitespace-nowrap">驱动:</span>
               <n-tag round :type="isUsed ? 'success' : 'default'" size="small" :bordered="true">
                 {{ volume.driver }}
               </n-tag>

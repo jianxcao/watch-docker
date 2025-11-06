@@ -81,7 +81,7 @@ func (s *ContainerDetailStatsSource) readStatsStream(ctx context.Context, reader
 			// 解码一条统计数据
 			var stats map[string]interface{}
 			if err := decoder.Decode(&stats); err != nil {
-				if err == io.EOF {
+				if err == io.EOF || ctx.Err() != nil {
 					logger.Logger.Info("容器详细统计流结束", zap.String("containerID", s.containerID))
 					return
 				}

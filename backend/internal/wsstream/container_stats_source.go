@@ -66,7 +66,7 @@ func (s *ContainerStatsSource) pushStats(ctx context.Context, messageChan chan s
 		close(messageChan)
 		// 通知 Docker 客户端连接已断开
 		s.docker.RemoveStatsConnection()
-		logger.Logger.Info("容器统计数据流已停止")
+		logger.Logger.Debug("容器统计数据流已停止")
 	}()
 
 	ticker := time.NewTicker(s.interval)
@@ -79,7 +79,7 @@ func (s *ContainerStatsSource) pushStats(ctx context.Context, messageChan chan s
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Logger.Info("容器统计数据流被取消")
+			logger.Logger.Debug("容器统计数据流被取消")
 			return
 		case <-ticker.C:
 			if err := s.sendStats(ctx, messageChan); err != nil {
@@ -97,7 +97,7 @@ func (s *ContainerStatsSource) sendStats(ctx context.Context, messageChan chan s
 
 	// 使用scanner获取完整的容器状态信息
 	containerStatuses, err := s.scanner.ScanOnce(ctx, cfg.Docker.IncludeStopped, cfg.Scan.Concurrency, true, false)
-	if err != nil {
+	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
 		logger.Logger.Error("获取容器状态失败", zap.Error(err))
 		return err
 	}

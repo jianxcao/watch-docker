@@ -211,7 +211,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /volume1/watch-docker:/config
+      - ./:/config
       # 放置 docker yaml文件的目录，必须左右 2 侧一样
       - /volume1/docker:/volume1/docker
       - /var/run/docker.sock:/var/run/docker.sock:ro

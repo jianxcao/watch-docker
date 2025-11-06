@@ -200,10 +200,10 @@ func (sm *StatsManager) statsMonitoringLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Logger.Info("信息统计监控停止")
+			logger.Logger.Debug("信息统计监控停止")
 			return
 		case <-sm.stopChan:
-			logger.Logger.Info("信息统计监控停止")
+			logger.Logger.Debug("信息统计监控停止")
 			return
 		case <-ticker.C:
 			sm.collectAllContainerStats(ctx)
@@ -439,11 +439,11 @@ func (sm *StatsManager) cleanupStaleStats(currentContainerIDs map[string]bool) {
 // AddConnection 添加 WebSocket 连接，如果是第一个连接则启动统计监控
 func (sm *StatsManager) AddConnection(ctx context.Context) {
 	count := atomic.AddInt32(&sm.connectionCount, 1)
-	logger.Logger.Info("WebSocket 连接已添加，当前连接数:", zap.Int32("count", count))
+	logger.Logger.Debug("WebSocket 连接已添加，当前连接数:", zap.Int32("count", count))
 
 	// 如果是第一个连接，启动统计监控
 	if count == 1 {
-		logger.Logger.Info("启动容器统计监控（首个连接）")
+		logger.Logger.Debug("启动容器统计监控（首个连接）")
 		sm.StartMonitoring(ctx)
 	}
 }
@@ -451,11 +451,11 @@ func (sm *StatsManager) AddConnection(ctx context.Context) {
 // RemoveConnection 移除 WebSocket 连接，如果没有连接则停止统计监控
 func (sm *StatsManager) RemoveConnection() {
 	count := atomic.AddInt32(&sm.connectionCount, -1)
-	logger.Logger.Info("WebSocket 连接已移除，当前连接数:", zap.Int32("count", count))
+	logger.Logger.Debug("WebSocket 连接已移除，当前连接数:", zap.Int32("count", count))
 
 	// 如果没有连接了，停止统计监控
 	if count == 0 {
-		logger.Logger.Info("停止容器统计监控（无连接）")
+		logger.Logger.Debug("停止容器统计监控（无连接）")
 		sm.StopMonitoring()
 	}
 }

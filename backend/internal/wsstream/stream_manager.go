@@ -62,7 +62,7 @@ func (m *StreamManager[T]) GetOrCreateHub(key string, sourceFactory func() Strea
 	// 启动 Hub
 	go hub.Run()
 
-	logger.Logger.Info("创建新的 StreamHub", zap.String("key", key))
+	logger.Logger.Debug("创建新的 StreamHub", zap.String("key", key))
 	return hub
 }
 
@@ -73,7 +73,7 @@ func (m *StreamManager[T]) RemoveHub(key string) {
 
 	if hub, exists := m.hubs[key]; exists {
 		delete(m.hubs, key)
-		logger.Logger.Info("移除 StreamHub", zap.String("key", key))
+		logger.Logger.Debug("移除 StreamHub", zap.String("key", key))
 		// 不需要调用 hub.Close()，因为 Hub 已经在自己的 Run() 中处理了清理
 		_ = hub
 	}
@@ -94,7 +94,7 @@ func (m *StreamManager[T]) StartHub(conn *websocket.Conn, key string, sourceFact
 	// 创建客户端
 	client := NewClient(conn, hub, clientID)
 
-	logger.Logger.Info("新的 WebSocket 连接",
+	logger.Logger.Debug("新的 WebSocket 连接",
 		zap.String("key", key),
 		zap.String("clientId", clientID))
 
@@ -130,10 +130,10 @@ func (m *StreamManager[T]) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	logger.Logger.Info("关闭 StreamManager", zap.Int("hubCount", len(m.hubs)))
+	logger.Logger.Debug("关闭 StreamManager", zap.Int("hubCount", len(m.hubs)))
 
-	for key, hub := range m.hubs {
-		logger.Logger.Info("关闭 StreamHub", zap.String("key", key))
+	for _, hub := range m.hubs {
+		// logger.Logger.Info("关闭 StreamHub", zap.String("key", key))
 		hub.Close()
 	}
 

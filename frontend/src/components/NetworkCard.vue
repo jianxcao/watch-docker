@@ -41,8 +41,10 @@
       <!-- 网络元数据 -->
       <div class="network-metadata">
         <div class="metadata-item">
-          <CpuIcon />
-          <span class="metadata-label">驱动:</span>
+          <n-icon size="14">
+            <CpuIcon />
+          </n-icon>
+          <span class="metadata-label whitespace-nowrap">驱动:</span>
           <n-tag round :type="getDriverType(network.driver)" size="small" :bordered="true">
             {{ network.driver }}
           </n-tag>
