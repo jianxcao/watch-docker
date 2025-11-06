@@ -54,7 +54,7 @@
       <div class="stat-card system-card">
         <div class="card-header">
           <div class="icon-container">
-            <LayersOutline />
+            <SystemIcon />
           </div>
           <div class="card-title">系统信息</div>
         </div>
@@ -101,6 +101,29 @@
           批量更新容器 ({{ containerStore.updateableContainers.length }})
         </n-button>
 
+        <n-button class="action-primary" size="large" @click="handleCreateApp">
+          <template #icon>
+            <n-icon>
+              <AddCircleOutline />
+            </n-icon>
+          </template>
+          创建应用
+        </n-button>
+
+        <n-button
+          class="action-primary"
+          size="large"
+          @click="handleRefreshAll"
+          :loading="appStore.globalLoading"
+        >
+          <template #icon>
+            <n-icon>
+              <RefreshOutline />
+            </n-icon>
+          </template>
+          刷新所有数据
+        </n-button>
+
         <n-tooltip trigger="hover" :delay="500">
           <template #trigger>
             <n-button
@@ -119,20 +142,6 @@
           </template>
           清理悬空镜像、网络和数据卷
         </n-tooltip>
-
-        <n-button
-          class="action-primary"
-          size="large"
-          @click="handleRefreshAll"
-          :loading="appStore.globalLoading"
-        >
-          <template #icon>
-            <n-icon>
-              <RefreshOutline />
-            </n-icon>
-          </template>
-          刷新所有数据
-        </n-button>
       </div>
     </div>
 
@@ -204,6 +213,7 @@ import { useImageStore } from '@/store/image'
 import { useContainer } from '@/hooks/useContainer'
 import { useSettingStore } from '@/store/setting'
 import { api } from '@/common/api'
+import SystemIcon from '@/assets/svg/system.svg?component'
 import dayjs from 'dayjs'
 import {
   LayersOutline,
@@ -211,6 +221,7 @@ import {
   CloudDownloadOutline,
   RefreshOutline,
   TrashBinOutline,
+  AddCircleOutline,
 } from '@vicons/ionicons5'
 import HeartLineIcon from '@/assets/svg/hartLine.svg?component'
 
@@ -299,6 +310,11 @@ const handlePruneSystem = async () => {
   } finally {
     isPruning.value = false
   }
+}
+
+// 创建应用处理函数
+const handleCreateApp = () => {
+  router.push('/compose/create')
 }
 
 // 处理容器点击

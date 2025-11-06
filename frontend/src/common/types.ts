@@ -40,6 +40,7 @@ export interface ContainerStats {
 export interface ContainerDetailStats {
   id: string
   name: string
+  // 当前读取时间 2025-11-06T06:34:06.577815611Z
   read: string
   preread: string
   pids_stats: {
@@ -127,7 +128,6 @@ export interface ContainerDetailStats {
       workingset_nodereclaim?: number
       workingset_refault?: number
       cache?: number
-      total_cache?: number
     }
     limit: number
     commitlimit?: number

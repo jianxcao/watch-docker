@@ -22,7 +22,7 @@
           <div class="card-header">
             <div class="header-left">
               <div class="overview-icon">
-                <CpuUsageIcon />
+                <CpuIcon class="icon" />
               </div>
               <div class="overview-title">CPU使用率</div>
             </div>
@@ -41,19 +41,22 @@
           <div class="card-header">
             <div class="header-left">
               <div class="overview-icon">
-                <MemoryUsageIcon />
+                <MemoryUsageIcon class="icon" />
               </div>
               <div class="overview-title">内存使用率</div>
             </div>
             <div class="memory-info">
-              {{ formatBytes(detailStats.memory_stats.usage) }} /
+              {{ formatBytes(memoryUsage) }} /
               {{ formatBytes(detailStats.memory_stats.limit) }}
             </div>
           </div>
           <div class="card-content">
             <div class="overview-value">{{ memoryPercent.toFixed(2) }}%</div>
             <div class="overview-progress">
-              <div class="progress-fill" :style="{ width: memoryPercent + '%' }"></div>
+              <div
+                class="progress-fill progress-fill-memory"
+                :style="{ width: memoryPercent + '%' }"
+              ></div>
             </div>
           </div>
         </div>
@@ -61,9 +64,9 @@
 
       <div class="stats-grid">
         <!-- CPU 详细信息 -->
-        <div class="stat-card">
+        <div class="stat-card cpu-card">
           <div class="card-header">
-            <CpuUsageIcon class="card-icon" />
+            <CpuIcon class="card-icon" />
             <div class="card-title">CPU 详细信息</div>
           </div>
           <div class="detail-section">
@@ -84,17 +87,17 @@
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">空闲模式</span>
+              <span class="detail-label">内核模式</span>
               <span class="detail-value">{{
                 formatDuration(detailStats.cpu_stats.cpu_usage.usage_in_kernelmode / 1000000000)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">CPU线程数(中)</span>
+              <span class="detail-label">CPU限流周期</span>
               <span class="detail-value">{{ detailStats.cpu_stats.throttling_data.periods }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">CPU线程数(外)</span>
+              <span class="detail-label">CPU限流时间</span>
               <span class="detail-value">{{
                 formatDuration(detailStats.cpu_stats.throttling_data.throttled_time / 1000000000)
               }}</span>
@@ -103,24 +106,26 @@
         </div>
 
         <!-- 内存详细信息 -->
-        <div class="stat-card">
+        <div class="stat-card memory-card">
           <div class="card-header">
             <MemoryUsageIcon class="card-icon" />
             <div class="card-title">内存详细信息</div>
           </div>
           <div class="detail-section">
             <div class="detail-item">
-              <span class="detail-label">使用中</span>
+              <span class="detail-label">使用中(包括缓存文件)</span>
               <span class="detail-value">{{ formatBytes(detailStats.memory_stats.usage) }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">空闲</span>
+              <span class="detail-label">内存限制</span>
               <span class="detail-value">{{ formatBytes(detailStats.memory_stats.limit) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">缓存</span>
               <span class="detail-value">{{
-                formatBytes(detailStats.memory_stats.stats.cache || 0)
+                formatBytes(
+                  detailStats.memory_stats.stats.file || detailStats.memory_stats.stats.cache || 0,
+                )
               }}</span>
             </div>
             <div class="detail-item">
@@ -135,20 +140,20 @@
                 formatBytes(detailStats.memory_stats.stats.inactive_file || 0)
               }}</span>
             </div>
-            <div class="detail-item">
+            <!-- <div class="detail-item">
               <span class="detail-label">页进</span>
               <span class="detail-value">{{
                 formatBytes(detailStats.memory_stats.stats.anon || 0)
               }}</span>
-            </div>
+            </div> -->
             <div class="detail-item">
-              <span class="detail-label">主要缺页</span>
+              <span class="detail-label">页面故障</span>
               <span class="detail-value">{{
                 formatNumber(detailStats.memory_stats.stats.pgfault || 0)
               }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">次要缺页</span>
+              <span class="detail-label">主要故障</span>
               <span class="detail-value">{{
                 formatNumber(detailStats.memory_stats.stats.pgmajfault || 0)
               }}</span>
@@ -159,7 +164,7 @@
         <!-- 连接数量 -->
         <div class="stat-card process-card">
           <div class="card-header">
-            <ConnectionIcon class="card-icon" />
+            <HeartLineIcon class="card-icon" />
             <div class="card-title">连接数量</div>
           </div>
           <div class="large-stat">
@@ -169,44 +174,68 @@
         </div>
 
         <!-- 网络 I/O -->
-        <div class="stat-card">
+        <div class="stat-card network-io-card">
           <div class="card-header">
             <NetworkIOIcon class="card-icon" />
             <div class="card-title">网络 I/O</div>
           </div>
           <div class="detail-section">
             <div class="detail-item highlight">
-              <span class="detail-label">已接受</span>
+              <span class="detail-label">下载速率</span>
+              <span class="detail-value rate-value"
+                >↓ {{ formatBytesPerSecond(networkRxRate) }}</span
+              >
+            </div>
+            <div class="detail-item highlight">
+              <span class="detail-label">上传速率</span>
+              <span class="detail-value rate-value"
+                >↑ {{ formatBytesPerSecond(networkTxRate) }}</span
+              >
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">已接收</span>
               <span class="detail-value">{{ formatBytes(totalNetworkRx) }}</span>
             </div>
-            <div class="detail-item highlight">
-              <span class="detail-label">数据包</span>
+            <div class="detail-item">
+              <span class="detail-label">接收包数</span>
               <span class="detail-value">{{ formatNumber(totalNetworkRxPackets) }} </span>
             </div>
-            <div class="detail-item highlight">
+            <div class="detail-item">
               <span class="detail-label">已传输</span>
               <span class="detail-value">{{ formatBytes(totalNetworkTx) }}</span>
             </div>
-            <div class="detail-item highlight">
-              <span class="detail-label">数据包</span>
+            <div class="detail-item">
+              <span class="detail-label">传输包数</span>
               <span class="detail-value">{{ formatNumber(totalNetworkTxPackets) }} </span>
             </div>
           </div>
         </div>
 
         <!-- 磁盘 I/O -->
-        <div class="stat-card">
+        <div class="stat-card disk-io-card">
           <div class="card-header">
-            <DiskIOIcon class="card-icon" />
+            <DiskIcon class="card-icon" />
             <div class="card-title">磁盘 I/O</div>
           </div>
           <div class="detail-section">
             <div class="detail-item highlight">
-              <span class="detail-label">读取</span>
-              <span class="detail-value">{{ formatBytes(blockRead) }}</span>
+              <span class="detail-label">读取速率</span>
+              <span class="detail-value rate-value"
+                >↓ {{ formatBytesPerSecond(diskReadRate) }}</span
+              >
             </div>
             <div class="detail-item highlight">
-              <span class="detail-label">写入</span>
+              <span class="detail-label">写入速率</span>
+              <span class="detail-value rate-value"
+                >↑ {{ formatBytesPerSecond(diskWriteRate) }}</span
+              >
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">累计读取</span>
+              <span class="detail-value">{{ formatBytes(blockRead) }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">累计写入</span>
               <span class="detail-value">{{ formatBytes(blockWrite) }}</span>
             </div>
           </div>
@@ -229,6 +258,18 @@
               <div class="interface-badge">{{ name }}</div>
             </div>
             <div class="interface-stats">
+              <div class="interface-stat">
+                <span class="stat-label">下载速率:</span>
+                <span class="stat-value rate-value">
+                  ↓ {{ formatBytesPerSecond(networkInterfaceRates[name]?.rxRate || 0) }}
+                </span>
+              </div>
+              <div class="interface-stat">
+                <span class="stat-label">上传速率:</span>
+                <span class="stat-value rate-value">
+                  ↑ {{ formatBytesPerSecond(networkInterfaceRates[name]?.txRate || 0) }}
+                </span>
+              </div>
               <div class="interface-stat">
                 <span class="stat-label">RX:</span>
                 <span class="stat-value">{{ formatBytes(network.rx_bytes) }}</span>
@@ -259,16 +300,16 @@ import { API_ENDPOINTS } from '@/constants/api'
 import { useSettingStore } from '@/store/setting'
 import { useWebSocket } from '@vueuse/core'
 import { useMessage } from 'naive-ui'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onBeforeMount, onUnmounted, ref, watch } from 'vue'
 
 // 导入 SVG 图标
-import CpuUsageIcon from '@/assets/svg/cpuUsage.svg?component'
+import CpuIcon from '@/assets/svg/cpu.svg?component'
+import DiskIcon from '@/assets/svg/disk.svg?component'
+import HeartLineIcon from '@/assets/svg/hartLine.svg?component'
 import MemoryUsageIcon from '@/assets/svg/memoryUsage.svg?component'
-import ConnectionIcon from '@/assets/svg/connection.svg?component'
-import NetworkIOIcon from '@/assets/svg/networkIO.svg?component'
-import DiskIOIcon from '@/assets/svg/diskIO.svg?component'
 import NetworkInterfaceIcon from '@/assets/svg/networkInterface.svg?component'
-import { formatBytes, formatDuration, formatNumber } from '@/common/utils'
+import NetworkIOIcon from '@/assets/svg/networkIO.svg?component'
+import { formatBytes, formatBytesPerSecond, formatDuration, formatNumber } from '@/common/utils'
 
 interface Props {
   isRunning: boolean
@@ -282,6 +323,19 @@ const settingStore = useSettingStore()
 const loading = ref(true)
 const error = ref('')
 const detailStats = ref<ContainerDetailStats | null>(null)
+
+// 保存上一次的统计数据用于计算速率
+const prevStats = ref<ContainerDetailStats | null>(null)
+const prevTime = ref<number>(0)
+
+// 实时速率
+const networkRxRate = ref(0)
+const networkTxRate = ref(0)
+const networkInterfaceRates = ref<Record<string, { rxRate: number; txRate: number }>>({})
+
+// 磁盘 I/O 速率
+const diskReadRate = ref(0)
+const diskWriteRate = ref(0)
 
 // 计算 WebSocket URL
 const wsUrl = computed(() => {
@@ -351,7 +405,81 @@ const { status, open, close } = useWebSocket(wsUrl, {
   onMessage(_, event) {
     try {
       const data = JSON.parse(event.data)
-      detailStats.value = data as ContainerDetailStats
+      const newStats = data as ContainerDetailStats
+      const currentTime = new Date(newStats.read).getTime()
+
+      // 计算速率（如果有上一次的数据）
+      if (prevStats.value && prevTime.value) {
+        const timeDiff = (currentTime - prevTime.value) / 1000 // 转换为秒
+
+        if (timeDiff > 0) {
+          // 计算总网络速率
+          const prevRx = Object.values(prevStats.value.networks).reduce(
+            (sum, net) => sum + net.rx_bytes,
+            0,
+          )
+          const prevTx = Object.values(prevStats.value.networks).reduce(
+            (sum, net) => sum + net.tx_bytes,
+            0,
+          )
+          const currentRx = Object.values(newStats.networks).reduce(
+            (sum, net) => sum + net.rx_bytes,
+            0,
+          )
+          const currentTx = Object.values(newStats.networks).reduce(
+            (sum, net) => sum + net.tx_bytes,
+            0,
+          )
+
+          networkRxRate.value = Math.max(0, (currentRx - prevRx) / timeDiff)
+          networkTxRate.value = Math.max(0, (currentTx - prevTx) / timeDiff)
+
+          // 计算每个网络接口的速率
+          const rates: Record<string, { rxRate: number; txRate: number }> = {}
+          Object.keys(newStats.networks).forEach((interfaceName) => {
+            const current = newStats.networks[interfaceName]
+            const prev = prevStats.value?.networks[interfaceName]
+
+            if (prev) {
+              rates[interfaceName] = {
+                rxRate: Math.max(0, (current.rx_bytes - prev.rx_bytes) / timeDiff),
+                txRate: Math.max(0, (current.tx_bytes - prev.tx_bytes) / timeDiff),
+              }
+            } else {
+              rates[interfaceName] = { rxRate: 0, txRate: 0 }
+            }
+          })
+          networkInterfaceRates.value = rates
+
+          // 计算磁盘 I/O 速率
+          const prevRead =
+            prevStats.value.blkio_stats.io_service_bytes_recursive
+              ?.filter((item) => item.op === 'read' || item.op === 'Read')
+              .reduce((sum, item) => sum + item.value, 0) || 0
+          const prevWrite =
+            prevStats.value.blkio_stats.io_service_bytes_recursive
+              ?.filter((item) => item.op === 'write' || item.op === 'Write')
+              .reduce((sum, item) => sum + item.value, 0) || 0
+          const currentRead =
+            newStats.blkio_stats.io_service_bytes_recursive
+              ?.filter((item) => item.op === 'read' || item.op === 'Read')
+              .reduce((sum, item) => sum + item.value, 0) || 0
+          const currentWrite =
+            newStats.blkio_stats.io_service_bytes_recursive
+              ?.filter((item) => item.op === 'write' || item.op === 'Write')
+              .reduce((sum, item) => sum + item.value, 0) || 0
+
+          diskReadRate.value = Math.max(0, (currentRead - prevRead) / timeDiff)
+          diskWriteRate.value = Math.max(0, (currentWrite - prevWrite) / timeDiff)
+        }
+      }
+
+      // 保存当前数据供下次计算使用
+      prevStats.value = newStats
+      prevTime.value = currentTime
+
+      detailStats.value = newStats
+
       // 数据接收成功，清除错误
       if (error.value) {
         error.value = ''
@@ -381,6 +509,13 @@ const connect = () => {
 const disconnect = () => {
   close()
   detailStats.value = null
+  prevStats.value = null
+  prevTime.value = 0
+  networkRxRate.value = 0
+  networkTxRate.value = 0
+  networkInterfaceRates.value = {}
+  diskReadRate.value = 0
+  diskWriteRate.value = 0
 }
 
 // 重新连接
@@ -413,24 +548,29 @@ const cpuPercent = computed(() => {
 })
 
 // 计算内存使用率
-const memoryPercent = computed(() => {
+const memoryUsage = computed(() => {
   if (!detailStats.value || !detailStats.value.memory_stats.limit) {
     return 0
   }
 
   const usage = detailStats.value.memory_stats.usage
-  const limit = detailStats.value.memory_stats.limit
 
   // 减去缓存
   const cache =
     detailStats.value.memory_stats.stats.inactive_file ||
-    detailStats.value.memory_stats.stats.total_cache ||
     detailStats.value.memory_stats.stats.cache ||
     0
-
   const actualUsage = usage > cache ? usage - cache : usage
+  return actualUsage
+})
 
-  return (actualUsage / limit) * 100
+const memoryPercent = computed(() => {
+  if (!detailStats.value || !detailStats.value.memory_stats.limit) {
+    return 0
+  }
+  const limit = detailStats.value.memory_stats.limit
+
+  return (memoryUsage.value / limit) * 100
 })
 
 // 计算网络总接收字节
@@ -498,7 +638,7 @@ watch(
   { immediate: false }, // 立即执行一次
 )
 
-onMounted(() => {
+onBeforeMount(() => {
   connect()
 })
 

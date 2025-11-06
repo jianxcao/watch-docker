@@ -79,7 +79,7 @@
             </div>
             <div class="detail-label">
               <n-icon size="16">
-                <PortIcon />
+                <HeartLineIcon />
               </n-icon>
               端口映射
             </div>
@@ -160,7 +160,7 @@ import CpuIcon from '@/assets/svg/cpu.svg?component'
 import CreateTimeIcon from '@/assets/svg/createTime.svg?component'
 import MemoryIcon from '@/assets/svg/memory.svg?component'
 import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
-import PortIcon from '@/assets/svg/port.svg?component'
+import HeartLineIcon from '@/assets/svg/hartLine.svg?component'
 import type { ContainerStatus } from '@/common/types'
 import { formatBytes, formatBytesPerSecond, formatPercent, formatTime } from '@/common/utils'
 import { useContainerStore } from '@/store/container'

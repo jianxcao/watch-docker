@@ -42,7 +42,8 @@
 
     /* 进度条颜色 */
     --dashboard-progress-bg: #1e2939;
-    --dashboard-progress-fill: #030213;
+    --dashboard-progress-fill: #2b7fff;
+    --dashboard-progress-fill-memory: #c27aff;
 
     /* 进程数量卡片 - 绿色主题 */
     --dashboard-process-gradient: linear-gradient(
@@ -59,6 +60,12 @@
 
     /* 卡片悬停阴影 */
     --dashboard-card-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+
+    --cpu-icon-color: #51a2ff;
+    --memory-icon-color: #c27aff;
+    --disk-icon-color: #00d492;
+    --network-icon-color: #46ecd5;
+    --process-icon-color: #00d492;
   }
 }
 
@@ -103,7 +110,8 @@
 
     /* 进度条颜色 */
     --dashboard-progress-bg: #e5e7eb;
-    --dashboard-progress-fill: #030213;
+    --dashboard-progress-fill: #2b7fff;
+    --dashboard-progress-fill-memory: #c27aff;
 
     /* 进程数量卡片 - 绿色主题 */
     --dashboard-process-gradient: linear-gradient(
@@ -120,6 +128,12 @@
 
     /* 卡片悬停阴影 */
     --dashboard-card-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+
+    --cpu-icon-color: #155dfc;
+    --memory-icon-color: #9810fa;
+    --disk-icon-color: #f54a00;
+    --network-icon-color: #0092b8;
+    --process-icon-color: #009966;
   }
 }
 
@@ -162,6 +176,10 @@
         .overview-icon {
           background: var(--dashboard-cpu-icon-bg);
           color: var(--dashboard-cpu-icon-color);
+          .icon {
+            width: 20px;
+            height: 20px;
+          }
         }
 
         .overview-badge {
@@ -178,6 +196,10 @@
         .overview-icon {
           background: var(--dashboard-memory-icon-bg);
           color: var(--dashboard-memory-icon-color);
+          .icon {
+            width: 20px;
+            height: 20px;
+          }
         }
 
         .overview-badge {
@@ -246,7 +268,7 @@
 
         .overview-progress {
           height: 8px;
-          border-radius: 16777200px;
+          border-radius: 4px;
           overflow: hidden;
           position: relative;
           background: var(--dashboard-progress-bg);
@@ -257,6 +279,10 @@
             border-radius: inherit;
             background: var(--dashboard-progress-fill);
             transition: width 0.3s ease;
+          }
+
+          .progress-fill-memory {
+            background: var(--dashboard-progress-fill-memory);
           }
         }
       }
@@ -344,6 +370,12 @@
             line-height: 20px;
             font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
             color: var(--dashboard-text-primary);
+
+            &.rate-value {
+              font-weight: 600;
+              color: var(--network-icon-color);
+              font-size: 15px;
+            }
           }
 
           &.highlight {
@@ -378,6 +410,43 @@
         }
       }
     }
+
+    .network-io-card {
+      .card-header {
+        .card-icon {
+          color: var(--network-icon-color);
+        }
+      }
+    }
+
+    .disk-io-card {
+      .card-header {
+        .card-icon {
+          color: var(--disk-icon-color);
+        }
+      }
+    }
+    .cpu-card {
+      .card-header {
+        .card-icon {
+          color: var(--cpu-icon-color);
+        }
+      }
+    }
+    .memory-card {
+      .card-header {
+        .card-icon {
+          color: var(--memory-icon-color);
+        }
+      }
+    }
+    .process-card {
+      .card-header {
+        .card-icon {
+          color: var(--process-icon-color);
+        }
+      }
+    }
   }
 
   // 网络接口卡片
@@ -402,7 +471,7 @@
       .card-icon {
         width: 20px;
         height: 20px;
-        color: var(--dashboard-text-primary);
+        color: var(--network-icon-color);
       }
 
       .card-title {
