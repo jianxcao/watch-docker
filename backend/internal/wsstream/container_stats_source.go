@@ -46,7 +46,7 @@ func NewContainerStatsSource(opts ContainerStatsSourceOptions) *ContainerStatsSo
 
 // Start 启动容器统计数据流
 func (s *ContainerStatsSource) Start(ctx context.Context) (StreamReader[string], error) {
-	logger.Logger.Info("启动容器统计数据流")
+	logger.Logger.Debug("启动容器统计数据流")
 
 	// 创建 channel 用于发送完整的 JSON 消息
 	messageChan := make(chan string, 10)
@@ -191,7 +191,7 @@ func (s *ContainerStatsSource) sendStats(ctx context.Context, messageChan chan s
 
 // Stop 停止容器统计数据流
 func (s *ContainerStatsSource) Stop() error {
-	logger.Logger.Info("停止容器统计数据流")
+	logger.Logger.Debug("停止容器统计数据流")
 	// 由于使用 channel，关闭 reader 会触发 pushStats goroutine 停止
 	return nil
 }
