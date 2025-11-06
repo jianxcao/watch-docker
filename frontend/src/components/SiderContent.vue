@@ -121,16 +121,16 @@ const version = computed(() => settingStore.systemInfo?.version)
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
-  if (path === '/') {
+  if (path === '/' || path === '/home') {
     return 'home'
   }
-  if (path === '/containers') {
+  if (path.startsWith('/containers')) {
     return 'containers'
   }
-  if (path === '/images') {
+  if (path.startsWith('/images')) {
     return 'images'
   }
-  if (path === '/compose') {
+  if (path.startsWith('/compose')) {
     return 'compose'
   }
   if (path.startsWith('/volumes')) {

@@ -21,6 +21,7 @@ func (s *Server) setupComposeRoutes(protected *gin.RouterGroup) {
 	protected.POST("/compose/new", s.handleSaveNewProject())
 	protected.GET("/compose/:projectName/yaml", s.handleGetProjectYaml())
 	protected.GET("/compose/logs/:projectName/ws", s.handleComposeLogsWebSocket())
+	protected.GET("/compose/pull/:projectName/ws", s.handleComposePullWebSocket())
 	protected.GET("/compose/create-and-up/ws", s.handleComposeCreateAndUpWebSocket())
 }
 

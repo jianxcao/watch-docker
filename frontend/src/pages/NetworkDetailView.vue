@@ -440,8 +440,7 @@ const handleDelete = () => {
 
 // 处理容器点击
 const handleContainerClick = (container: NetworkContainer) => {
-  console.log('jumpto', container)
-  // 可以跳转到容器详情页面
+  router.push(`/containers/${container.id}`)
 }
 
 // 页面初始化

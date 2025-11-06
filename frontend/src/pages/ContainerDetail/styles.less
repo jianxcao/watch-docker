@@ -1,0 +1,201 @@
+// ContainerDetail 共享样式
+@import '@/styles/mix.less';
+.tab-content {
+  height: 100%;
+  .scrollbar();
+  overflow-y: auto;
+
+  &.logs-tab,
+  &.shell-tab {
+    padding: 0;
+    overflow: hidden;
+
+    .logs-stream-view {
+      height: 100%;
+    }
+  }
+}
+
+.detail-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+
+  .info-card {
+    box-shadow: var(--box-shadow-1);
+  }
+
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px 32px;
+
+    .info-item {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+
+      &.info-item-full {
+        grid-column: 1 / -1;
+      }
+
+      .info-label {
+        font-size: 14px;
+        line-height: 20px;
+        color: var(--text-color-3);
+        font-weight: 500;
+      }
+
+      .info-value {
+        font-size: 14px;
+        color: var(--n-text-color-1);
+        word-break: break-all;
+      }
+    }
+  }
+
+  .port-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .env-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+
+    .env-item {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 8px;
+      border-radius: 8px;
+      background: var(--n-color-embedded);
+
+      .env-key {
+        font-weight: 600;
+        font-size: 14px;
+      }
+
+      .env-value {
+        font-size: 13px;
+      }
+    }
+  }
+
+  .network-list {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+
+    .network-item {
+      min-width: 360px;
+      padding: 12px;
+      box-sizing: border-box;
+      border-radius: 8px;
+      background: var(--n-color-embedded);
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+
+      .network-header {
+        margin-bottom: 12px;
+      }
+
+      .network-details {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+
+        .network-detail-item {
+          display: flex;
+          gap: 8px;
+          font-size: 14px;
+
+          .label {
+            color: var(--text-color-3);
+            min-width: 80px;
+          }
+        }
+      }
+    }
+  }
+
+  .port-mapping-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .mount-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+
+    .mount-item {
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--n-color-embedded);
+
+      .mount-header {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .mount-details {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+
+        .mount-detail-item {
+          display: flex;
+          gap: 8px;
+          font-size: 14px;
+
+          .label {
+            color: var(--text-color-3);
+            min-width: 80px;
+          }
+        }
+      }
+    }
+  }
+}
+
+// Dashboard 样式已移至 DashboardTab.less
+
+.loading-container,
+.error-container,
+.empty-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .detail-container {
+    gap: 12px;
+    padding: 12px;
+
+    .info-grid {
+      grid-template-columns: 1fr;
+      gap: 20px;
+
+      .info-item.info-item-full {
+        grid-column: 1;
+      }
+    }
+    .network-list {
+      .network-item {
+        width: 100%;
+        min-width: 100%;
+      }
+    }
+  }
+}

@@ -62,6 +62,10 @@ export const containerApi = {
       params: { isUserCache, isHaveUpdate },
     }),
 
+  // 获取容器详情
+  getContainerDetail: (id: string) =>
+    axios.get<{ container: any }>(API_ENDPOINTS.CONTAINER_DETAIL(id)),
+
   // 更新单个容器
   updateContainer: (id: string, image?: string) =>
     axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_UPDATE(id), { image }),
@@ -211,8 +215,7 @@ export const networkApi = {
     axios.post<{ network: any }>(API_ENDPOINTS.NETWORKS, data),
 
   // 删除网络
-  deleteNetwork: (id: string) =>
-    axios.delete<{ ok: boolean }>(API_ENDPOINTS.NETWORK_DELETE(id)),
+  deleteNetwork: (id: string) => axios.delete<{ ok: boolean }>(API_ENDPOINTS.NETWORK_DELETE(id)),
 
   // 清理未使用的网络
   pruneNetworks: () => axios.post<NetworkPruneResponse>(API_ENDPOINTS.NETWORK_PRUNE),

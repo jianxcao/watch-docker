@@ -183,6 +183,8 @@
       @error="handleDeployError"
       @complete="handleDeployComplete"
     />
+    <!-- Pull 日志弹窗 -->
+    <ComposePullLogsModal v-model:show="showPullLogs" :project="currentProject || null" />
   </div>
 </template>
 
@@ -199,6 +201,7 @@ import {
   PlayOutline,
   StopOutline,
   EllipsisHorizontal,
+  CloudDownloadOutline,
 } from '@vicons/ionicons5'
 import DocumentIcon from '@/assets/svg/log.svg?component'
 import { useComposeStore } from '@/store/compose'
@@ -213,6 +216,7 @@ import ContainerLogsModal from '@/components/ContainerLogsModal.vue'
 import LogsStreamView from '@/components/LogsStreamView.vue'
 import YamlEditor from '@/components/YamlEditor/index.vue'
 import ComposeCreateProgress from '@/components/ComposeCreateProgress.vue'
+import ComposePullLogsModal from '@/components/ComposePullLogsModal.vue'
 import { useCompose } from '@/hooks/useCompose'
 
 const route = useRoute()
@@ -247,6 +251,7 @@ const currentContainer = ref<ContainerStatus | null>(null)
 const yamlEditorContainerRef = ref<HTMLElement | null>(null)
 const createProgressRef = ref<InstanceType<typeof ComposeCreateProgress>>()
 const showProgress = ref(false)
+const showPullLogs = ref(false)
 
 // 下拉菜单选项
 const dropdownOptions = computed<DropdownOption[]>(() => {
@@ -269,11 +274,22 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
     })
   }
 
-  options.push({
-    label: '重新部署',
-    key: 'deploy',
-    icon: renderIcon(RefreshOutline),
-  })
+  options.push(
+    {
+      label: '重新部署',
+      key: 'deploy',
+      icon: renderIcon(RefreshOutline),
+    },
+    {
+      type: 'divider',
+      key: 'divider1',
+    },
+    {
+      label: '拉取镜像',
+      key: 'pull',
+      icon: renderIcon(CloudDownloadOutline),
+    },
+  )
   if (status !== 'unknown') {
     let label = '删除应用'
     if (status === 'draft' || status === 'created_stack') {
@@ -289,7 +305,7 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
         key: 'delete',
         icon: renderIcon(TrashOutline),
         props: {
-          style: 'color: #ff4d4f',
+          style: `color: ${theme.value.errorColor}`,
         },
       },
     )
@@ -297,7 +313,7 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
   return options
 })
 
-const handleMenuSelect = (key: string) => {
+const handleMenuSelect = async (key: string) => {
   if (!currentProject.value) {
     return
   }
@@ -306,18 +322,24 @@ const handleMenuSelect = (key: string) => {
       handleDeploy()
       break
     case 'start':
-      handleComposeStart(currentProject.value)
+      await handleComposeStart(currentProject.value)
+      await containerStore.fetchContainers(true, false)
       break
     case 'stop':
-      handleComposeStop(currentProject.value)
+      await handleComposeStop(currentProject.value)
+      await containerStore.fetchContainers(true, false)
       break
     case 'restart':
-      handleComposeRestart(currentProject.value)
+      await handleComposeRestart(currentProject.value)
+      await containerStore.fetchContainers(true, false)
       break
     case 'delete':
       handleComposeDelete(currentProject.value).then(() => {
         handleBack()
       })
+      break
+    case 'pull':
+      showPullLogs.value = true
       break
   }
 }
@@ -380,7 +402,7 @@ const loadProjectData = async () => {
     await composeStore.fetchProjects(true)
 
     // 加载容器列表
-    await containerStore.fetchContainers(false, false)
+    await containerStore.fetchContainers(true, false)
 
     // 检查项目是否存在
     if (!currentProject.value) {
@@ -488,17 +510,17 @@ const handleTabChange = (value: string) => {
 // 容器操作
 const handleStartContainer = async (container: ContainerStatus) => {
   await handleStart(container)
-  await Promise.all([containerStore.fetchContainers(false, false), loadProjectData()])
+  await Promise.all([containerStore.fetchContainers(true, false), loadProjectData()])
 }
 
 const handleStopContainer = async (container: ContainerStatus) => {
   await handleStop(container)
-  await Promise.all([containerStore.fetchContainers(false, false), loadProjectData()])
+  await Promise.all([containerStore.fetchContainers(true, false), loadProjectData()])
 }
 
 const handleDeleteContainer = async (container: ContainerStatus) => {
   await handleDelete(container)
-  await Promise.all([containerStore.fetchContainers(false, false), loadProjectData()])
+  await Promise.all([containerStore.fetchContainers(true, false), loadProjectData()])
 }
 
 const handleExportContainer = async (container: ContainerStatus) => {

@@ -3,96 +3,92 @@
     <!-- 统计卡片 -->
     <div class="stats-grid">
       <!-- 容器统计 -->
-      <n-card title="容器状态" hoverable>
-        <n-space vertical>
-          <n-statistic label="总容器数" :value="containerStore.stats.total">
-            <template #prefix>
-              <n-icon color="#18a058">
-                <LayersOutline />
-              </n-icon>
-            </template>
-          </n-statistic>
-
-          <n-descriptions :column="2" size="small">
-            <n-descriptions-item label="运行中">
-              <n-text type="success">{{ containerStore.stats.running }}</n-text>
-            </n-descriptions-item>
-            <n-descriptions-item label="已停止">
-              <n-text type="warning">{{ containerStore.stats.stopped }}</n-text>
-            </n-descriptions-item>
-            <n-descriptions-item label="可更新">
-              <n-text type="info">{{ containerStore.stats.updateable }}</n-text>
-            </n-descriptions-item>
-            <n-descriptions-item label="错误">
-              <n-text type="error">{{ containerStore.stats.error }}</n-text>
-            </n-descriptions-item>
-          </n-descriptions>
-        </n-space>
-
-        <template #action>
-          <n-button type="primary" @click="$router.push('/containers')"> 管理容器 </n-button>
-        </template>
-      </n-card>
+      <div class="stat-card container-card">
+        <div class="card-header">
+          <div class="icon-container">
+            <LayersOutline />
+          </div>
+          <div class="card-title">容器状态</div>
+        </div>
+        <div class="card-content">
+          <div class="stat-item">
+            <span class="stat-label">总容器</span>
+            <span class="stat-value value-blue">{{ containerStore.stats.total }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">运行中</span>
+            <span class="stat-value value-green">{{ containerStore.stats.running }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">已停止</span>
+            <span class="stat-value value-gray">{{ containerStore.stats.stopped }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">正在更新</span>
+            <span class="stat-value value-orange">{{ containerStore.stats.updateable }}</span>
+          </div>
+        </div>
+      </div>
 
       <!-- 镜像统计 -->
-      <n-card title="镜像信息" hoverable>
-        <n-space vertical>
-          <n-statistic label="总镜像数" :value="imageStore.stats.total">
-            <template #prefix>
-              <n-icon color="#2080f0">
-                <ArchiveOutline />
-              </n-icon>
-            </template>
-          </n-statistic>
-
-          <n-descriptions :column="1" size="small">
-            <n-descriptions-item label="总大小">
-              <n-text>{{ imageStore.stats.formattedTotalSize }}</n-text>
-            </n-descriptions-item>
-            <!-- <n-descriptions-item label="悬空镜像">
-              <n-text type="warning">{{ imageStore.danglingImages.length }}</n-text>
-            </n-descriptions-item> -->
-          </n-descriptions>
-        </n-space>
-
-        <template #action>
-          <n-button type="primary" @click="$router.push('/images')"> 管理镜像 </n-button>
-        </template>
-      </n-card>
+      <div class="stat-card image-card">
+        <div class="card-header">
+          <div class="icon-container">
+            <ArchiveOutline />
+          </div>
+          <div class="card-title">镜像信息</div>
+        </div>
+        <div class="card-content">
+          <div class="stat-item">
+            <span class="stat-label">总镜像</span>
+            <span class="stat-value value-purple">{{ imageStore.stats.total }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">最大的</span>
+            <span class="stat-value value-pink">{{ imageStore.stats.formattedTotalSize }}</span>
+          </div>
+        </div>
+      </div>
 
       <!-- 系统信息 -->
-      <n-card title="系统信息" hoverable>
-        <n-space vertical>
-          <n-descriptions :column="1" size="small">
-            <n-descriptions-item label="后端版本">
-              <n-text>{{ version }}</n-text>
-            </n-descriptions-item>
-            <n-descriptions-item label="前端版本">
-              <n-text>{{ appVersion }}</n-text>
-            </n-descriptions-item>
-            <n-descriptions-item label="最后刷新">
-              <n-text :depth="3">{{ lastRefreshText }}</n-text>
-            </n-descriptions-item>
-            <n-descriptions-item label="系统状态">
-              <n-tag :type="systemHealthType" size="small">
-                {{ systemHealthText }}
-              </n-tag>
-            </n-descriptions-item>
-          </n-descriptions>
-        </n-space>
-
-        <template #action>
-          <n-button type="primary" @click="$router.push('/settings')"> 系统设置 </n-button>
-        </template>
-      </n-card>
+      <div class="stat-card system-card">
+        <div class="card-header">
+          <div class="icon-container">
+            <SystemIcon />
+          </div>
+          <div class="card-title">系统信息</div>
+        </div>
+        <div class="card-content">
+          <div class="stat-item">
+            <span class="stat-label">后端版本</span>
+            <span class="stat-value value-teal">{{ version }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">前端版本</span>
+            <span class="stat-value value-teal">{{ appVersion }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">刷新时间</span>
+            <span class="stat-value value-teal">{{ lastRefreshText }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">系统状态</span>
+            <span class="system-badge">{{ systemHealthText }}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 快速操作 -->
-    <n-card title="快速操作" class="quick-actions">
-      <n-space>
+    <div class="quick-actions">
+      <div class="card-header">
+        <HeartLineIcon class="header-icon" />
+        <div class="card-title">快速操作</div>
+      </div>
+      <div class="actions-content">
         <n-button
           v-if="containerStore.updateableContainers.length > 0"
-          type="info"
+          class="action-warning"
           size="large"
           @click="handleBatchUpdate"
           :loading="containerStore.batchUpdating"
@@ -105,32 +101,17 @@
           批量更新容器 ({{ containerStore.updateableContainers.length }})
         </n-button>
 
-        <!-- <n-button v-if="imageStore.danglingImages.length > 0" type="warning" size="large"
-          @click="handleCleanDanglingImages">
+        <n-button class="action-primary" size="large" @click="handleCreateApp">
           <template #icon>
             <n-icon>
-              <TrashOutline />
+              <AddCircleOutline />
             </n-icon>
           </template>
-          清理悬空镜像 ({{ imageStore.danglingImages.length }})
-        </n-button> -->
-
-        <n-tooltip trigger="hover" :delay="500">
-          <template #trigger>
-            <n-button type="warning" size="large" @click="handlePruneSystem" :loading="isPruning">
-              <template #icon>
-                <n-icon>
-                  <TrashBinOutline />
-                </n-icon>
-              </template>
-              系统清理
-            </n-button>
-          </template>
-          清理悬空镜像、网络和数据卷
-        </n-tooltip>
+          创建应用
+        </n-button>
 
         <n-button
-          type="primary"
+          class="action-primary"
           size="large"
           @click="handleRefreshAll"
           :loading="appStore.globalLoading"
@@ -142,34 +123,70 @@
           </template>
           刷新所有数据
         </n-button>
-      </n-space>
-    </n-card>
+
+        <n-tooltip trigger="hover" :delay="500">
+          <template #trigger>
+            <n-button
+              class="action-warning"
+              size="large"
+              @click="handlePruneSystem"
+              :loading="isPruning"
+            >
+              <template #icon>
+                <n-icon>
+                  <TrashBinOutline />
+                </n-icon>
+              </template>
+              系统清理
+            </n-button>
+          </template>
+          清理悬空镜像、网络和数据卷
+        </n-tooltip>
+      </div>
+    </div>
 
     <!-- 最近容器 -->
-    <n-card title="最近检查的容器" v-if="recentContainers.length > 0">
-      <n-list>
-        <n-list-item v-for="container in recentContainers" :key="container.id">
-          <n-space align="center" justify="space-between">
-            <div>
-              <n-text strong>{{ container.name }}</n-text>
-              <br />
-              <n-text depth="3" class="text-xs">{{ container.image }}</n-text>
+    <div class="recent-containers" v-if="recentContainers.length > 0">
+      <div class="card-header">
+        <LayersOutline class="header-icon" />
+        <div class="card-title">最近检测的容器</div>
+      </div>
+      <div class="container-list">
+        <div
+          v-for="container in recentContainers"
+          :key="container.id"
+          class="container-item"
+          @click="handleContainerClick(container.id)"
+        >
+          <div class="item-left">
+            <div
+              class="container-icon"
+              :class="{
+                'status-running': container.running,
+                'status-stopped': !container.running,
+              }"
+            >
+              <LayersOutline />
             </div>
-
-            <n-space>
-              <StatusBadge :container="container" show-running-status />
-              <StatusBadge :container="container" />
-            </n-space>
-          </n-space>
-        </n-list-item>
-      </n-list>
-
-      <template #action>
-        <n-button text type="primary" @click="$router.push('/containers')">
-          查看全部容器 →
-        </n-button>
-      </template>
-    </n-card>
+            <div class="container-info">
+              <div class="container-name">{{ container.name }}</div>
+              <div class="container-image">{{ container.image }}</div>
+            </div>
+          </div>
+          <div class="item-right">
+            <span
+              class="container-badge"
+              :class="{
+                'badge-running': container.running,
+                'badge-stopped': !container.running,
+              }"
+            >
+              {{ container.running ? '运行中' : '已停止' }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <Teleport to="#header" defer>
       <div class="welcome-card">
@@ -189,13 +206,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
 import { useContainer } from '@/hooks/useContainer'
 import { useSettingStore } from '@/store/setting'
-import StatusBadge from '@/components/StatusBadge.vue'
 import { api } from '@/common/api'
+import SystemIcon from '@/assets/svg/system.svg?component'
 import dayjs from 'dayjs'
 import {
   LayersOutline,
@@ -203,8 +221,11 @@ import {
   CloudDownloadOutline,
   RefreshOutline,
   TrashBinOutline,
+  AddCircleOutline,
 } from '@vicons/ionicons5'
+import HeartLineIcon from '@/assets/svg/hartLine.svg?component'
 
+const router = useRouter()
 const appStore = useAppStore()
 const containerStore = useContainerStore()
 const imageStore = useImageStore()
@@ -218,18 +239,6 @@ const isPruning = ref(false)
 // 版本信息
 const appVersion = 'v' + __APP_VERSION__
 const version = computed(() => settingStore.systemInfo?.version)
-
-// 系统健康状态
-const systemHealthType = computed(() => {
-  switch (appStore.systemHealth) {
-    case 'healthy':
-      return 'success'
-    case 'unhealthy':
-      return 'error'
-    default:
-      return 'default'
-  }
-})
 
 const systemHealthText = computed(() => {
   switch (appStore.systemHealth) {
@@ -274,10 +283,6 @@ const handleBatchUpdate = async () => {
   await containerHooks.handleBatchUpdate()
 }
 
-// const handleCleanDanglingImages = async () => {
-//   await imageHooks.handleDeleteDangling()
-// }
-
 const handleRefreshAll = async () => {
   appStore.setGlobalLoading(true)
   try {
@@ -307,6 +312,16 @@ const handlePruneSystem = async () => {
   }
 }
 
+// 创建应用处理函数
+const handleCreateApp = () => {
+  router.push('/compose/create')
+}
+
+// 处理容器点击
+const handleContainerClick = (containerId: string) => {
+  router.push(`/containers/${containerId}`)
+}
+
 // 页面初始化
 onMounted(async () => {
   // 如果没有数据，先加载数据
@@ -321,46 +336,13 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="less">
+@import './HomeView.less';
+
 .welcome-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-direction: row;
   height: 100%;
-}
-
-.home-page {
-  .stats-grid {
-    display: grid;
-    gap: 16px;
-    margin-bottom: 24px;
-
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  }
-
-  .quick-actions {
-    margin-bottom: 24px;
-  }
-}
-
-// 响应式调整
-@media (max-width: 768px) {
-  .home-page {
-    .stats-grid {
-      grid-template-columns: 1fr;
-      gap: 12px;
-    }
-
-    .quick-actions {
-      .n-space {
-        flex-direction: column;
-        align-items: stretch;
-
-        .n-button {
-          width: 100%;
-        }
-      }
-    }
-  }
 }
 </style>

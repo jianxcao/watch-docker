@@ -126,10 +126,13 @@
       </div>
     </div>
   </div>
+
+  <!-- Pull 日志弹窗 -->
+  <ComposePullLogsModal v-model:show="showPullLogs" :project="project" />
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { NIcon, type DropdownOption } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
@@ -142,14 +145,17 @@ import {
   StopOutline,
   RefreshOutline,
   TrashOutline,
+  CloudDownloadOutline,
 } from '@vicons/ionicons5'
 import LogIcon from '@/assets/svg/log.svg?component'
 import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
 import { useCompose } from '@/hooks/useCompose'
 import { renderIcon } from '@/common/utils'
+import ComposePullLogsModal from '@/components/ComposePullLogsModal.vue'
 
 const { handleStart, handleStop, handleRestart, handleDelete, handleCreate } = useCompose()
 const router = useRouter()
+const showPullLogs = ref(false)
 
 interface Props {
   project: ComposeProject
@@ -205,6 +211,11 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
     {
       type: 'divider',
       key: 'divider1',
+    },
+    {
+      label: '拉取镜像',
+      key: 'pull',
+      icon: renderIcon(CloudDownloadOutline),
     },
     {
       label: '日志',
@@ -266,6 +277,9 @@ const handleMenuSelect = (key: string) => {
       break
     case 'create':
       handleCreate(props.project)
+      break
+    case 'pull':
+      showPullLogs.value = true
       break
   }
 }

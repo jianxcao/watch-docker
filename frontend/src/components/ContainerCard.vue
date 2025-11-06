@@ -3,6 +3,7 @@
     class="container-card"
     :data-theme="settingStore.setting.theme"
     :class="{ 'card-updating': isUpdating }"
+    @click="handleCardClick"
   >
     <!-- 状态指示条 -->
     <div class="status-bar" :class="container.running ? 'running' : 'stopped'"></div>
@@ -78,7 +79,7 @@
             </div>
             <div class="detail-label">
               <n-icon size="16">
-                <PortIcon />
+                <HeartLineIcon />
               </n-icon>
               端口映射
             </div>
@@ -159,7 +160,7 @@ import CpuIcon from '@/assets/svg/cpu.svg?component'
 import CreateTimeIcon from '@/assets/svg/createTime.svg?component'
 import MemoryIcon from '@/assets/svg/memory.svg?component'
 import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
-import PortIcon from '@/assets/svg/port.svg?component'
+import HeartLineIcon from '@/assets/svg/hartLine.svg?component'
 import type { ContainerStatus } from '@/common/types'
 import { formatBytes, formatBytesPerSecond, formatPercent, formatTime } from '@/common/utils'
 import { useContainerStore } from '@/store/container'
@@ -172,6 +173,7 @@ import {
   TimeOutline,
   TrashOutline,
   DownloadOutline,
+  InformationCircleOutline,
 } from '@vicons/ionicons5'
 import LogIcon from '@/assets/svg/log.svg?component'
 import dayjs from 'dayjs'
@@ -191,6 +193,7 @@ interface Emits {
   (e: 'delete'): void
   (e: 'export'): void
   (e: 'logs'): void
+  (e: 'detail'): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -255,6 +258,26 @@ const formatPorts = (ports: any[]): string => {
 // 下拉菜单选项
 const dropdownOptions = computed(() => [
   {
+    key: 'detail',
+    label: '查看详情',
+    icon: () =>
+      h(NIcon, null, {
+        default: () => h(InformationCircleOutline),
+      }),
+  },
+  {
+    key: 'logs',
+    label: '查看日志',
+    icon: () =>
+      h(NIcon, null, {
+        default: () => h(LogIcon),
+      }),
+  },
+  {
+    type: 'divider',
+    key: 'divider1',
+  },
+  {
     key: props.container.running ? 'stop' : 'start',
     label: props.container.running ? '停止容器' : '启动容器',
     icon: () =>
@@ -272,6 +295,10 @@ const dropdownOptions = computed(() => [
       }),
   },
   {
+    type: 'divider',
+    key: 'divider2',
+  },
+  {
     key: 'delete',
     label: '删除容器',
     icon: () =>
@@ -286,19 +313,14 @@ const dropdownOptions = computed(() => [
       ),
     disabled: props.loading,
   },
-  {
-    key: 'logs',
-    label: '查看日志',
-    icon: () =>
-      h(NIcon, null, {
-        default: () => h(LogIcon),
-      }),
-  },
 ])
 
 // 处理下拉菜单选择
 const handleMenuSelect = (key: string) => {
   switch (key) {
+    case 'detail':
+      emits('detail')
+      break
     case 'start':
       emits('start')
       break
@@ -316,6 +338,11 @@ const handleMenuSelect = (key: string) => {
       break
   }
 }
+
+// 处理卡片点击
+const handleCardClick = () => {
+  emits('detail')
+}
 </script>
 
 <style scoped lang="less">
@@ -328,9 +355,11 @@ const handleMenuSelect = (key: string) => {
   color: var(--text-color-1);
   box-shadow: var(--box-shadow-1);
   min-width: 320px;
+  cursor: pointer;
 
   &:hover {
     transform: translateY(-2px);
+    box-shadow: var(--box-shadow-2);
   }
 
   &:has(.status-bar.running) {
