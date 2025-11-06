@@ -99,6 +99,7 @@ func (s *Server) handleContainerShellWebSocket() gin.HandlerFunc {
 			logger.Logger.Error("Failed to create exec", zap.String("containerID", containerID), zap.Error(err))
 			errMsg := fmt.Sprintf("创建终端失败: %v\r\n", err)
 			conn.WriteMessage(websocket.BinaryMessage, []byte(errMsg))
+			cancel()
 			return
 		}
 
@@ -106,17 +107,19 @@ func (s *Server) handleContainerShellWebSocket() gin.HandlerFunc {
 		execAttach, err := s.docker.ContainerExecAttach(execCtx, execID.ID, container.ExecStartOptions{
 			Tty: true,
 		})
+
+		defer func() {
+			logger.Logger.Info("Container shell exec attached closed")
+			cancel()
+			execAttach.Close()
+		}()
+
 		if err != nil {
 			logger.Logger.Error("Failed to attach exec", zap.String("execID", execID.ID), zap.Error(err))
 			errMsg := fmt.Sprintf("附加终端失败: %v\r\n", err)
 			conn.WriteMessage(websocket.BinaryMessage, []byte(errMsg))
 			return
 		}
-		defer func() {
-			logger.Logger.Info("Container shell exec attached closed")
-			cancel()
-			execAttach.Close()
-		}()
 
 		logger.Logger.Info("Container shell exec attached",
 			zap.String("containerID", containerID),

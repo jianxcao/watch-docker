@@ -232,6 +232,19 @@ func (c *Client) RestartProject(ctx context.Context, composeFile string) error {
 	return res.Error
 }
 
+// PullProject 拉取项目镜像
+func (c *Client) PullProject(ctx context.Context, composeFile string) error {
+	projectPath := path.Dir(composeFile)
+	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
+		ExecPath:      projectPath,
+		Args:          []string{"pull"},
+		OperationName: "pull project",
+		NeedOutput:    true,
+	})
+	logger.Logger.Info("拉取镜像", zap.String("output", string(res.Output)))
+	return res.Error
+}
+
 // DeleteProject 删除项目及其所有资源
 // 如果是 draft 状态，直接删除配置文件和目录
 // 如果是其他状态，先执行 docker-compose down，然后删除配置文件和目录

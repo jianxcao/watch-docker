@@ -116,3 +116,39 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 		})
 	}
 }
+
+// handleComposePullWebSocket 处理 Compose 项目拉取镜像的 WebSocket 连接
+func (s *Server) handleComposePullWebSocket() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 从路径参数获取项目名称
+		projectName := c.Param("projectName")
+		// 从查询参数获取 composeFile
+		composeFile := c.Query("composeFile")
+
+		if projectName == "" {
+			logger.Logger.Error("Missing projectName parameter")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing projectName parameter"})
+			return
+		}
+
+		if composeFile == "" {
+			logger.Logger.Error("Missing composeFile parameter")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing composeFile parameter"})
+			return
+		}
+
+		logger.Logger.Info("Compose pull WebSocket connection request",
+			zap.String("projectName", projectName),
+			zap.String("composeFile", composeFile))
+
+		// 获取项目路径
+		projectPath := path.Dir(composeFile)
+
+		// 使用 StreamManager 处理 WebSocket 连接
+		// 使用唯一的 key 来标识 pull 操作，避免与日志流冲突
+		key := fmt.Sprintf("compose-pull-%s", projectName)
+		s.streamManagerBytes.HandleWebSocket(c, key, func() wsstream.StreamSource[[]byte] {
+			return wsstream.NewComposePullSource(projectPath, projectName)
+		})
+	}
+}

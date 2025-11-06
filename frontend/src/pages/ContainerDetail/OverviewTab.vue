@@ -2,7 +2,7 @@
   <div class="tab-content">
     <div class="detail-container">
       <!-- 基本信息 -->
-      <n-card title="基本信息" class="info-card">
+      <n-card title="基本信息" class="info-card" size="small">
         <div class="info-grid">
           <div class="info-item">
             <div class="info-label">容器 ID</div>
@@ -38,7 +38,7 @@
       </n-card>
 
       <!-- 运行配置 -->
-      <n-card title="运行配置" class="info-card">
+      <n-card title="运行配置" class="info-card" size="small">
         <div class="info-grid">
           <div class="info-item">
             <div class="info-label">主机名</div>

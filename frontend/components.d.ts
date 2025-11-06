@@ -11,6 +11,7 @@ declare module 'vue' {
     ComposeCard: typeof import('./src/components/ComposeCard.vue')['default']
     ComposeCreateProgress: typeof import('./src/components/ComposeCreateProgress.vue')['default']
     ComposeLogsModal: typeof import('./src/components/ComposeLogsModal.vue')['default']
+    ComposePullLogsModal: typeof import('./src/components/ComposePullLogsModal.vue')['default']
     ConfigView: typeof import('./src/components/ConfigView.vue')['default']
     ContainerCard: typeof import('./src/components/ContainerCard.vue')['default']
     ContainerImportModal: typeof import('./src/components/ContainerImportModal.vue')['default']

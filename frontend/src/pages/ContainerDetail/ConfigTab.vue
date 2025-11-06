@@ -2,7 +2,7 @@
   <div class="tab-content config-tab">
     <div class="detail-container">
       <!-- 环境变量 -->
-      <n-card title="环境变量" class="info-card">
+      <n-card title="环境变量" class="info-card" size="small">
         <n-input v-model:value="envSearchKeyword" placeholder="搜索环境变量" clearable class="mb-4">
           <template #prefix>
             <n-icon>
@@ -24,7 +24,7 @@
       </n-card>
 
       <!-- 标签 -->
-      <n-card title="标签" class="info-card">
+      <n-card title="标签" class="info-card" size="small">
         <div
           v-if="Object.keys(containerDetail.Config.Labels || {}).length === 0"
           class="empty-container"

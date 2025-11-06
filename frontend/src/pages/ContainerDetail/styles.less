@@ -180,6 +180,9 @@
 
 @media (max-width: 768px) {
   .detail-container {
+    gap: 12px;
+    padding: 12px;
+
     .info-grid {
       grid-template-columns: 1fr;
       gap: 20px;
@@ -188,11 +191,11 @@
         grid-column: 1;
       }
     }
-  }
-
-  .network-list {
-    .network-item {
-      width: 100%;
+    .network-list {
+      .network-item {
+        width: 100%;
+        min-width: 100%;
+      }
     }
   }
 }

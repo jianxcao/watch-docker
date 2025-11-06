@@ -43,7 +43,7 @@
       </n-card>
 
       <!-- 端口映射 -->
-      <n-card title="端口映射" class="info-card" v-if="portMappings.length > 0">
+      <n-card title="端口映射" class="info-card" v-if="portMappings.length > 0" size="small">
         <div class="port-mapping-list">
           <div v-for="(port, index) in portMappings" :key="index" class="port-mapping-item">
             <n-tag type="info" size="large">

@@ -44,10 +44,7 @@
               <span>仪表盘</span>
             </div>
           </template>
-          <DashboardTab
-            :is-running="containerDetail.State.Running"
-            :container-id="containerId"
-          />
+          <DashboardTab :is-running="containerDetail.State.Running" :container-id="containerId" />
         </n-tab-pane>
 
         <!-- Tab 3: 日志 -->
@@ -175,7 +172,7 @@ import {
   RefreshOutline,
 } from '@vicons/ionicons5'
 import DocumentIcon from '@/assets/svg/log.svg?component'
-import NetworkIcon from '@/assets/svg/network.svg?component'
+import NetworkIcon from '@/assets/svg/networkIO.svg?component'
 import VolumeIcon from '@/assets/svg/volume.svg?component'
 import { useContainerStore } from '@/store/container'
 import { useSettingStore } from '@/store/setting'
