@@ -14,8 +14,6 @@
             "env": {
                 "CONFIG_PATH": "./.config",
                 "STATIC_DIR": "${workspaceFolder}/frontend/dist",
-                "IS_OPEN_DOCKER_SHELL": "true",
-                "IS_SECONDARY_VERIFICATION": "true"
             },
             "cwd": "${workspaceFolder}/backend"
         }

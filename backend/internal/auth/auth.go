@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -19,16 +21,25 @@ var (
 
 type Claims struct {
 	Username      string `json:"username"`
+	PasswordHash  string `json:"passwordHash"` // 密码的哈希值，用于验证密码是否被修改
 	TwoFAVerified bool   `json:"twoFAVerified"`
 	IsTempToken   bool   `json:"isTempToken"`
 	jwt.RegisteredClaims
 }
 
+// hashPassword 计算密码的 SHA256 哈希
+func hashPassword(password string) string {
+	hash := sha256.Sum256([]byte(password))
+	return hex.EncodeToString(hash[:])
+}
+
 // GenerateToken 生成JWT token
 func GenerateToken(username string) (string, error) {
+	envCfg := conf.EnvCfg
 	expirationTime := time.Now().Add(24 * 365 * time.Hour)
 	claims := &Claims{
 		Username:      username,
+		PasswordHash:  hashPassword(envCfg.USER_PASSWORD), // 存储密码哈希
 		TwoFAVerified: true,
 		IsTempToken:   false,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -43,10 +54,12 @@ func GenerateToken(username string) (string, error) {
 
 // GenerateTempToken 生成临时 token（需要二次验证）
 func GenerateTempToken(username string) (string, error) {
+	envCfg := conf.EnvCfg
 	// 临时 token 有效期较短，15分钟
 	expirationTime := time.Now().Add(15 * time.Minute)
 	claims := &Claims{
 		Username:      username,
+		PasswordHash:  hashPassword(envCfg.USER_PASSWORD), // 存储密码哈希
 		TwoFAVerified: false,
 		IsTempToken:   true,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -161,6 +174,21 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// 验证 token 中的用户名和密码是否与配置的用户名密码匹配
+		if claims.Username != envCfg.USER_NAME {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token"})
+			c.Abort()
+			return
+		}
+
+		// 验证密码哈希，确保密码未被修改
+		currentPasswordHash := hashPassword(envCfg.USER_PASSWORD)
+		if claims.PasswordHash != currentPasswordHash {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "token已失效，请重新登录"})
+			c.Abort()
+			return
+		}
+
 		// 将用户信息存储到上下文中
 		c.Set("username", claims.Username)
 		c.Next()
@@ -223,6 +251,21 @@ func TempTokenMiddleware() gin.HandlerFunc {
 			} else {
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token"})
 			}
+			c.Abort()
+			return
+		}
+
+		// 验证 token 中的用户名和密码是否与配置的用户名密码匹配
+		if claims.Username != envCfg.USER_NAME {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token"})
+			c.Abort()
+			return
+		}
+
+		// 验证密码哈希，确保密码未被修改
+		currentPasswordHash := hashPassword(envCfg.USER_PASSWORD)
+		if claims.PasswordHash != currentPasswordHash {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "token已失效，请重新登录"})
 			c.Abort()
 			return
 		}
