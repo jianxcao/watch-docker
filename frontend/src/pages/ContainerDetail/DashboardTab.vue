@@ -174,7 +174,10 @@
         </div>
 
         <!-- 网络 I/O -->
-        <div class="stat-card network-io-card">
+        <div
+          class="stat-card network-io-card"
+          v-if="detailStats.networks && Object.keys(detailStats.networks).length > 0"
+        >
           <div class="card-header">
             <NetworkIOIcon class="card-icon" />
             <div class="card-title">网络 I/O</div>
@@ -243,7 +246,10 @@
       </div>
 
       <!-- 网络接口 -->
-      <div v-if="Object.keys(detailStats.networks).length > 0" class="network-card">
+      <div
+        v-if="detailStats.networks && Object.keys(detailStats.networks).length > 0"
+        class="network-card"
+      >
         <div class="card-header">
           <NetworkInterfaceIcon class="card-icon" />
           <div class="card-title">网络接口</div>
@@ -413,64 +419,8 @@ const { status, open, close } = useWebSocket(wsUrl, {
         const timeDiff = (currentTime - prevTime.value) / 1000 // 转换为秒
 
         if (timeDiff > 0) {
-          // 计算总网络速率
-          const prevRx = Object.values(prevStats.value.networks).reduce(
-            (sum, net) => sum + net.rx_bytes,
-            0,
-          )
-          const prevTx = Object.values(prevStats.value.networks).reduce(
-            (sum, net) => sum + net.tx_bytes,
-            0,
-          )
-          const currentRx = Object.values(newStats.networks).reduce(
-            (sum, net) => sum + net.rx_bytes,
-            0,
-          )
-          const currentTx = Object.values(newStats.networks).reduce(
-            (sum, net) => sum + net.tx_bytes,
-            0,
-          )
-
-          networkRxRate.value = Math.max(0, (currentRx - prevRx) / timeDiff)
-          networkTxRate.value = Math.max(0, (currentTx - prevTx) / timeDiff)
-
-          // 计算每个网络接口的速率
-          const rates: Record<string, { rxRate: number; txRate: number }> = {}
-          Object.keys(newStats.networks).forEach((interfaceName) => {
-            const current = newStats.networks[interfaceName]
-            const prev = prevStats.value?.networks[interfaceName]
-
-            if (prev) {
-              rates[interfaceName] = {
-                rxRate: Math.max(0, (current.rx_bytes - prev.rx_bytes) / timeDiff),
-                txRate: Math.max(0, (current.tx_bytes - prev.tx_bytes) / timeDiff),
-              }
-            } else {
-              rates[interfaceName] = { rxRate: 0, txRate: 0 }
-            }
-          })
-          networkInterfaceRates.value = rates
-
-          // 计算磁盘 I/O 速率
-          const prevRead =
-            prevStats.value.blkio_stats.io_service_bytes_recursive
-              ?.filter((item) => item.op === 'read' || item.op === 'Read')
-              .reduce((sum, item) => sum + item.value, 0) || 0
-          const prevWrite =
-            prevStats.value.blkio_stats.io_service_bytes_recursive
-              ?.filter((item) => item.op === 'write' || item.op === 'Write')
-              .reduce((sum, item) => sum + item.value, 0) || 0
-          const currentRead =
-            newStats.blkio_stats.io_service_bytes_recursive
-              ?.filter((item) => item.op === 'read' || item.op === 'Read')
-              .reduce((sum, item) => sum + item.value, 0) || 0
-          const currentWrite =
-            newStats.blkio_stats.io_service_bytes_recursive
-              ?.filter((item) => item.op === 'write' || item.op === 'Write')
-              .reduce((sum, item) => sum + item.value, 0) || 0
-
-          diskReadRate.value = Math.max(0, (currentRead - prevRead) / timeDiff)
-          diskWriteRate.value = Math.max(0, (currentWrite - prevWrite) / timeDiff)
+          calculateNetworkStats(timeDiff, newStats)
+          calculateDiskStats(timeDiff, newStats)
         }
       }
 
@@ -489,6 +439,63 @@ const { status, open, close } = useWebSocket(wsUrl, {
     }
   },
 })
+
+function calculateDiskStats(timeDiff: number, newStats: ContainerDetailStats) {
+  if (!prevStats.value?.blkio_stats || !newStats.blkio_stats) {
+    return
+  }
+  // 计算磁盘 I/O 速率
+  const prevRead =
+    prevStats.value.blkio_stats.io_service_bytes_recursive
+      ?.filter((item) => item.op === 'read' || item.op === 'Read')
+      .reduce((sum, item) => sum + item.value, 0) || 0
+  const prevWrite =
+    prevStats.value.blkio_stats.io_service_bytes_recursive
+      ?.filter((item) => item.op === 'write' || item.op === 'Write')
+      .reduce((sum, item) => sum + item.value, 0) || 0
+  const currentRead =
+    newStats.blkio_stats.io_service_bytes_recursive
+      ?.filter((item) => item.op === 'read' || item.op === 'Read')
+      .reduce((sum, item) => sum + item.value, 0) || 0
+  const currentWrite =
+    newStats.blkio_stats.io_service_bytes_recursive
+      ?.filter((item) => item.op === 'write' || item.op === 'Write')
+      .reduce((sum, item) => sum + item.value, 0) || 0
+
+  diskReadRate.value = Math.max(0, (currentRead - prevRead) / timeDiff)
+  diskWriteRate.value = Math.max(0, (currentWrite - prevWrite) / timeDiff)
+}
+
+function calculateNetworkStats(timeDiff: number, newStats: ContainerDetailStats) {
+  if (!prevStats.value?.networks || !newStats.networks) {
+    return
+  }
+  // 计算总网络速率
+  const prevRx = Object.values(prevStats.value.networks).reduce((sum, net) => sum + net.rx_bytes, 0)
+  const prevTx = Object.values(prevStats.value.networks).reduce((sum, net) => sum + net.tx_bytes, 0)
+  const currentRx = Object.values(newStats.networks).reduce((sum, net) => sum + net.rx_bytes, 0)
+  const currentTx = Object.values(newStats.networks).reduce((sum, net) => sum + net.tx_bytes, 0)
+
+  networkRxRate.value = Math.max(0, (currentRx - prevRx) / timeDiff)
+  networkTxRate.value = Math.max(0, (currentTx - prevTx) / timeDiff)
+
+  // 计算每个网络接口的速率
+  const rates: Record<string, { rxRate: number; txRate: number }> = {}
+  Object.keys(newStats.networks).forEach((interfaceName) => {
+    const current = newStats.networks![interfaceName]
+    const prev = prevStats.value?.networks![interfaceName]
+
+    if (prev) {
+      rates[interfaceName] = {
+        rxRate: Math.max(0, (current.rx_bytes - prev.rx_bytes) / timeDiff),
+        txRate: Math.max(0, (current.tx_bytes - prev.tx_bytes) / timeDiff),
+      }
+    } else {
+      rates[interfaceName] = { rxRate: 0, txRate: 0 }
+    }
+  })
+  networkInterfaceRates.value = rates
+}
 
 // 连接状态
 const isConnected = computed(() => status.value === 'OPEN')
@@ -575,7 +582,7 @@ const memoryPercent = computed(() => {
 
 // 计算网络总接收字节
 const totalNetworkRx = computed(() => {
-  if (!detailStats.value) {
+  if (!detailStats.value || !detailStats.value.networks) {
     return 0
   }
   return Object.values(detailStats.value.networks).reduce((sum, net) => sum + net.rx_bytes, 0)
@@ -583,7 +590,7 @@ const totalNetworkRx = computed(() => {
 
 // 计算网络总接收包数
 const totalNetworkRxPackets = computed(() => {
-  if (!detailStats.value) {
+  if (!detailStats.value || !detailStats.value.networks) {
     return 0
   }
   return Object.values(detailStats.value.networks).reduce((sum, net) => sum + net.rx_packets, 0)
@@ -591,7 +598,7 @@ const totalNetworkRxPackets = computed(() => {
 
 // 计算网络总发送字节
 const totalNetworkTx = computed(() => {
-  if (!detailStats.value) {
+  if (!detailStats.value || !detailStats.value.networks) {
     return 0
   }
   return Object.values(detailStats.value.networks).reduce((sum, net) => sum + net.tx_bytes, 0)
@@ -599,10 +606,10 @@ const totalNetworkTx = computed(() => {
 
 // 计算网络总发送包数
 const totalNetworkTxPackets = computed(() => {
-  if (!detailStats.value) {
+  if (!detailStats.value || !detailStats.value.networks) {
     return 0
   }
-  return Object.values(detailStats.value.networks).reduce((sum, net) => sum + net.tx_packets, 0)
+  return Object.values(detailStats.value.networks!).reduce((sum, net) => sum + net.tx_packets, 0)
 })
 
 // 计算块读取字节

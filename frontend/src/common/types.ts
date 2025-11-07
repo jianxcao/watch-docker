@@ -134,7 +134,8 @@ export interface ContainerDetailStats {
     committed_as?: number
     failcnt?: number
   }
-  networks: {
+  // host 模式下回没有 networks
+  networks?: {
     [key: string]: {
       rx_bytes: number
       rx_packets: number

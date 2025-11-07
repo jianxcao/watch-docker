@@ -9,7 +9,7 @@ import (
 type EnvConfig struct {
 	CONFIG_PATH               string `default:"/config"`
 	CONFIG_FILE               string `default:"config.yaml"`
-	VERSION_WATCH_DOCKER      string `default:"v0.1.1"`
+	VERSION_WATCH_DOCKER      string `default:"v0.1.2"`
 	USER_NAME                 string `default:"admin"`
 	USER_PASSWORD             string `default:"admin"`
 	STATIC_DIR                string `default:"/app/static"`
