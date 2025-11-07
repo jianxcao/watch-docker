@@ -657,3 +657,119 @@ export interface ContainerDetail {
 export interface ContainerDetailResponse {
   container: ContainerDetail
 }
+
+// 端口绑定
+export interface PortBinding {
+  hostIP: string
+  hostPort: string
+}
+
+// 重启策略类型
+export type RestartPolicyType = 'no' | 'always' | 'unless-stopped' | 'on-failure'
+
+// 重启策略
+export interface RestartPolicyConfig {
+  name: RestartPolicyType
+  maximumRetryCount: number
+}
+
+// 设备映射
+export interface DeviceMapping {
+  pathOnHost: string
+  pathInContainer: string
+  cgroupPermissions: string
+}
+
+// GPU 等设备请求
+export interface DeviceRequest {
+  driver: string
+  count: number
+  deviceIDs: string[]
+  capabilities: string[][]
+  options: Record<string, string>
+}
+
+// 端点 IPAM 配置
+export interface EndpointIPAMConfig {
+  ipv4Address: string
+  ipv6Address: string
+}
+
+// 端点设置
+export interface EndpointSettings {
+  ipamConfig?: EndpointIPAMConfig
+  links: string[]
+  aliases: string[]
+  networkID: string
+  endpointID: string
+  gateway: string
+  ipAddress: string
+  ipPrefixLen: number
+  ipv6Gateway: string
+  globalIPv6Address: string
+  globalIPv6PrefixLen: number
+  macAddress: string
+}
+
+// 网络配置
+export interface NetworkConfigCreate {
+  endpointsConfig: Record<string, EndpointSettings>
+}
+
+// 容器创建请求
+export interface ContainerCreateRequest {
+  name: string
+  image: string
+  cmd?: string[]
+  entrypoint?: string[]
+  workingDir?: string
+  env?: string[]
+  exposedPorts?: Record<string, Record<string, never>>
+  labels?: Record<string, string>
+  hostname?: string
+  domainname?: string
+  user?: string
+  attachStdin?: boolean
+  attachStdout?: boolean
+  attachStderr?: boolean
+  tty?: boolean
+  openStdin?: boolean
+  stdinOnce?: boolean
+  binds?: string[]
+  portBindings?: Record<string, PortBinding[]>
+  restartPolicy?: RestartPolicyConfig
+  autoRemove?: boolean
+  networkMode?: string
+  privileged?: boolean
+  publishAllPorts?: boolean
+  readonlyRootfs?: boolean
+  dns?: string[]
+  dnsSearch?: string[]
+  dnsOptions?: string[]
+  extraHosts?: string[]
+  capAdd?: string[]
+  capDrop?: string[]
+  securityOpt?: string[]
+  cpuShares?: number
+  memory?: number
+  cpuQuota?: number
+  cpuPeriod?: number
+  cpusetCpus?: string
+  cpusetMems?: string
+  blkioWeight?: number
+  shmSize?: number
+  pidMode?: string
+  ipcMode?: string
+  utsMode?: string
+  cgroup?: string
+  runtime?: string
+  devices?: DeviceMapping[]
+  deviceRequests?: DeviceRequest[]
+  networkConfig?: NetworkConfigCreate
+}
+
+// 容器创建响应
+export interface ContainerCreateResponse {
+  id: string
+  message: string
+}

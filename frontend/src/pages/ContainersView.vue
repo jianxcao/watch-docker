@@ -120,6 +120,13 @@
           </n-text>
         </div>
         <div class="flex gap-2">
+          <n-button type="primary" @click="handleCreateContainer" circle size="tiny">
+            <template #icon>
+              <n-icon>
+                <AddOutline />
+              </n-icon>
+            </template>
+          </n-button>
           <!-- 导入按钮 -->
           <n-button @click="showImportModal = true" circle size="tiny">
             <template #icon>
@@ -174,6 +181,7 @@ import {
   CalendarOutline,
   TextOutline,
   RadioButtonOnOutline,
+  AddOutline,
 } from '@vicons/ionicons5'
 import { useAppStore } from '@/store/app'
 
@@ -398,6 +406,10 @@ const handleLogs = async (container: ContainerStatus) => {
 
 const handleDetail = (container: ContainerStatus) => {
   router.push({ name: 'container-detail', params: { id: container.id } })
+}
+
+const handleCreateContainer = () => {
+  router.push({ name: 'container-create' })
 }
 
 const handleBatchUpdate = async () => {

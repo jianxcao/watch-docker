@@ -5,6 +5,8 @@ import type {
   ComposeProject,
   Config,
   ContainerStatus,
+  ContainerCreateRequest,
+  ContainerCreateResponse,
   ImageInfo,
   SystemInfo,
   VolumeListResponse,
@@ -65,6 +67,10 @@ export const containerApi = {
   // 获取容器详情
   getContainerDetail: (id: string) =>
     axios.get<{ container: any }>(API_ENDPOINTS.CONTAINER_DETAIL(id)),
+
+  // 创建容器
+  createContainer: (data: ContainerCreateRequest) =>
+    axios.post<ContainerCreateResponse>(API_ENDPOINTS.CONTAINER_CREATE, data),
 
   // 更新单个容器
   updateContainer: (id: string, image?: string) =>

@@ -143,6 +143,16 @@
   height: 100%;
   .scrollbar();
   overflow-y: auto;
+  .loading-container,
+  .error-container,
+  .empty-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+    gap: 16px;
+  }
 }
 
 .dashboard-content {

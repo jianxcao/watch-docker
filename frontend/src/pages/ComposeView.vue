@@ -83,18 +83,18 @@
           </n-text>
         </div>
         <div class="flex gap-2">
+          <n-button circle size="tiny" type="primary" @click="handleAddProject">
+            <template #icon>
+              <n-icon>
+                <AddCircleOutline />
+              </n-icon>
+            </template>
+          </n-button>
           <!-- 刷新按钮 -->
           <n-button @click="handleRefresh" :loading="composeStore.loading" circle size="tiny">
             <template #icon>
               <n-icon>
                 <RefreshOutline />
-              </n-icon>
-            </template>
-          </n-button>
-          <n-button circle size="tiny" @click="handleAddProject">
-            <template #icon>
-              <n-icon>
-                <AddCircleOutline />
               </n-icon>
             </template>
           </n-button>

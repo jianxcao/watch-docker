@@ -8,6 +8,8 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AdvancedTab: typeof import('./src/components/CreateContainer/AdvancedTab.vue')['default']
+    BasicTab: typeof import('./src/components/CreateContainer/BasicTab.vue')['default']
     ComposeCard: typeof import('./src/components/ComposeCard.vue')['default']
     ComposeCreateProgress: typeof import('./src/components/ComposeCreateProgress.vue')['default']
     ComposeLogsModal: typeof import('./src/components/ComposeLogsModal.vue')['default']
@@ -17,6 +19,7 @@ declare module 'vue' {
     ContainerImportModal: typeof import('./src/components/ContainerImportModal.vue')['default']
     ContainerLogsModal: typeof import('./src/components/ContainerLogsModal.vue')['default']
     ContainerShellView: typeof import('./src/components/ContainerShellView.vue')['default']
+    EnvTab: typeof import('./src/components/CreateContainer/EnvTab.vue')['default']
     ImageCard: typeof import('./src/components/ImageCard.vue')['default']
     ImageImportModal: typeof import('./src/components/ImageImportModal.vue')['default']
     LayoutView: typeof import('./src/components/LayoutView.vue')['default']
@@ -43,9 +46,11 @@ declare module 'vue' {
     NEmpty: typeof import('naive-ui')['NEmpty']
     NetworkCard: typeof import('./src/components/NetworkCard.vue')['default']
     NetworkCreateModal: typeof import('./src/components/NetworkCreateModal.vue')['default']
+    NetworkSecurityTab: typeof import('./src/components/CreateContainer/NetworkSecurityTab.vue')['default']
     NForm: typeof import('naive-ui')['NForm']
     NFormItem: typeof import('naive-ui')['NFormItem']
     NFormItemGi: typeof import('naive-ui')['NFormItemGi']
+    NGi: typeof import('naive-ui')['NGi']
     NGlobalStyle: typeof import('naive-ui')['NGlobalStyle']
     NGrid: typeof import('naive-ui')['NGrid']
     NH2: typeof import('naive-ui')['NH2']
@@ -82,6 +87,7 @@ declare module 'vue' {
     NUpload: typeof import('naive-ui')['NUpload']
     NUploadDragger: typeof import('naive-ui')['NUploadDragger']
     NVirtualList: typeof import('naive-ui')['NVirtualList']
+    PortTab: typeof import('./src/components/CreateContainer/PortTab.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     RunningStatusBadge: typeof import('./src/components/RunningStatusBadge.vue')['default']
@@ -92,6 +98,7 @@ declare module 'vue' {
     TwoFAVerify: typeof import('./src/components/TwoFAVerify.vue')['default']
     UpdateStatusBadge: typeof import('./src/components/UpdateStatusBadge.vue')['default']
     VolumeCard: typeof import('./src/components/VolumeCard.vue')['default']
+    VolumeTab: typeof import('./src/components/CreateContainer/VolumeTab.vue')['default']
     YamlEditor: typeof import('./src/components/YamlEditor/index.vue')['default']
   }
 }

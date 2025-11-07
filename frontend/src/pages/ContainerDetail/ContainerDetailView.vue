@@ -261,7 +261,7 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
 // Tab 高度
 const tabTitleHeight = computed(() => 42)
 const tabHeight = computed(() => {
-  return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value}px + 12px)`
+  return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value}px)`
 })
 
 // 日志 WebSocket URL

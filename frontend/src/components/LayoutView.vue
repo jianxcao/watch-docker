@@ -137,7 +137,7 @@ watch(visibility, (newVal) => {
 .layout-content {
   padding: 12px;
   box-sizing: border-box;
-  min-height: calc(100vh - var(--content-safe-top));
+  // min-height: calc(100vh - var(--content-safe-top) - var(--content-safe-bottom));
 }
 
 #footer {

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/go-connections/nat"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/wsstream"
 
@@ -19,6 +21,7 @@ import (
 // setupContainerRoutes 设置容器相关的路由
 func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.GET("/containers", s.handleListContainers())
+	protected.POST("/containers/create", s.handleCreateContainer())
 	protected.GET("/containers/:id", s.handleGetContainerDetail())
 	protected.POST("/containers/stats", s.handleGetContainersStats())
 	protected.GET("/containers/stats/ws", s.handleStatsWebSocket())
@@ -34,6 +37,302 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.POST("/containers/import", s.handleImportContainer())
 	protected.POST("/system/prune", s.handlePruneSystem())
 	protected.GET("/update/all", s.handleUpdateAll())
+}
+
+// ContainerCreateRequest 容器创建请求
+type ContainerCreateRequest struct {
+	Name            string                   `json:"name"`
+	Image           string                   `json:"image" binding:"required"`
+	Cmd             []string                 `json:"cmd"`
+	Entrypoint      []string                 `json:"entrypoint"`
+	WorkingDir      string                   `json:"workingDir"`
+	Env             []string                 `json:"env"`
+	ExposedPorts    map[string]struct{}      `json:"exposedPorts"`
+	Labels          map[string]string        `json:"labels"`
+	Hostname        string                   `json:"hostname"`
+	Domainname      string                   `json:"domainname"`
+	User            string                   `json:"user"`
+	AttachStdin     bool                     `json:"attachStdin"`
+	AttachStdout    bool                     `json:"attachStdout"`
+	AttachStderr    bool                     `json:"attachStderr"`
+	Tty             bool                     `json:"tty"`
+	OpenStdin       bool                     `json:"openStdin"`
+	StdinOnce       bool                     `json:"stdinOnce"`
+	Binds           []string                 `json:"binds"`
+	PortBindings    map[string][]PortBinding `json:"portBindings"`
+	RestartPolicy   RestartPolicy            `json:"restartPolicy"`
+	AutoRemove      bool                     `json:"autoRemove"`
+	NetworkMode     string                   `json:"networkMode"`
+	Privileged      bool                     `json:"privileged"`
+	PublishAllPorts bool                     `json:"publishAllPorts"`
+	ReadonlyRootfs  bool                     `json:"readonlyRootfs"`
+	Dns             []string                 `json:"dns"`
+	DnsSearch       []string                 `json:"dnsSearch"`
+	DnsOptions      []string                 `json:"dnsOptions"`
+	ExtraHosts      []string                 `json:"extraHosts"`
+	CapAdd          []string                 `json:"capAdd"`
+	CapDrop         []string                 `json:"capDrop"`
+	SecurityOpt     []string                 `json:"securityOpt"`
+	CpuShares       int64                    `json:"cpuShares"`
+	Memory          int64                    `json:"memory"`
+	CpuQuota        int64                    `json:"cpuQuota"`
+	CpuPeriod       int64                    `json:"cpuPeriod"`
+	CpusetCpus      string                   `json:"cpusetCpus"`
+	CpusetMems      string                   `json:"cpusetMems"`
+	BlkioWeight     uint16                   `json:"blkioWeight"`
+	ShmSize         int64                    `json:"shmSize"`
+	PidMode         string                   `json:"pidMode"`
+	IpcMode         string                   `json:"ipcMode"`
+	UTSMode         string                   `json:"utsMode"`
+	Cgroup          string                   `json:"cgroup"`
+	Runtime         string                   `json:"runtime"`
+	Devices         []DeviceMapping          `json:"devices"`
+	DeviceRequests  []DeviceRequest          `json:"deviceRequests"`
+	NetworkConfig   *NetworkConfig           `json:"networkConfig"`
+}
+
+// PortBinding 端口绑定
+type PortBinding struct {
+	HostIP   string `json:"hostIP"`
+	HostPort string `json:"hostPort"`
+}
+
+// RestartPolicy 重启策略
+type RestartPolicy struct {
+	Name              string `json:"name"`
+	MaximumRetryCount int    `json:"maximumRetryCount"`
+}
+
+// DeviceMapping 设备映射
+type DeviceMapping struct {
+	PathOnHost        string `json:"pathOnHost"`
+	PathInContainer   string `json:"pathInContainer"`
+	CgroupPermissions string `json:"cgroupPermissions"`
+}
+
+// DeviceRequest GPU 等设备请求
+type DeviceRequest struct {
+	Driver       string            `json:"driver"`
+	Count        int               `json:"count"`
+	DeviceIDs    []string          `json:"deviceIDs"`
+	Capabilities [][]string        `json:"capabilities"`
+	Options      map[string]string `json:"options"`
+}
+
+// NetworkConfig 网络配置
+type NetworkConfig struct {
+	EndpointsConfig map[string]*EndpointSettings `json:"endpointsConfig"`
+}
+
+// EndpointSettings 端点设置
+type EndpointSettings struct {
+	IPAMConfig          *EndpointIPAMConfig `json:"ipamConfig"`
+	Links               []string            `json:"links"`
+	Aliases             []string            `json:"aliases"`
+	NetworkID           string              `json:"networkID"`
+	EndpointID          string              `json:"endpointID"`
+	Gateway             string              `json:"gateway"`
+	IPAddress           string              `json:"ipAddress"`
+	IPPrefixLen         int                 `json:"ipPrefixLen"`
+	IPv6Gateway         string              `json:"ipv6Gateway"`
+	GlobalIPv6Address   string              `json:"globalIPv6Address"`
+	GlobalIPv6PrefixLen int                 `json:"globalIPv6PrefixLen"`
+	MacAddress          string              `json:"macAddress"`
+}
+
+// EndpointIPAMConfig IPAM 配置
+type EndpointIPAMConfig struct {
+	IPv4Address string `json:"ipv4Address"`
+	IPv6Address string `json:"ipv6Address"`
+}
+
+// handleCreateContainer 处理容器创建
+func (s *Server) handleCreateContainer() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req ContainerCreateRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			s.logger.Error("bind create container request", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "请求参数错误: "+err.Error()))
+			return
+		}
+
+		// 验证必填字段
+		if req.Image == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "镜像名称不能为空"))
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+		defer cancel()
+
+		// 构建容器配置
+		config := &container.Config{
+			Image:        req.Image,        // 镜像名称
+			Cmd:          req.Cmd,          // 容器启动命令
+			Entrypoint:   req.Entrypoint,   // 入口点
+			WorkingDir:   req.WorkingDir,   // 工作目录
+			Env:          req.Env,          // 环境变量
+			Labels:       req.Labels,       // 标签
+			Hostname:     req.Hostname,     // 主机名
+			Domainname:   req.Domainname,   // 域名
+			User:         req.User,         // 用户(格式: uid:gid 或 username)
+			AttachStdin:  req.AttachStdin,  // 附加标准输入, 通常用于交互式容器
+			AttachStdout: req.AttachStdout, // 附加标准输出, 用于查看容器的日志输出
+			AttachStderr: req.AttachStderr, // 附加标准错误, 用于查看容器的错误日志
+			Tty:          req.Tty,          // 分配伪终端, 通常与 -t 参数对应，在交互式 shell 中使用
+			OpenStdin:    req.OpenStdin,    // 打开标准输入, 通常与 -i 参数对应
+			StdinOnce:    req.StdinOnce,    // 标准输入是否只使用一次, 如果为 true，当第一个附加的客户端断开连接后，stdin 会关闭
+		}
+
+		// 设置暴露端口
+		if len(req.ExposedPorts) > 0 {
+			config.ExposedPorts = make(nat.PortSet)
+			for port := range req.ExposedPorts {
+				p, err := nat.NewPort("tcp", port)
+				if err == nil {
+					config.ExposedPorts[p] = struct{}{}
+				}
+			}
+		}
+
+		// 构建主机配置
+		hostConfig := &container.HostConfig{
+			Binds:           req.Binds,                                                                                                                                  // 数据卷绑定
+			RestartPolicy:   container.RestartPolicy{Name: container.RestartPolicyMode(req.RestartPolicy.Name), MaximumRetryCount: req.RestartPolicy.MaximumRetryCount}, // 重启策略
+			AutoRemove:      req.AutoRemove,                                                                                                                             // 容器退出时自动删除
+			NetworkMode:     container.NetworkMode(req.NetworkMode),                                                                                                     // 网络模式
+			Privileged:      req.Privileged,                                                                                                                             // 特权模式
+			PublishAllPorts: req.PublishAllPorts,                                                                                                                        // 发布所有端口
+			ReadonlyRootfs:  req.ReadonlyRootfs,                                                                                                                         // 只读根文件系统
+			DNS:             req.Dns,                                                                                                                                    // DNS 服务器
+			DNSSearch:       req.DnsSearch,                                                                                                                              // DNS 搜索域
+			DNSOptions:      req.DnsOptions,                                                                                                                             // DNS 选项
+			ExtraHosts:      req.ExtraHosts,                                                                                                                             // 额外的主机映射
+			CapAdd:          req.CapAdd,                                                                                                                                 // 添加 Linux 能力
+			CapDrop:         req.CapDrop,                                                                                                                                // 移除 Linux 能力
+			SecurityOpt:     req.SecurityOpt,                                                                                                                            // 安全选项
+			Resources: container.Resources{
+				CPUShares:   req.CpuShares,   // CPU 份额(相对权重)
+				Memory:      req.Memory,      // 内存限制(字节)
+				CPUQuota:    req.CpuQuota,    // CPU 配额(微秒)
+				CPUPeriod:   req.CpuPeriod,   // CPU 周期(微秒)
+				CpusetCpus:  req.CpusetCpus,  // 允许使用的 CPU 集合
+				CpusetMems:  req.CpusetMems,  // 允许使用的内存节点
+				BlkioWeight: req.BlkioWeight, // 块 I/O 权重
+			},
+			ShmSize: req.ShmSize,                      // 共享内存大小(字节)
+			PidMode: container.PidMode(req.PidMode),   // PID 命名空间模式
+			IpcMode: container.IpcMode(req.IpcMode),   // IPC 命名空间模式
+			UTSMode: container.UTSMode(req.UTSMode),   // UTS 命名空间模式
+			Cgroup:  container.CgroupSpec(req.Cgroup), // Cgroup 父路径
+			Runtime: req.Runtime,                      // 运行时(如 nvidia)
+		}
+
+		// 设置端口绑定(将主机端口映射到容器端口)
+		if len(req.PortBindings) > 0 {
+			hostConfig.PortBindings = make(nat.PortMap)
+			for portStr, bindings := range req.PortBindings {
+				port, err := nat.NewPort("tcp", portStr)
+				if err != nil {
+					// 尝试解析端口字符串(可能包含协议,格式: 80/tcp)
+					parts := strings.Split(portStr, "/")
+					if len(parts) == 2 {
+						port, err = nat.NewPort(parts[1], parts[0])
+					}
+				}
+				if err == nil {
+					var portBindings []nat.PortBinding
+					for _, binding := range bindings {
+						portBindings = append(portBindings, nat.PortBinding{
+							HostIP:   binding.HostIP,   // 主机 IP 地址
+							HostPort: binding.HostPort, // 主机端口
+						})
+					}
+					hostConfig.PortBindings[port] = portBindings
+				}
+			}
+		}
+
+		// 设置设备映射(将主机设备映射到容器)
+		if len(req.Devices) > 0 {
+			hostConfig.Devices = make([]container.DeviceMapping, 0, len(req.Devices))
+			for _, dev := range req.Devices {
+				hostConfig.Devices = append(hostConfig.Devices, container.DeviceMapping{
+					PathOnHost:        dev.PathOnHost,        // 主机设备路径
+					PathInContainer:   dev.PathInContainer,   // 容器内设备路径
+					CgroupPermissions: dev.CgroupPermissions, // Cgroup 权限(如 rwm)
+				})
+			}
+		}
+
+		// 设置设备请求(用于 GPU 等特殊设备)
+		if len(req.DeviceRequests) > 0 {
+			hostConfig.DeviceRequests = make([]container.DeviceRequest, 0, len(req.DeviceRequests))
+			for _, devReq := range req.DeviceRequests {
+				hostConfig.DeviceRequests = append(hostConfig.DeviceRequests, container.DeviceRequest{
+					Driver:       devReq.Driver,       // 设备驱动(如 nvidia)
+					Count:        devReq.Count,        // 设备数量(-1 表示全部)
+					DeviceIDs:    devReq.DeviceIDs,    // 设备 ID 列表
+					Capabilities: devReq.Capabilities, // 设备能力(如 [[gpu]])
+					Options:      devReq.Options,      // 其他选项
+				})
+			}
+		}
+
+		// 构建网络配置(配置容器连接到的网络)
+		var networkConfig *network.NetworkingConfig
+		if req.NetworkConfig != nil && req.NetworkConfig.EndpointsConfig != nil {
+			networkConfig = &network.NetworkingConfig{
+				EndpointsConfig: make(map[string]*network.EndpointSettings),
+			}
+			for netName, endpoint := range req.NetworkConfig.EndpointsConfig {
+				endpointSettings := &network.EndpointSettings{
+					Links:               endpoint.Links,               // 容器链接
+					Aliases:             endpoint.Aliases,             // 网络别名
+					NetworkID:           endpoint.NetworkID,           // 网络 ID
+					EndpointID:          endpoint.EndpointID,          // 端点 ID
+					Gateway:             endpoint.Gateway,             // 网关地址
+					IPAddress:           endpoint.IPAddress,           // IPv4 地址
+					IPPrefixLen:         endpoint.IPPrefixLen,         // IPv4 前缀长度
+					IPv6Gateway:         endpoint.IPv6Gateway,         // IPv6 网关
+					GlobalIPv6Address:   endpoint.GlobalIPv6Address,   // 全局 IPv6 地址
+					GlobalIPv6PrefixLen: endpoint.GlobalIPv6PrefixLen, // IPv6 前缀长度
+					MacAddress:          endpoint.MacAddress,          // MAC 地址
+				}
+				if endpoint.IPAMConfig != nil {
+					endpointSettings.IPAMConfig = &network.EndpointIPAMConfig{
+						IPv4Address: endpoint.IPAMConfig.IPv4Address, // 自定义 IPv4 地址
+						IPv6Address: endpoint.IPAMConfig.IPv6Address, // 自定义 IPv6 地址
+					}
+				}
+				networkConfig.EndpointsConfig[netName] = endpointSettings
+			}
+		}
+
+		s.logger.Info("creating container",
+			zap.String("name", req.Name),
+			zap.String("image", req.Image))
+
+		// 创建容器
+		containerID, err := s.docker.CreateContainer(ctx, req.Name, config, hostConfig, networkConfig)
+		if err != nil {
+			s.logger.Error("create container failed",
+				zap.String("name", req.Name),
+				zap.String("image", req.Image),
+				zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "创建容器失败: "+err.Error()))
+			return
+		}
+
+		s.logger.Info("container created successfully",
+			zap.String("name", req.Name),
+			zap.String("containerID", containerID))
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"id":      containerID,
+			"message": "容器创建成功",
+		}))
+	}
 }
 
 func (s *Server) handleUpdateContainer() gin.HandlerFunc {

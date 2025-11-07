@@ -364,7 +364,7 @@ const yamlEditorOptHeight = computed(() => {
 })
 
 const tabHeight = computed(() => {
-  return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value}px + 12px)`
+  return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value}px)`
 })
 
 const yamlEditorMinHeight = computed(() => {
