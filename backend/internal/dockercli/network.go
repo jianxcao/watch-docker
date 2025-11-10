@@ -349,6 +349,17 @@ func (c *Client) CreateNetwork(ctx context.Context, req *NetworkCreateRequest) (
 		req.Attachable = false
 	}
 
+	// 验证 macvlan 或 ipvlan 驱动需要 parent 参数
+	if req.Driver == "macvlan" || req.Driver == "ipvlan" {
+		if req.Options == nil || req.Options["parent"] == "" {
+			return nil, fmt.Errorf("%s 驱动需要指定 parent 参数（父网络接口），例如：eth0", req.Driver)
+		}
+		logger.Logger.Info("creating network with parent interface",
+			zap.String("name", req.Name),
+			zap.String("driver", req.Driver),
+			zap.String("parent", req.Options["parent"]))
+	}
+
 	options := network.CreateOptions{
 		Driver:     req.Driver,
 		Scope:      req.Scope,

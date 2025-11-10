@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import { h } from 'vue'
-import { NIcon, type IconProps } from 'naive-ui'
+import { NIcon, type IconProps, type MessageApi } from 'naive-ui'
 
 export const sleep = (ms: number) => {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -9,6 +9,45 @@ export const sleep = (ms: number) => {
 // 渲染菜单图标
 export const renderIcon = (icon: any, props?: IconProps) => {
   return () => h(NIcon, props, { default: () => h(icon) })
+}
+
+/**
+ * 显示包含换行符的错误消息
+ * @param message MessageApi 实例
+ * @param msg 错误消息（可能包含 \n）
+ * @param duration 显示时长（毫秒），默认 5000
+ */
+export const showErrorWithNewlines = (message: MessageApi, msg: string, duration = 5000) => {
+  // 将 \n 分割成多行
+  const lines = msg.split('\\n')
+  message.error(
+    () =>
+      h(
+        'div',
+        { style: { whiteSpace: 'pre-wrap', maxWidth: '500px' } },
+        lines.map((line, index) => h('div', { key: index }, line || ' ')),
+      ),
+    { duration },
+  )
+}
+
+/**
+ * 显示包含换行符的警告消息
+ * @param message MessageApi 实例
+ * @param msg 警告消息（可能包含 \n）
+ * @param duration 显示时长（毫秒），默认 5000
+ */
+export const showWarningWithNewlines = (message: MessageApi, msg: string, duration = 5000) => {
+  const lines = msg.split('\\n')
+  message.warning(
+    () =>
+      h(
+        'div',
+        { style: { whiteSpace: 'pre-wrap', maxWidth: '500px' } },
+        lines.map((line, index) => h('div', { key: index }, line || ' ')),
+      ),
+    { duration },
+  )
 }
 
 // 格式化百分比

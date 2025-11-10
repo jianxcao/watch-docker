@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
+	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	"github.com/jianxcao/watch-docker/backend/internal/wsstream"
 
 	"github.com/gin-gonic/gin"
@@ -41,54 +42,56 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 
 // ContainerCreateRequest 容器创建请求
 type ContainerCreateRequest struct {
-	Name            string                   `json:"name"`
-	Image           string                   `json:"image" binding:"required"`
-	Cmd             []string                 `json:"cmd"`
-	Entrypoint      []string                 `json:"entrypoint"`
-	WorkingDir      string                   `json:"workingDir"`
-	Env             []string                 `json:"env"`
-	ExposedPorts    map[string]struct{}      `json:"exposedPorts"`
-	Labels          map[string]string        `json:"labels"`
-	Hostname        string                   `json:"hostname"`
-	Domainname      string                   `json:"domainname"`
-	User            string                   `json:"user"`
-	AttachStdin     bool                     `json:"attachStdin"`
-	AttachStdout    bool                     `json:"attachStdout"`
-	AttachStderr    bool                     `json:"attachStderr"`
-	Tty             bool                     `json:"tty"`
-	OpenStdin       bool                     `json:"openStdin"`
-	StdinOnce       bool                     `json:"stdinOnce"`
-	Binds           []string                 `json:"binds"`
-	PortBindings    map[string][]PortBinding `json:"portBindings"`
-	RestartPolicy   RestartPolicy            `json:"restartPolicy"`
-	AutoRemove      bool                     `json:"autoRemove"`
-	NetworkMode     string                   `json:"networkMode"`
-	Privileged      bool                     `json:"privileged"`
-	PublishAllPorts bool                     `json:"publishAllPorts"`
-	ReadonlyRootfs  bool                     `json:"readonlyRootfs"`
-	Dns             []string                 `json:"dns"`
-	DnsSearch       []string                 `json:"dnsSearch"`
-	DnsOptions      []string                 `json:"dnsOptions"`
-	ExtraHosts      []string                 `json:"extraHosts"`
-	CapAdd          []string                 `json:"capAdd"`
-	CapDrop         []string                 `json:"capDrop"`
-	SecurityOpt     []string                 `json:"securityOpt"`
-	CpuShares       int64                    `json:"cpuShares"`
-	Memory          int64                    `json:"memory"`
-	CpuQuota        int64                    `json:"cpuQuota"`
-	CpuPeriod       int64                    `json:"cpuPeriod"`
-	CpusetCpus      string                   `json:"cpusetCpus"`
-	CpusetMems      string                   `json:"cpusetMems"`
-	BlkioWeight     uint16                   `json:"blkioWeight"`
-	ShmSize         int64                    `json:"shmSize"`
-	PidMode         string                   `json:"pidMode"`
-	IpcMode         string                   `json:"ipcMode"`
-	UTSMode         string                   `json:"utsMode"`
-	Cgroup          string                   `json:"cgroup"`
-	Runtime         string                   `json:"runtime"`
-	Devices         []DeviceMapping          `json:"devices"`
-	DeviceRequests  []DeviceRequest          `json:"deviceRequests"`
-	NetworkConfig   *NetworkConfig           `json:"networkConfig"`
+	Name              string                   `json:"name"`
+	Image             string                   `json:"image" binding:"required"`
+	Cmd               []string                 `json:"cmd"`
+	Entrypoint        []string                 `json:"entrypoint"`
+	WorkingDir        string                   `json:"workingDir"`
+	Env               []string                 `json:"env"`
+	ExposedPorts      map[string]struct{}      `json:"exposedPorts"`
+	Labels            map[string]string        `json:"labels"`
+	Hostname          string                   `json:"hostname"`
+	Domainname        string                   `json:"domainname"`
+	User              string                   `json:"user"`
+	AttachStdin       bool                     `json:"attachStdin"`
+	AttachStdout      bool                     `json:"attachStdout"`
+	AttachStderr      bool                     `json:"attachStderr"`
+	Tty               bool                     `json:"tty"`
+	OpenStdin         bool                     `json:"openStdin"`
+	StdinOnce         bool                     `json:"stdinOnce"`
+	Binds             []string                 `json:"binds"`
+	PortBindings      map[string][]PortBinding `json:"portBindings"`
+	RestartPolicy     RestartPolicy            `json:"restartPolicy"`
+	AutoRemove        bool                     `json:"autoRemove"`
+	NetworkMode       string                   `json:"networkMode"`
+	Privileged        bool                     `json:"privileged"`
+	PublishAllPorts   bool                     `json:"publishAllPorts"`
+	ReadonlyRootfs    bool                     `json:"readonlyRootfs"`
+	Dns               []string                 `json:"dns"`
+	DnsSearch         []string                 `json:"dnsSearch"`
+	DnsOptions        []string                 `json:"dnsOptions"`
+	ExtraHosts        []string                 `json:"extraHosts"`
+	CapAdd            []string                 `json:"capAdd"`
+	CapDrop           []string                 `json:"capDrop"`
+	SecurityOpt       []string                 `json:"securityOpt"`
+	CpuShares         int64                    `json:"cpuShares"`
+	Memory            int64                    `json:"memory"`
+	MemoryReservation int64                    `json:"memoryReservation"`
+	CpuQuota          int64                    `json:"cpuQuota"`
+	CpuPeriod         int64                    `json:"cpuPeriod"`
+	CpusetCpus        string                   `json:"cpusetCpus"`
+	CpusetMems        string                   `json:"cpusetMems"`
+	BlkioWeight       uint16                   `json:"blkioWeight"`
+	ShmSize           int64                    `json:"shmSize"`
+	PidMode           string                   `json:"pidMode"`
+	IpcMode           string                   `json:"ipcMode"`
+	UTSMode           string                   `json:"utsMode"`
+	Cgroup            string                   `json:"cgroup"`
+	Runtime           string                   `json:"runtime"`
+	Devices           []DeviceMapping          `json:"devices"`
+	DeviceRequests    []DeviceRequest          `json:"deviceRequests"`
+	NetworkConfig     *NetworkConfig           `json:"networkConfig"`
+	NetworksToCreate  []NetworkToCreate        `json:"networksToCreate"` // 需要创建的网络列表
 }
 
 // PortBinding 端口绑定
@@ -122,6 +125,33 @@ type DeviceRequest struct {
 // NetworkConfig 网络配置
 type NetworkConfig struct {
 	EndpointsConfig map[string]*EndpointSettings `json:"endpointsConfig"`
+}
+
+// NetworkToCreate 待创建的网络配置
+type NetworkToCreate struct {
+	Name       string                    `json:"name" binding:"required"`
+	Driver     string                    `json:"driver"` // bridge, overlay, macvlan 等
+	EnableIPv6 bool                      `json:"enableIPv6"`
+	IPAM       *NetworkIPAMCreateRequest `json:"ipam,omitempty"`
+	Internal   bool                      `json:"internal"`
+	Attachable bool                      `json:"attachable"`
+	Labels     map[string]string         `json:"labels,omitempty"`
+	Options    map[string]string         `json:"options,omitempty"`
+}
+
+// NetworkIPAMCreateRequest 网络 IPAM 配置
+type NetworkIPAMCreateRequest struct {
+	Driver  string                    `json:"driver,omitempty"`
+	Config  []NetworkIPAMConfigCreate `json:"config,omitempty"`
+	Options map[string]string         `json:"options,omitempty"`
+}
+
+// NetworkIPAMConfigCreate IPAM 配置项
+type NetworkIPAMConfigCreate struct {
+	Subnet     string            `json:"subnet,omitempty"`
+	IPRange    string            `json:"ipRange,omitempty"`
+	Gateway    string            `json:"gateway,omitempty"`
+	AuxAddress map[string]string `json:"auxAddress,omitempty"`
 }
 
 // EndpointSettings 端点设置
@@ -182,6 +212,7 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			Tty:          req.Tty,          // 分配伪终端, 通常与 -t 参数对应，在交互式 shell 中使用
 			OpenStdin:    req.OpenStdin,    // 打开标准输入, 通常与 -i 参数对应
 			StdinOnce:    req.StdinOnce,    // 标准输入是否只使用一次, 如果为 true，当第一个附加的客户端断开连接后，stdin 会关闭
+			// MacAddress:   req.MacAddress,   // 容器 MAC 地址
 		}
 
 		// 设置暴露端口
@@ -212,13 +243,14 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			CapDrop:         req.CapDrop,                                                                                                                                // 移除 Linux 能力
 			SecurityOpt:     req.SecurityOpt,                                                                                                                            // 安全选项
 			Resources: container.Resources{
-				CPUShares:   req.CpuShares,   // CPU 份额(相对权重)
-				Memory:      req.Memory,      // 内存限制(字节)
-				CPUQuota:    req.CpuQuota,    // CPU 配额(微秒)
-				CPUPeriod:   req.CpuPeriod,   // CPU 周期(微秒)
-				CpusetCpus:  req.CpusetCpus,  // 允许使用的 CPU 集合
-				CpusetMems:  req.CpusetMems,  // 允许使用的内存节点
-				BlkioWeight: req.BlkioWeight, // 块 I/O 权重
+				CPUShares:         req.CpuShares,         // CPU 份额(相对权重)
+				Memory:            req.Memory,            // 内存限制(字节)
+				MemoryReservation: req.MemoryReservation, // 内存预留(字节)
+				CPUQuota:          req.CpuQuota,          // CPU 配额(微秒)
+				CPUPeriod:         req.CpuPeriod,         // CPU 周期(微秒)
+				CpusetCpus:        req.CpusetCpus,        // 允许使用的 CPU 集合
+				CpusetMems:        req.CpusetMems,        // 允许使用的内存节点
+				BlkioWeight:       req.BlkioWeight,       // 块 I/O 权重
 			},
 			ShmSize: req.ShmSize,                      // 共享内存大小(字节)
 			PidMode: container.PidMode(req.PidMode),   // PID 命名空间模式
@@ -313,6 +345,121 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			zap.String("name", req.Name),
 			zap.String("image", req.Image))
 
+		// 检查镜像是否存在，如果不存在则拉取镜像
+		exists, err := s.docker.ImageExists(ctx, req.Image)
+		if err != nil {
+			s.logger.Error("check image existence failed",
+				zap.String("image", req.Image),
+				zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "检查镜像失败: "+err.Error()))
+			return
+		}
+
+		if !exists {
+			// 镜像不存在，尝试拉取镜像
+			s.logger.Info("image not found locally, pulling image",
+				zap.String("image", req.Image))
+			if err := s.docker.ImagePull(ctx, req.Image); err != nil {
+				s.logger.Error("pull image failed",
+					zap.String("image", req.Image),
+					zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "拉取镜像失败: "+err.Error()))
+				return
+			}
+			s.logger.Info("image pulled successfully",
+				zap.String("image", req.Image))
+		} else {
+			s.logger.Info("image exists locally",
+				zap.String("image", req.Image))
+		}
+
+		// 处理需要创建的网络
+		if len(req.NetworksToCreate) > 0 {
+			s.logger.Info("processing networks to create", zap.Int("count", len(req.NetworksToCreate)))
+
+			createdNetworks := make([]string, 0)
+			for _, netToCreate := range req.NetworksToCreate {
+				// 验证网络名称
+				if netToCreate.Name == "" {
+					s.logger.Error("network name is empty")
+					c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "网络名称不能为空"))
+					return
+				}
+
+				// 设置默认驱动
+				if netToCreate.Driver == "" {
+					netToCreate.Driver = "bridge"
+				}
+
+				// 检查网络是否已存在
+				_, err := s.docker.GetNetwork(ctx, netToCreate.Name)
+				if err == nil {
+					// 网络已存在，跳过创建
+					s.logger.Info("network already exists, skipping creation",
+						zap.String("network", netToCreate.Name))
+					continue
+				}
+
+				// 网络不存在，创建网络
+				s.logger.Info("creating network",
+					zap.String("name", netToCreate.Name),
+					zap.String("driver", netToCreate.Driver),
+					zap.Bool("enableIPv6", netToCreate.EnableIPv6))
+
+				// 构建网络创建请求
+				createReq := &dockercli.NetworkCreateRequest{
+					Name:       netToCreate.Name,
+					Driver:     netToCreate.Driver,
+					EnableIPv6: netToCreate.EnableIPv6,
+					Internal:   netToCreate.Internal,
+					Attachable: netToCreate.Attachable,
+					Labels:     netToCreate.Labels,
+					Options:    netToCreate.Options,
+				}
+
+				// 设置 IPAM 配置
+				if netToCreate.IPAM != nil {
+					createReq.IPAM = &dockercli.NetworkIPAMCreateRequest{
+						Driver:  netToCreate.IPAM.Driver,
+						Options: netToCreate.IPAM.Options,
+					}
+
+					if len(netToCreate.IPAM.Config) > 0 {
+						createReq.IPAM.Config = make([]dockercli.NetworkIPAMConfigCreate, 0, len(netToCreate.IPAM.Config))
+						for _, cfg := range netToCreate.IPAM.Config {
+							createReq.IPAM.Config = append(createReq.IPAM.Config, dockercli.NetworkIPAMConfigCreate{
+								Subnet:     cfg.Subnet,
+								IPRange:    cfg.IPRange,
+								Gateway:    cfg.Gateway,
+								AuxAddress: cfg.AuxAddress,
+							})
+						}
+					}
+				}
+
+				// 创建网络
+				networkInfo, err := s.docker.CreateNetwork(ctx, createReq)
+				if err != nil {
+					s.logger.Error("create network failed",
+						zap.String("name", netToCreate.Name),
+						zap.Error(err))
+					c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, fmt.Sprintf("创建网络 %s 失败: %s", netToCreate.Name, err.Error())))
+					return
+				}
+
+				createdNetworks = append(createdNetworks, networkInfo.Name)
+				s.logger.Info("network created successfully",
+					zap.String("name", networkInfo.Name),
+					zap.String("id", networkInfo.ID),
+					zap.String("driver", networkInfo.Driver))
+			}
+
+			if len(createdNetworks) > 0 {
+				s.logger.Info("networks created",
+					zap.Strings("networks", createdNetworks))
+			}
+		}
+
 		// 创建容器
 		containerID, err := s.docker.CreateContainer(ctx, req.Name, config, hostConfig, networkConfig)
 		if err != nil {
@@ -328,9 +475,27 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			zap.String("name", req.Name),
 			zap.String("containerID", containerID))
 
+		// 创建成功后自动启动容器
+		if err := s.docker.StartContainer(ctx, containerID); err != nil {
+			s.logger.Error("start container failed",
+				zap.String("name", req.Name),
+				zap.String("containerID", containerID),
+				zap.Error(err))
+			// 启动失败不影响创建成功，但记录错误信息
+			c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+				"id":      containerID,
+				"message": "容器创建成功，但启动失败: " + err.Error(),
+			}))
+			return
+		}
+
+		s.logger.Info("container started successfully",
+			zap.String("name", req.Name),
+			zap.String("containerID", containerID))
+
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"id":      containerID,
-			"message": "容器创建成功",
+			"message": "容器创建并启动成功",
 		}))
 	}
 }
@@ -552,25 +717,91 @@ func (s *Server) handleDeleteContainer() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 		force := c.Query("force") == "true"
-		if err := s.docker.RemoveContainer(c.Request.Context(), id, force); err != nil {
+		removeVolumes := c.Query("removeVolumes") == "true"
+		removeNetworks := c.Query("removeNetworks") == "true"
+
+		ctx := c.Request.Context()
+
+		s.logger.Info("deleting container",
+			zap.String("container", id),
+			zap.Bool("force", force),
+			zap.Bool("removeVolumes", removeVolumes),
+			zap.Bool("removeNetworks", removeNetworks))
+
+		// 如果需要删除关联资源，先获取容器信息
+		var containerInfo container.InspectResponse
+		if removeVolumes || removeNetworks {
+			var err error
+			containerInfo, err = s.docker.InspectContainer(ctx, id)
+			if err != nil {
+				s.logger.Error("inspect container before delete", zap.String("container", id), zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "获取容器信息失败: "+err.Error()))
+				return
+			}
+		}
+
+		// 删除容器
+		if err := s.docker.RemoveContainer(ctx, id, force); err != nil {
 			s.logger.Error("delete container", zap.String("container", id), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return
 		}
 
-		// 删除成功后，立即获取更新后的容器列表返回给前端
-		cfg := config.Get()
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
-		defer cancel()
-		statuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true, true)
-		if err != nil {
-			s.logger.Error("scan after delete failed", zap.Error(err))
-			// 即使扫描失败，也返回删除成功的响应
-			c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
-			return
+		s.logger.Info("container deleted successfully", zap.String("container", id))
+
+		// 删除关联的卷
+		if removeVolumes && len(containerInfo.Mounts) > 0 {
+			var volumeNames []string
+			for _, mount := range containerInfo.Mounts {
+				if mount.Type == "volume" && mount.Name != "" {
+					volumeNames = append(volumeNames, mount.Name)
+				}
+			}
+			if len(volumeNames) > 0 {
+				s.logger.Info("attempting to remove volumes",
+					zap.String("container", id),
+					zap.Strings("volumes", volumeNames))
+				if err := s.docker.SafeRemoveVolumes(ctx, volumeNames); err != nil {
+					// 忽略卷删除错误，只记录日志
+					s.logger.Warn("failed to remove some volumes",
+						zap.String("container", id),
+						zap.Strings("volumes", volumeNames),
+						zap.Error(err))
+				} else {
+					s.logger.Info("volumes removed successfully",
+						zap.String("container", id),
+						zap.Strings("volumes", volumeNames))
+				}
+			}
 		}
 
-		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true, "containers": statuses}))
+		// 删除关联的自定义网络
+		if removeNetworks && containerInfo.NetworkSettings != nil && containerInfo.NetworkSettings.Networks != nil {
+			var networkIDs []string
+			for _, netEndpoint := range containerInfo.NetworkSettings.Networks {
+				if netEndpoint.NetworkID != "" {
+					networkIDs = append(networkIDs, netEndpoint.NetworkID)
+				}
+			}
+			if len(networkIDs) > 0 {
+				s.logger.Info("attempting to remove networks",
+					zap.String("container", id),
+					zap.Strings("networks", networkIDs))
+				if err := s.docker.SafeRemoveNetworks(ctx, networkIDs); err != nil {
+					// 忽略网络删除错误，只记录日志
+					s.logger.Warn("failed to remove some networks",
+						zap.String("container", id),
+						zap.Strings("networks", networkIDs),
+						zap.Error(err))
+				} else {
+					s.logger.Info("networks removed successfully",
+						zap.String("container", id),
+						zap.Strings("networks", networkIDs))
+				}
+			}
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(nil))
 	}
 }
 

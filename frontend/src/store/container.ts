@@ -147,9 +147,9 @@ export const useContainerStore = defineStore('container', () => {
   }
 
   // 方法：删除容器
-  const deleteContainer = async (id: string, force: boolean = false): Promise<boolean> => {
+  const deleteContainer = async (id: string, force: boolean = false, removeVolumes: boolean = false, removeNetworks: boolean = false): Promise<boolean> => {
     try {
-      const data = await containerApi.deleteContainer(id, force)
+      const data = await containerApi.deleteContainer(id, force, removeVolumes, removeNetworks)
       if (data.code === 0) {
         await fetchContainers() // 重新获取列表
         return true

@@ -693,6 +693,9 @@ export interface DeviceRequest {
 export interface EndpointIPAMConfig {
   ipv4Address: string
   ipv6Address: string
+  linkLocalIPs?: string[]
+  ipv4Gateway?: string
+  ipv6Gateway?: string
 }
 
 // 端点设置
@@ -714,6 +717,33 @@ export interface EndpointSettings {
 // 网络配置
 export interface NetworkConfigCreate {
   endpointsConfig: Record<string, EndpointSettings>
+}
+
+// 待创建的网络 IPAM 配置项
+export interface NetworkIPAMConfigCreate {
+  subnet?: string
+  ipRange?: string
+  gateway?: string
+  auxAddress?: Record<string, string>
+}
+
+// 待创建的网络 IPAM 配置
+export interface NetworkIPAMCreateRequest {
+  driver?: string
+  config?: NetworkIPAMConfigCreate[]
+  options?: Record<string, string>
+}
+
+// 待创建的网络配置
+export interface NetworkToCreate {
+  name: string
+  driver?: string
+  enableIPv6?: boolean
+  ipam?: NetworkIPAMCreateRequest
+  internal?: boolean
+  attachable?: boolean
+  labels?: Record<string, string>
+  options?: Record<string, string>
 }
 
 // 容器创建请求
@@ -752,6 +782,7 @@ export interface ContainerCreateRequest {
   securityOpt?: string[]
   cpuShares?: number
   memory?: number
+  memoryReservation?: number
   cpuQuota?: number
   cpuPeriod?: number
   cpusetCpus?: string
@@ -766,6 +797,7 @@ export interface ContainerCreateRequest {
   devices?: DeviceMapping[]
   deviceRequests?: DeviceRequest[]
   networkConfig?: NetworkConfigCreate
+  networksToCreate?: NetworkToCreate[] // 新增：需要创建的网络列表
 }
 
 // 容器创建响应

@@ -28,5 +28,9 @@
     ],
     "[go]": {
         "editor.defaultFormatter": "golang.go"
-    }
+    },
+    "vue.inlayHints.optionsWrapper": true,
+    "vue.inlayHints.inlineHandlerLeading": true,
+    "vue.inlayHints.missingProps": true,
+    "vue.autoInsert.dotValue": true
 }

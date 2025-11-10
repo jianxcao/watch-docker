@@ -54,6 +54,21 @@
           </n-gi>
         </n-grid>
 
+        <!-- Macvlan/IPvlan Parent 接口 -->
+        <n-form-item
+          v-if="formData.driver === 'macvlan' || formData.driver === 'ipvlan'"
+          label="父网络接口 (Parent)"
+          path="parentInterface"
+          required
+        >
+          <n-input v-model:value="formData.parentInterface" placeholder="例如：eth0, enp0s3" />
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px">
+              {{ formData.driver }} 驱动需要指定宿主机的物理网络接口作为父接口
+            </n-text>
+          </template>
+        </n-form-item>
+
         <!-- IPAM 配置 -->
         <n-divider />
         <n-h3 prefix="bar">IPAM 配置</n-h3>
@@ -334,7 +349,10 @@ const enableCustomIPAM = ref(false)
 
 // 表单数据
 const formData = ref<
-  NetworkCreateRequest & { ipam: { driver: string; config: NetworkIPAMConfigCreate[] } }
+  NetworkCreateRequest & {
+    ipam: { driver: string; config: NetworkIPAMConfigCreate[] }
+    parentInterface?: string
+  }
 >({
   name: '',
   driver: 'bridge',
@@ -343,6 +361,7 @@ const formData = ref<
   attachable: false,
   ingress: false,
   enableIPv6: false,
+  parentInterface: '',
   ipam: {
     driver: 'default',
     config: [
@@ -388,6 +407,20 @@ const rules: FormRules = {
       pattern: /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/,
       message: '网络名称只能包含字母、数字、下划线、点和连字符，且必须以字母或数字开头',
       trigger: 'blur',
+    },
+  ],
+  parentInterface: [
+    {
+      required: true,
+      trigger: 'blur',
+      validator: (_rule: any, value: string) => {
+        if (formData.value.driver === 'macvlan' || formData.value.driver === 'ipvlan') {
+          if (!value || value.trim() === '') {
+            return new Error(`${formData.value.driver} 驱动必须指定父网络接口`)
+          }
+        }
+        return true
+      },
     },
   ],
 }
@@ -514,6 +547,15 @@ const handleCreate = async () => {
 
     // 添加驱动选项
     const options: Record<string, string> = {}
+
+    // 如果是 macvlan 或 ipvlan，添加 parent 参数
+    if (
+      (formData.value.driver === 'macvlan' || formData.value.driver === 'ipvlan') &&
+      formData.value.parentInterface
+    ) {
+      options.parent = formData.value.parentInterface
+    }
+
     driverOptions_.value.forEach((opt) => {
       if (opt.key && opt.value) {
         options[opt.key] = opt.value
@@ -561,6 +603,7 @@ const resetForm = () => {
     attachable: false,
     ingress: false,
     enableIPv6: false,
+    parentInterface: '',
     ipam: {
       driver: 'default',
       config: [
@@ -579,6 +622,16 @@ const resetForm = () => {
   labels.value = []
   formRef.value?.restoreValidation()
 }
+
+// 监听驱动变化，清空 parentInterface（仅对非 macvlan/ipvlan 驱动）
+watch(
+  () => formData.value.driver,
+  (newDriver) => {
+    if (newDriver !== 'macvlan' && newDriver !== 'ipvlan') {
+      formData.value.parentInterface = ''
+    }
+  },
+)
 
 // 监听驱动和作用域变化，自动禁用 Ingress（Ingress 仅在 overlay 驱动 + global 作用域下可用）
 watch(

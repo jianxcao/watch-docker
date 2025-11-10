@@ -1,16 +1,23 @@
 <template>
-  <div class="basic-tab">
-    <n-form-item label="容器名称" path="name" required>
+  <n-form
+    ref="formRef"
+    :model="formValue"
+    :show-feedback="false"
+    :rules="rules"
+    label-placement="top"
+    class="basic-tab"
+  >
+    <n-form-item label="容器名称" path="name" class="mb-4" required>
       <n-input
-        v-model:value="formData.name"
-        placeholder="请输入容器名称(可选,留空则自动生成)"
+        v-model:value="formValue.name"
+        placeholder="请输入容器名称"
         :maxlength="100"
         show-count
       />
     </n-form-item>
 
-    <n-form-item label="镜像" path="image" required>
-      <n-input v-model:value="formData.image" placeholder="例如: nginx:latest" :maxlength="200">
+    <n-form-item label="镜像" path="image" class="mb-4" required>
+      <n-input v-model:value="formValue.image" placeholder="例如: nginx:latest" :maxlength="200">
         <template #suffix>
           <n-tooltip trigger="hover">
             <template #trigger>
@@ -22,155 +29,142 @@
       </n-input>
     </n-form-item>
 
-    <n-grid :cols="2" :x-gap="12">
+    <n-grid cols="1 m:2" :x-gap="12" :y-gap="12" class="mb-4" responsive="screen">
       <n-gi>
-        <n-form-item label="命令" path="cmd">
-          <n-input v-model:value="cmdString" placeholder="例如: /bin/bash" @blur="handleCmdChange">
+        <n-form-item label="Entrypoint" path="entrypointString">
+          <n-input v-model:value="formValue.entrypointString" placeholder="例如: /usr/bin/nginx">
             <template #suffix>
               <n-tooltip trigger="hover">
                 <template #trigger>
                   <n-icon :component="InformationCircleOutline" />
                 </template>
-                覆盖镜像的默认命令,多个参数用空格分隔
+                配置容器启动时要运行的可执行文件,多个参数用空格分隔
               </n-tooltip>
             </template>
           </n-input>
         </n-form-item>
       </n-gi>
       <n-gi>
-        <n-form-item label="工作目录" path="workingDir">
-          <n-input v-model:value="formData.workingDir" placeholder="例如: /app" />
-        </n-form-item>
-      </n-gi>
-    </n-grid>
-
-    <n-grid :cols="2" :x-gap="12">
-      <n-gi>
-        <n-form-item label="用户" path="user">
-          <n-input v-model:value="formData.user" placeholder="例如: 1000:1000 或 username">
+        <n-form-item label="Cmd" path="cmdString">
+          <n-input v-model:value="formValue.cmdString" placeholder="例如: /bin/bash">
             <template #suffix>
               <n-tooltip trigger="hover">
                 <template #trigger>
                   <n-icon :component="InformationCircleOutline" />
                 </template>
-                格式: uid:gid 或 username
+                提供给 Entrypoint 的参数或默认命令,多个参数用空格分隔
               </n-tooltip>
             </template>
           </n-input>
         </n-form-item>
       </n-gi>
+    </n-grid>
+
+    <n-form-item label="工作目录" path="workingDir" class="mb-4">
+      <n-input v-model:value="formValue.workingDir" placeholder="例如: /app" />
+    </n-form-item>
+
+    <n-form-item label="用户" path="user" class="mb-4">
+      <n-input v-model:value="formValue.user" placeholder="例如: 1000:1000 或 username">
+        <template #suffix>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon :component="InformationCircleOutline" />
+            </template>
+            格式: uid:gid 或 username
+          </n-tooltip>
+        </template>
+      </n-input>
+    </n-form-item>
+
+    <n-grid cols="1 m:2" :x-gap="12" :y-gap="12" class="mb-4" responsive="screen">
       <n-gi>
-        <n-form-item label="主机名" path="hostname">
-          <n-input v-model:value="formData.hostname" placeholder="容器的主机名" />
+        <n-form-item label="主机名 (Hostname)" path="hostname">
+          <n-input v-model:value="formValue.hostname" placeholder="例如: mycontainer" />
+        </n-form-item>
+      </n-gi>
+      <n-gi>
+        <n-form-item label="域名 (Domain Name)" path="domainname">
+          <n-input v-model:value="formValue.domainname" placeholder="例如: example.com" />
         </n-form-item>
       </n-gi>
     </n-grid>
-
-    <!-- <n-form-item label="域名" path="domainname">
-      <n-input v-model:value="formData.domainname" placeholder="容器的域名" />
-    </n-form-item> -->
 
     <n-divider />
     <n-h3 prefix="bar" class="mt-0">I/O 设置</n-h3>
 
-    <!-- <n-grid :cols="3" :x-gap="12">
-      <n-gi>
-        <n-form-item label="Attach stdout">
-          <n-switch v-model:value="formData.attachStdout" />
-        </n-form-item>
-      </n-gi>
-      <n-gi>
-        <n-form-item label="Attach stderr">
-          <n-switch v-model:value="formData.attachStderr" />
-        </n-form-item>
-      </n-gi>
-      <n-gi>
-        <n-form-item label="附加 stdin">
-          <n-switch v-model:value="formData.attachStdin" />
-        </n-form-item>
-      </n-gi>
-    </n-grid> -->
-
-    <n-grid :cols="3" :x-gap="12">
+    <n-grid :cols="3" :x-gap="12" class="mb-4">
       <n-gi>
         <n-form-item label="TTY">
-          <n-switch v-model:value="formData.tty" />
+          <n-switch v-model:value="formValue.tty" />
         </n-form-item>
       </n-gi>
       <n-gi>
         <n-form-item label="stdin">
-          <n-switch v-model:value="formData.openStdin" />
+          <n-switch v-model:value="formValue.openStdin" />
         </n-form-item>
       </n-gi>
       <n-gi>
         <n-form-item label="StdinOnce">
-          <n-switch v-model:value="formData.stdinOnce" />
+          <n-switch v-model:value="formValue.stdinOnce" />
         </n-form-item>
       </n-gi>
     </n-grid>
-  </div>
+  </n-form>
 </template>
 
 <script setup lang="ts">
 import { InformationCircleOutline } from '@vicons/ionicons5'
-import { ref, watch } from 'vue'
-import type { ContainerCreateRequest } from '@/common/types'
-import { NGrid } from 'naive-ui'
+import type { FormInst, FormRules } from 'naive-ui'
+import type { BasicFormValue } from './types'
 
-interface Props {
-  modelValue: Partial<ContainerCreateRequest>
-}
-
-interface Emits {
-  (e: 'update:modelValue', value: Partial<ContainerCreateRequest>): void
-}
-
-const props = defineProps<Props>()
-const emit = defineEmits<Emits>()
-
-const formData = ref<Partial<ContainerCreateRequest>>({
-  name: '',
-  image: '',
-  cmd: [],
-  workingDir: '',
-  user: '',
-  hostname: '',
-  domainname: '',
-  attachStdout: true,
-  attachStderr: true,
-  attachStdin: false,
-  tty: false,
-  openStdin: false,
-  stdinOnce: false,
-  ...props.modelValue,
+const formValue = defineModel<BasicFormValue>({
+  default: () => ({
+    name: '',
+    image: '',
+    entrypointString: '',
+    cmdString: '',
+    workingDir: '',
+    user: '',
+    hostname: '',
+    domainname: '',
+    tty: false,
+    openStdin: false,
+    stdinOnce: false,
+  }),
 })
 
-const cmdString = ref(formData.value.cmd?.join(' ') || '')
+const formRef = ref<FormInst | null>(null)
 
-const handleCmdChange = () => {
-  if (cmdString.value.trim()) {
-    formData.value.cmd = cmdString.value.trim().split(/\s+/)
-  } else {
-    formData.value.cmd = []
-  }
+const rules: FormRules = {
+  name: [
+    {
+      required: true,
+      message: '请输入容器名称',
+      trigger: ['input', 'blur'],
+    },
+    {
+      pattern: /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/,
+      message: '容器名称只能包含字母、数字、下划线、点和连字符，且必须以字母或数字开头',
+      trigger: ['input', 'blur'],
+    },
+  ],
+  image: [
+    {
+      required: true,
+      message: '请输入镜像名称',
+      trigger: ['input', 'blur'],
+    },
+  ],
 }
 
-watch(
-  formData,
-  (newVal) => {
-    emit('update:modelValue', newVal)
-  },
-  { deep: true },
-)
+const validate = () => formRef.value?.validate()
+const restoreValidation = () => formRef.value?.restoreValidation()
 
-watch(
-  () => props.modelValue,
-  (newVal) => {
-    formData.value = { ...formData.value, ...newVal }
-    cmdString.value = formData.value.cmd?.join(' ') || ''
-  },
-  { deep: true },
-)
+defineExpose({
+  validate,
+  restoreValidation,
+})
 </script>
 
 <style scoped>

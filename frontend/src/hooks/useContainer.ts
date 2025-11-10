@@ -44,6 +44,8 @@ export function useContainer() {
     // 根据容器运行状态设置默认的强制删除值
     const forceDefault = container.running
     const forceValue = ref(forceDefault)
+    const removeVolumesValue = ref(false)
+    const removeNetworksValue = ref(false)
 
     const d = dialog.warning({
       title: '确认删除容器',
@@ -63,7 +65,31 @@ export function useContainer() {
             },
             {
               default: () => (container.running ? '强制删除 (停止并删除运行中的容器)' : '强制删除'),
-            }
+            },
+          ),
+          h(
+            NCheckbox,
+            {
+              checked: removeVolumesValue.value,
+              'onUpdate:checked': (value: boolean) => {
+                removeVolumesValue.value = value
+              },
+            },
+            {
+              default: () => '删除关联的卷 (Volume)',
+            },
+          ),
+          h(
+            NCheckbox,
+            {
+              checked: removeNetworksValue.value,
+              'onUpdate:checked': (value: boolean) => {
+                removeNetworksValue.value = value
+              },
+            },
+            {
+              default: () => '删除关联的网络 (Network)',
+            },
           ),
         ]),
       positiveText: '确认删除',
@@ -71,7 +97,12 @@ export function useContainer() {
       onPositiveClick: async () => {
         try {
           d.loading = true
-          await store.deleteContainer(container.id, forceValue.value)
+          await store.deleteContainer(
+            container.id,
+            forceValue.value,
+            removeVolumesValue.value,
+            removeNetworksValue.value,
+          )
           message.success(`容器 ${container.name} 删除成功`)
         } catch (error: any) {
           message.error(`删除容器失败: ${error.message}`)
@@ -120,7 +151,9 @@ export function useContainer() {
 
   // 获取容器状态颜色
   const getStatusColor = (container: ContainerStatus): string => {
-    if (!container.running) {return 'warning'}
+    if (!container.running) {
+      return 'warning'
+    }
 
     switch (container.status) {
       case 'UpToDate':
@@ -138,7 +171,9 @@ export function useContainer() {
 
   // 获取容器状态文本
   const getStatusText = (container: ContainerStatus): string => {
-    if (!container.running) {return '已停止'}
+    if (!container.running) {
+      return '已停止'
+    }
 
     switch (container.status) {
       case 'UpToDate':
