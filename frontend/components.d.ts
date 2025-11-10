@@ -41,6 +41,7 @@ declare module 'vue' {
     NDivider: typeof import('naive-ui')['NDivider']
     NDrawer: typeof import('naive-ui')['NDrawer']
     NDropdown: typeof import('naive-ui')['NDropdown']
+    NDynamicInput: typeof import('naive-ui')['NDynamicInput']
     NDynamicTags: typeof import('naive-ui')['NDynamicTags']
     NEl: typeof import('naive-ui')['NEl']
     NEmpty: typeof import('naive-ui')['NEmpty']

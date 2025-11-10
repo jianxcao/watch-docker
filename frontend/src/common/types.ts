@@ -693,6 +693,9 @@ export interface DeviceRequest {
 export interface EndpointIPAMConfig {
   ipv4Address: string
   ipv6Address: string
+  linkLocalIPs?: string[]
+  ipv4Gateway?: string
+  ipv6Gateway?: string
 }
 
 // 端点设置
@@ -752,6 +755,7 @@ export interface ContainerCreateRequest {
   securityOpt?: string[]
   cpuShares?: number
   memory?: number
+  memoryReservation?: number
   cpuQuota?: number
   cpuPeriod?: number
   cpusetCpus?: string

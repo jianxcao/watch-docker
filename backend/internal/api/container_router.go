@@ -41,54 +41,55 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 
 // ContainerCreateRequest 容器创建请求
 type ContainerCreateRequest struct {
-	Name            string                   `json:"name"`
-	Image           string                   `json:"image" binding:"required"`
-	Cmd             []string                 `json:"cmd"`
-	Entrypoint      []string                 `json:"entrypoint"`
-	WorkingDir      string                   `json:"workingDir"`
-	Env             []string                 `json:"env"`
-	ExposedPorts    map[string]struct{}      `json:"exposedPorts"`
-	Labels          map[string]string        `json:"labels"`
-	Hostname        string                   `json:"hostname"`
-	Domainname      string                   `json:"domainname"`
-	User            string                   `json:"user"`
-	AttachStdin     bool                     `json:"attachStdin"`
-	AttachStdout    bool                     `json:"attachStdout"`
-	AttachStderr    bool                     `json:"attachStderr"`
-	Tty             bool                     `json:"tty"`
-	OpenStdin       bool                     `json:"openStdin"`
-	StdinOnce       bool                     `json:"stdinOnce"`
-	Binds           []string                 `json:"binds"`
-	PortBindings    map[string][]PortBinding `json:"portBindings"`
-	RestartPolicy   RestartPolicy            `json:"restartPolicy"`
-	AutoRemove      bool                     `json:"autoRemove"`
-	NetworkMode     string                   `json:"networkMode"`
-	Privileged      bool                     `json:"privileged"`
-	PublishAllPorts bool                     `json:"publishAllPorts"`
-	ReadonlyRootfs  bool                     `json:"readonlyRootfs"`
-	Dns             []string                 `json:"dns"`
-	DnsSearch       []string                 `json:"dnsSearch"`
-	DnsOptions      []string                 `json:"dnsOptions"`
-	ExtraHosts      []string                 `json:"extraHosts"`
-	CapAdd          []string                 `json:"capAdd"`
-	CapDrop         []string                 `json:"capDrop"`
-	SecurityOpt     []string                 `json:"securityOpt"`
-	CpuShares       int64                    `json:"cpuShares"`
-	Memory          int64                    `json:"memory"`
-	CpuQuota        int64                    `json:"cpuQuota"`
-	CpuPeriod       int64                    `json:"cpuPeriod"`
-	CpusetCpus      string                   `json:"cpusetCpus"`
-	CpusetMems      string                   `json:"cpusetMems"`
-	BlkioWeight     uint16                   `json:"blkioWeight"`
-	ShmSize         int64                    `json:"shmSize"`
-	PidMode         string                   `json:"pidMode"`
-	IpcMode         string                   `json:"ipcMode"`
-	UTSMode         string                   `json:"utsMode"`
-	Cgroup          string                   `json:"cgroup"`
-	Runtime         string                   `json:"runtime"`
-	Devices         []DeviceMapping          `json:"devices"`
-	DeviceRequests  []DeviceRequest          `json:"deviceRequests"`
-	NetworkConfig   *NetworkConfig           `json:"networkConfig"`
+	Name              string                   `json:"name"`
+	Image             string                   `json:"image" binding:"required"`
+	Cmd               []string                 `json:"cmd"`
+	Entrypoint        []string                 `json:"entrypoint"`
+	WorkingDir        string                   `json:"workingDir"`
+	Env               []string                 `json:"env"`
+	ExposedPorts      map[string]struct{}      `json:"exposedPorts"`
+	Labels            map[string]string        `json:"labels"`
+	Hostname          string                   `json:"hostname"`
+	Domainname        string                   `json:"domainname"`
+	User              string                   `json:"user"`
+	AttachStdin       bool                     `json:"attachStdin"`
+	AttachStdout      bool                     `json:"attachStdout"`
+	AttachStderr      bool                     `json:"attachStderr"`
+	Tty               bool                     `json:"tty"`
+	OpenStdin         bool                     `json:"openStdin"`
+	StdinOnce         bool                     `json:"stdinOnce"`
+	Binds             []string                 `json:"binds"`
+	PortBindings      map[string][]PortBinding `json:"portBindings"`
+	RestartPolicy     RestartPolicy            `json:"restartPolicy"`
+	AutoRemove        bool                     `json:"autoRemove"`
+	NetworkMode       string                   `json:"networkMode"`
+	Privileged        bool                     `json:"privileged"`
+	PublishAllPorts   bool                     `json:"publishAllPorts"`
+	ReadonlyRootfs    bool                     `json:"readonlyRootfs"`
+	Dns               []string                 `json:"dns"`
+	DnsSearch         []string                 `json:"dnsSearch"`
+	DnsOptions        []string                 `json:"dnsOptions"`
+	ExtraHosts        []string                 `json:"extraHosts"`
+	CapAdd            []string                 `json:"capAdd"`
+	CapDrop           []string                 `json:"capDrop"`
+	SecurityOpt       []string                 `json:"securityOpt"`
+	CpuShares         int64                    `json:"cpuShares"`
+	Memory            int64                    `json:"memory"`
+	MemoryReservation int64                    `json:"memoryReservation"`
+	CpuQuota          int64                    `json:"cpuQuota"`
+	CpuPeriod         int64                    `json:"cpuPeriod"`
+	CpusetCpus        string                   `json:"cpusetCpus"`
+	CpusetMems        string                   `json:"cpusetMems"`
+	BlkioWeight       uint16                   `json:"blkioWeight"`
+	ShmSize           int64                    `json:"shmSize"`
+	PidMode           string                   `json:"pidMode"`
+	IpcMode           string                   `json:"ipcMode"`
+	UTSMode           string                   `json:"utsMode"`
+	Cgroup            string                   `json:"cgroup"`
+	Runtime           string                   `json:"runtime"`
+	Devices           []DeviceMapping          `json:"devices"`
+	DeviceRequests    []DeviceRequest          `json:"deviceRequests"`
+	NetworkConfig     *NetworkConfig           `json:"networkConfig"`
 }
 
 // PortBinding 端口绑定
@@ -182,6 +183,7 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			Tty:          req.Tty,          // 分配伪终端, 通常与 -t 参数对应，在交互式 shell 中使用
 			OpenStdin:    req.OpenStdin,    // 打开标准输入, 通常与 -i 参数对应
 			StdinOnce:    req.StdinOnce,    // 标准输入是否只使用一次, 如果为 true，当第一个附加的客户端断开连接后，stdin 会关闭
+			// MacAddress:   req.MacAddress,   // 容器 MAC 地址
 		}
 
 		// 设置暴露端口
@@ -212,13 +214,14 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			CapDrop:         req.CapDrop,                                                                                                                                // 移除 Linux 能力
 			SecurityOpt:     req.SecurityOpt,                                                                                                                            // 安全选项
 			Resources: container.Resources{
-				CPUShares:   req.CpuShares,   // CPU 份额(相对权重)
-				Memory:      req.Memory,      // 内存限制(字节)
-				CPUQuota:    req.CpuQuota,    // CPU 配额(微秒)
-				CPUPeriod:   req.CpuPeriod,   // CPU 周期(微秒)
-				CpusetCpus:  req.CpusetCpus,  // 允许使用的 CPU 集合
-				CpusetMems:  req.CpusetMems,  // 允许使用的内存节点
-				BlkioWeight: req.BlkioWeight, // 块 I/O 权重
+				CPUShares:         req.CpuShares,         // CPU 份额(相对权重)
+				Memory:            req.Memory,            // 内存限制(字节)
+				MemoryReservation: req.MemoryReservation, // 内存预留(字节)
+				CPUQuota:          req.CpuQuota,          // CPU 配额(微秒)
+				CPUPeriod:         req.CpuPeriod,         // CPU 周期(微秒)
+				CpusetCpus:        req.CpusetCpus,        // 允许使用的 CPU 集合
+				CpusetMems:        req.CpusetMems,        // 允许使用的内存节点
+				BlkioWeight:       req.BlkioWeight,       // 块 I/O 权重
 			},
 			ShmSize: req.ShmSize,                      // 共享内存大小(字节)
 			PidMode: container.PidMode(req.PidMode),   // PID 命名空间模式
@@ -313,6 +316,34 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			zap.String("name", req.Name),
 			zap.String("image", req.Image))
 
+		// 检查镜像是否存在，如果不存在则拉取镜像
+		exists, err := s.docker.ImageExists(ctx, req.Image)
+		if err != nil {
+			s.logger.Error("check image existence failed",
+				zap.String("image", req.Image),
+				zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "检查镜像失败: "+err.Error()))
+			return
+		}
+
+		if !exists {
+			// 镜像不存在，尝试拉取镜像
+			s.logger.Info("image not found locally, pulling image",
+				zap.String("image", req.Image))
+			if err := s.docker.ImagePull(ctx, req.Image); err != nil {
+				s.logger.Error("pull image failed",
+					zap.String("image", req.Image),
+					zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "拉取镜像失败: "+err.Error()))
+				return
+			}
+			s.logger.Info("image pulled successfully",
+				zap.String("image", req.Image))
+		} else {
+			s.logger.Info("image exists locally",
+				zap.String("image", req.Image))
+		}
+
 		// 创建容器
 		containerID, err := s.docker.CreateContainer(ctx, req.Name, config, hostConfig, networkConfig)
 		if err != nil {
@@ -328,9 +359,27 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			zap.String("name", req.Name),
 			zap.String("containerID", containerID))
 
+		// 创建成功后自动启动容器
+		if err := s.docker.StartContainer(ctx, containerID); err != nil {
+			s.logger.Error("start container failed",
+				zap.String("name", req.Name),
+				zap.String("containerID", containerID),
+				zap.Error(err))
+			// 启动失败不影响创建成功，但记录错误信息
+			c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+				"id":      containerID,
+				"message": "容器创建成功，但启动失败: " + err.Error(),
+			}))
+			return
+		}
+
+		s.logger.Info("container started successfully",
+			zap.String("name", req.Name),
+			zap.String("containerID", containerID))
+
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"id":      containerID,
-			"message": "容器创建成功",
+			"message": "容器创建并启动成功",
 		}))
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
@@ -28,6 +29,40 @@ func (c *Client) ImagePull(ctx context.Context, ref string) error {
 	defer rc.Close()
 	_, _ = io.Copy(io.Discard, rc)
 	return nil
+}
+
+// ImageInspect 检查镜像是否存在，如果存在返回镜像信息，不存在返回错误
+func (c *Client) ImageInspect(ctx context.Context, ref string) (*image.InspectResponse, error) {
+	img, err := c.docker.ImageInspect(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return &img, nil
+}
+
+// ImageExists 检查镜像引用是否存在（通过匹配 RepoTags）
+func (c *Client) ImageExists(ctx context.Context, imageRef string) (bool, error) {
+	images, err := c.ListImages(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	// 规范化镜像引用（如果没有 tag，默认添加 :latest）
+	normalizedRef := imageRef
+	if !strings.Contains(imageRef, ":") {
+		normalizedRef = imageRef + ":latest"
+	}
+
+	// 检查镜像引用是否在 RepoTags 中
+	for _, img := range images {
+		for _, tag := range img.RepoTags {
+			if tag == imageRef || tag == normalizedRef {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
 }
 
 // ListImages 列出本地镜像
