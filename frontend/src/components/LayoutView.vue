@@ -135,9 +135,8 @@ watch(visibility, (newVal) => {
 }
 
 .layout-content {
-  padding: 12px;
+  padding: var(--layout-padding);
   box-sizing: border-box;
-  // min-height: calc(100vh - var(--content-safe-top) - var(--content-safe-bottom));
 }
 
 #footer {
@@ -184,13 +183,6 @@ watch(visibility, (newVal) => {
     background-color: transparent;
     -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
-  }
-}
-
-// 响应式调整
-@media (max-width: 768px) {
-  .layout-content {
-    padding: 8px;
   }
 }
 </style>

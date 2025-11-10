@@ -33,11 +33,13 @@ export const useSettingStore = defineStore('setting', () => {
   const docStyle = window.getComputedStyle(doc)
   safeArea.top = parseInt(docStyle.getPropertyValue('--top-inset')) || 0
   safeArea.bottom = parseInt(docStyle.getPropertyValue('--bottom-inset')) || 0
-  // 12是 容器的 padding
-  const contentSafeTop = ref(safeArea.top + headerHeight.value + 12 * 2)
+  const layoutPadding = parseInt(docStyle.getPropertyValue('--layout-padding')) || 0
+  const contentSafeTop = ref(safeArea.top + headerHeight.value + layoutPadding)
+  const contentSafeBottom = ref(safeArea.bottom + layoutPadding)
 
   watchEffect(() => {
     document.body.style.setProperty('--content-safe-top', `${contentSafeTop.value}px`)
+    document.body.style.setProperty('--content-safe-bottom', `${contentSafeBottom.value}px`)
   })
 
   const themeDefault = useThemeVars()
@@ -143,5 +145,6 @@ export const useSettingStore = defineStore('setting', () => {
     getToken,
     clearToken,
     contentSafeTop,
+    contentSafeBottom,
   }
 })

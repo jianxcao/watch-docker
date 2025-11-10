@@ -66,7 +66,7 @@ const tabTitleHeight = computed(() => {
 })
 
 const bottomHeight = computed(() => {
-  return 51 + settingStore.safeArea.bottom
+  return 51 + settingStore.contentSafeBottom
 })
 
 const tabHeight = computed(() => {

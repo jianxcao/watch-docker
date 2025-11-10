@@ -88,7 +88,7 @@ const termConfig = {
 
 // 计算终端高度
 const termHeight = computed(() => {
-  return `calc(100vh - ${settingStore.contentSafeTop + settingStore.safeArea.bottom}px)`
+  return `calc(100vh - ${settingStore.contentSafeTop + settingStore.contentSafeBottom}px)`
 })
 
 const socketUrl = computed(() => {

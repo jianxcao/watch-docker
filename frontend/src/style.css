@@ -3,6 +3,11 @@
 :root {
   --top-inset: env(safe-area-inset-top);
   --bottom-inset: env(safe-area-inset-bottom);
+  --layout-padding: 12px;
+
+  @media (max-width: 768px) {
+    --layout-padding: 8px;
+  }
 }
 
 body {

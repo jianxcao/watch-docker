@@ -364,11 +364,11 @@ const yamlEditorOptHeight = computed(() => {
 })
 
 const tabHeight = computed(() => {
-  return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value}px)`
+  return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value + settingStore.contentSafeBottom}px)`
 })
 
 const yamlEditorMinHeight = computed(() => {
-  return `${document.documentElement.clientHeight - settingStore.contentSafeTop - tabTitleHeight.value - yamlEditorOptHeight.value}px`
+  return `${document.documentElement.clientHeight - settingStore.contentSafeTop - tabTitleHeight.value - yamlEditorOptHeight.value - settingStore.contentSafeBottom}px`
 })
 
 const logsSocketUrl = computed(() => {
