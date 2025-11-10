@@ -6,7 +6,7 @@ require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/creack/pty v1.1.24
 	github.com/distribution/reference v0.6.0
-	github.com/docker-make/docker-mainifest v0.0.0-20251031021916-94638a900d9c
+	github.com/docker-make/docker-mainifest v0.0.0-20251110025929-3268a071286c
 	github.com/docker/docker v28.4.0+incompatible
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-webauthn/webauthn v0.14.0
