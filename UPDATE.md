@@ -1,5 +1,10 @@
 # 更新说明
 
+## v0.1.3
+
+- 修复 bug
+- 增加 docker Container 创建页面
+
 ## v0.1.2
 
 - 修复 bug
