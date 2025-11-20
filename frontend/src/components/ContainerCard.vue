@@ -459,13 +459,15 @@ const handleCardClick = () => {
         border: 1px solid var(--border-color);
         border-radius: 4px;
         padding: 4px 8px;
+        padding-right: 16px;
         font-size: 14px;
         color: var(--text-color-3);
         position: relative;
         display: inline-block;
         width: fit-content;
-        max-width: 100%;
-        position: relative;
+        max-width: calc(100% - 8px);
+        margin-right: 8px;
+        overflow: visible;
       }
     }
   }
