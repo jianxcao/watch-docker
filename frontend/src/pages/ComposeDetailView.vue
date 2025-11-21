@@ -197,6 +197,7 @@ import {
   LayersOutline,
   DocumentTextOutline,
   RefreshOutline,
+  ReloadOutline,
   TrashOutline,
   PlayOutline,
   StopOutline,
@@ -267,11 +268,18 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
   }
 
   if (status === 'running' || status === 'partial') {
-    options.push({
-      label: '停止',
-      key: 'stop',
-      icon: renderIcon(StopOutline),
-    })
+    options.push(
+      {
+        label: '停止',
+        key: 'stop',
+        icon: renderIcon(StopOutline),
+      },
+      {
+        label: '重启',
+        key: 'restart',
+        icon: renderIcon(ReloadOutline),
+      },
+    )
   }
 
   options.push(

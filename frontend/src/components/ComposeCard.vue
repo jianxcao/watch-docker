@@ -93,7 +93,7 @@
         >
           <template #icon>
             <n-icon>
-              <RefreshOutline />
+              <ReloadOutline />
             </n-icon>
           </template>
           重启
@@ -144,6 +144,7 @@ import {
   PlayOutline,
   StopOutline,
   RefreshOutline,
+  ReloadOutline,
   TrashOutline,
   CloudDownloadOutline,
 } from '@vicons/ionicons5'
@@ -195,11 +196,18 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
   }
 
   if (project.status === 'running' || project.status === 'partial') {
-    options.push({
-      label: '停止',
-      key: 'stop',
-      icon: renderIcon(StopOutline),
-    })
+    options.push(
+      {
+        label: '停止',
+        key: 'stop',
+        icon: renderIcon(StopOutline),
+      },
+      {
+        label: '重启',
+        key: 'restart',
+        icon: renderIcon(ReloadOutline),
+      },
+    )
   }
 
   options.push(
