@@ -170,6 +170,7 @@ import {
   StopOutline,
   TrashOutline,
   RefreshOutline,
+  SyncOutline,
 } from '@vicons/ionicons5'
 import DocumentIcon from '@/assets/svg/log.svg?component'
 import NetworkIcon from '@/assets/svg/networkIO.svg?component'
@@ -195,7 +196,7 @@ const router = useRouter()
 const message = useMessage()
 const containerStore = useContainerStore()
 const settingStore = useSettingStore()
-const { handleStart, handleStop, handleDelete } = useContainer()
+const { handleStart, handleStop, handleRestart, handleUpdate, handleDelete } = useContainer()
 const theme = useThemeVars()
 // 状态
 const containerId = ref(route.params.id as string)
@@ -220,6 +221,19 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
 
   const options: DropdownOption[] = []
   const isRunning = containerDetail.value.State.Running
+
+  // 从容器列表中获取容器状态信息（包含更新状态）
+  const containerStatus = containerStore.findContainerById(containerId.value)
+  const hasUpdate = containerStatus?.status === 'UpdateAvailable'
+
+  // 如果有可用更新，添加更新选项
+  if (hasUpdate) {
+    options.push({
+      label: '更新容器',
+      key: 'update',
+      icon: renderIcon(SyncOutline),
+    })
+  }
 
   if (!isRunning) {
     options.push({
@@ -321,11 +335,12 @@ const handleMenuSelect = async (key: string) => {
       await loadContainerDetail()
       break
     case 'restart':
-      await handleStop(container)
-      setTimeout(async () => {
-        await handleStart(container)
-        await loadContainerDetail()
-      }, 1000)
+      await handleRestart(container)
+      await loadContainerDetail()
+      break
+    case 'update':
+      await handleUpdate(container)
+      await loadContainerDetail()
       break
     case 'delete':
       await handleDelete(container)
