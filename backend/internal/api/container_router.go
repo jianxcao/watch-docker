@@ -33,6 +33,7 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.POST("/updates/run", s.handleBatchUpdate())
 	protected.POST("/containers/:id/stop", s.handleStopContainer())
 	protected.POST("/containers/:id/start", s.handleStartContainer())
+	protected.POST("/containers/:id/restart", s.handleRestartContainer())
 	protected.DELETE("/containers/:id", s.handleDeleteContainer())
 	protected.GET("/containers/:id/export", s.handleExportContainer())
 	protected.POST("/containers/import", s.handleImportContainer())
@@ -709,6 +710,23 @@ func (s *Server) handleStartContainer() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return
 		}
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+	}
+}
+
+func (s *Server) handleRestartContainer() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		ctx := c.Request.Context()
+
+		// 使用 Docker SDK 的 ContainerRestart 方法重启容器
+		if err := s.docker.RestartContainer(ctx, id, 20); err != nil {
+			s.logger.Error("restart container failed", zap.String("container", id), zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "重启容器失败: "+err.Error()))
+			return
+		}
+
+		s.logger.Info("container restarted successfully", zap.String("container", id))
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
 	}
 }

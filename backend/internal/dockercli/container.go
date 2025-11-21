@@ -129,7 +129,19 @@ func (c *Client) StopContainer(ctx context.Context, id string, timeoutSeconds in
 		t := timeoutSeconds
 		timeout = &t
 	}
+
 	return c.docker.ContainerStop(ctx, id, container.StopOptions{Timeout: timeout})
+}
+
+// RestartContainer 重启容器（可选超时时间，单位秒）
+func (c *Client) RestartContainer(ctx context.Context, id string, timeoutSeconds int) error {
+	var timeout *int
+	if timeoutSeconds > 0 {
+		t := timeoutSeconds
+		timeout = &t
+	}
+
+	return c.docker.ContainerRestart(ctx, id, container.StopOptions{Timeout: timeout})
 }
 
 // RenameContainer 重命名容器

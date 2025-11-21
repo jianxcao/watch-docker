@@ -29,6 +29,16 @@ export function useContainer() {
     }
   }
 
+  // 重启容器
+  const handleRestart = async (container: ContainerStatus) => {
+    try {
+      await store.restartContainer(container.id)
+      message.success(`容器 ${container.name} 重启成功`)
+    } catch (error: any) {
+      message.error(`重启容器失败: ${error.message}`)
+    }
+  }
+
   // 更新容器
   const handleUpdate = async (container: ContainerStatus, image?: string) => {
     try {
@@ -213,6 +223,7 @@ export function useContainer() {
     // 操作方法
     handleStart,
     handleStop,
+    handleRestart,
     handleUpdate,
     handleDelete,
     handleBatchUpdate,

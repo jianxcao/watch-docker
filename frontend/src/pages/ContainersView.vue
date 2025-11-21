@@ -64,6 +64,7 @@
             :loading="operationLoading"
             @start="() => handleStart(container)"
             @stop="() => handleStop(container)"
+            @restart="() => handleRestart(container)"
             @update="() => handleUpdate(container)"
             @delete="() => handleDelete(container)"
             @export="() => handleExport(container)"
@@ -376,6 +377,15 @@ const handleStop = async (container: ContainerStatus) => {
   operationLoading.value = true
   try {
     await containerHooks.handleStop(container)
+  } finally {
+    operationLoading.value = false
+  }
+}
+
+const handleRestart = async (container: ContainerStatus) => {
+  operationLoading.value = true
+  try {
+    await containerHooks.handleRestart(container)
   } finally {
     operationLoading.value = false
   }

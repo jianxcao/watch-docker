@@ -19,6 +19,7 @@ export const API_ENDPOINTS = {
   CONTAINER_UPDATE: (id: string) => `/containers/${id}/update`,
   CONTAINER_START: (id: string) => `/containers/${id}/start`,
   CONTAINER_STOP: (id: string) => `/containers/${id}/stop`,
+  CONTAINER_RESTART: (id: string) => `/containers/${id}/restart`,
   CONTAINER_DELETE: (id: string) => `/containers/${id}`,
   CONTAINER_EXPORT: (id: string) => `/containers/${id}/export`,
   CONTAINER_IMPORT: '/containers/import',

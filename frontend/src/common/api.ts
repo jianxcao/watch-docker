@@ -85,6 +85,9 @@ export const containerApi = {
   // 停止容器
   stopContainer: (id: string) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_STOP(id)),
 
+  // 重启容器
+  restartContainer: (id: string) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_RESTART(id)),
+
   // 删除容器
   deleteContainer: (id: string, force: boolean = false, removeVolumes: boolean = false, removeNetworks: boolean = false) =>
     axios.delete<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_DELETE(id), {

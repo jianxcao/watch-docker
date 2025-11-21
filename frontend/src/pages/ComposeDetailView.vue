@@ -93,9 +93,12 @@
                 :container="container"
                 @start="handleStartContainer(container)"
                 @stop="handleStopContainer(container)"
+                @restart="handleRestartContainer(container)"
+                @update="handleUpdateContainer(container)"
                 @delete="handleDeleteContainer(container)"
                 @export="handleExportContainer(container)"
                 @logs="handleViewContainerLogs(container)"
+                @detail="handleViewContainerDetail(container)"
               />
             </div>
           </div>
@@ -229,7 +232,7 @@ const composeStore = useComposeStore()
 const containerStore = useContainerStore()
 const settingStore = useSettingStore()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
-const { handleStart, handleStop, handleDelete, handleExport } = useContainer()
+const { handleStart, handleStop, handleRestart, handleUpdate, handleDelete, handleExport } = useContainer()
 const {
   handleStart: handleComposeStart,
   handleStop: handleComposeStop,
@@ -526,6 +529,16 @@ const handleStopContainer = async (container: ContainerStatus) => {
   await Promise.all([containerStore.fetchContainers(true, false), loadProjectData()])
 }
 
+const handleRestartContainer = async (container: ContainerStatus) => {
+  await handleRestart(container)
+  await Promise.all([containerStore.fetchContainers(true, false), loadProjectData()])
+}
+
+const handleUpdateContainer = async (container: ContainerStatus) => {
+  await handleUpdate(container)
+  await Promise.all([containerStore.fetchContainers(true, false), loadProjectData()])
+}
+
 const handleDeleteContainer = async (container: ContainerStatus) => {
   await handleDelete(container)
   await Promise.all([containerStore.fetchContainers(true, false), loadProjectData()])
@@ -533,6 +546,10 @@ const handleDeleteContainer = async (container: ContainerStatus) => {
 
 const handleExportContainer = async (container: ContainerStatus) => {
   await handleExport(container)
+}
+
+const handleViewContainerDetail = (container: ContainerStatus) => {
+  router.push({ name: 'container-detail', params: { id: container.id } })
 }
 
 const handleViewContainerLogs = (container: ContainerStatus) => {

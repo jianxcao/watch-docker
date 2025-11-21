@@ -174,6 +174,8 @@ import {
   TrashOutline,
   DownloadOutline,
   InformationCircleOutline,
+  RefreshOutline,
+  SyncOutline,
 } from '@vicons/ionicons5'
 import LogIcon from '@/assets/svg/log.svg?component'
 import dayjs from 'dayjs'
@@ -190,6 +192,8 @@ interface Props {
 interface Emits {
   (e: 'start'): void
   (e: 'stop'): void
+  (e: 'restart'): void
+  (e: 'update'): void
   (e: 'delete'): void
   (e: 'export'): void
   (e: 'logs'): void
@@ -256,64 +260,109 @@ const formatPorts = (ports: any[]): string => {
 }
 
 // 下拉菜单选项
-const dropdownOptions = computed(() => [
-  {
-    key: 'detail',
-    label: '查看详情',
-    icon: () =>
-      h(NIcon, null, {
-        default: () => h(InformationCircleOutline),
-      }),
-  },
-  {
-    key: 'logs',
-    label: '查看日志',
-    icon: () =>
-      h(NIcon, null, {
-        default: () => h(LogIcon),
-      }),
-  },
-  {
-    type: 'divider',
-    key: 'divider1',
-  },
-  {
-    key: props.container.running ? 'stop' : 'start',
-    label: props.container.running ? '停止容器' : '启动容器',
-    icon: () =>
-      h(NIcon, null, {
-        default: () => h(props.container.running ? StopCircleOutline : PlayCircleOutline),
-      }),
-    disabled: props.loading,
-  },
-  {
-    key: 'export',
-    label: '导出容器',
-    icon: () =>
-      h(NIcon, null, {
-        default: () => h(DownloadOutline),
-      }),
-  },
-  {
-    type: 'divider',
-    key: 'divider2',
-  },
-  {
-    key: 'delete',
-    label: '删除容器',
-    icon: () =>
-      h(
-        NIcon,
-        {
-          color: theme.value.errorColor,
-        },
-        {
-          default: () => h(TrashOutline),
-        },
-      ),
-    disabled: props.loading,
-  },
-])
+const dropdownOptions = computed(() => {
+  const options: any[] = [
+    {
+      key: 'detail',
+      label: '查看详情',
+      icon: () =>
+        h(NIcon, null, {
+          default: () => h(InformationCircleOutline),
+        }),
+    },
+    {
+      key: 'logs',
+      label: '查看日志',
+      icon: () =>
+        h(NIcon, null, {
+          default: () => h(LogIcon),
+        }),
+    },
+    {
+      type: 'divider',
+      key: 'divider1',
+    },
+  ]
+
+  // 如果有可用更新，添加更新选项
+  if (props.container.status === 'UpdateAvailable') {
+    options.push({
+      key: 'update',
+      label: '更新容器',
+      icon: () =>
+        h(NIcon, null, {
+          default: () => h(SyncOutline),
+        }),
+      disabled: props.loading,
+    })
+  }
+
+  // 启动/停止/重启选项
+  if (props.container.running) {
+    options.push(
+      {
+        key: 'restart',
+        label: '重启容器',
+        icon: () =>
+          h(NIcon, null, {
+            default: () => h(RefreshOutline),
+          }),
+        disabled: props.loading,
+      },
+      {
+        key: 'stop',
+        label: '停止容器',
+        icon: () =>
+          h(NIcon, null, {
+            default: () => h(StopCircleOutline),
+          }),
+        disabled: props.loading,
+      },
+    )
+  } else {
+    options.push({
+      key: 'start',
+      label: '启动容器',
+      icon: () =>
+        h(NIcon, null, {
+          default: () => h(PlayCircleOutline),
+        }),
+      disabled: props.loading,
+    })
+  }
+
+  options.push(
+    {
+      key: 'export',
+      label: '导出容器',
+      icon: () =>
+        h(NIcon, null, {
+          default: () => h(DownloadOutline),
+        }),
+    },
+    {
+      type: 'divider',
+      key: 'divider2',
+    },
+    {
+      key: 'delete',
+      label: '删除容器',
+      icon: () =>
+        h(
+          NIcon,
+          {
+            color: theme.value.errorColor,
+          },
+          {
+            default: () => h(TrashOutline),
+          },
+        ),
+      disabled: props.loading,
+    },
+  )
+
+  return options
+})
 
 // 处理下拉菜单选择
 const handleMenuSelect = (key: string) => {
@@ -326,6 +375,12 @@ const handleMenuSelect = (key: string) => {
       break
     case 'stop':
       emits('stop')
+      break
+    case 'restart':
+      emits('restart')
+      break
+    case 'update':
+      emits('update')
       break
     case 'export':
       emits('export')

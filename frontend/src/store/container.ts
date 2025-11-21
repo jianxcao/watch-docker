@@ -146,6 +146,22 @@ export const useContainerStore = defineStore('container', () => {
     }
   }
 
+  // 方法：重启容器
+  const restartContainer = async (id: string): Promise<boolean> => {
+    try {
+      const data = await containerApi.restartContainer(id)
+      if (data.code === 0) {
+        await fetchContainers() // 重新获取列表
+        return true
+      } else {
+        throw new Error(data.msg)
+      }
+    } catch (error) {
+      console.error('重启容器失败:', error)
+      throw error
+    }
+  }
+
   // 方法：删除容器
   const deleteContainer = async (id: string, force: boolean = false, removeVolumes: boolean = false, removeNetworks: boolean = false): Promise<boolean> => {
     try {
@@ -273,6 +289,7 @@ export const useContainerStore = defineStore('container', () => {
     batchUpdate,
     startContainer,
     stopContainer,
+    restartContainer,
     deleteContainer,
     findContainerById,
     findContainerByName,
