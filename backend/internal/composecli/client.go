@@ -100,6 +100,27 @@ func (c *Client) isComposeFile(filename string) bool {
 	return false
 }
 
+// findComposeFileInDir 在指定目录中查找 compose 文件
+// 如果找到返回完整路径，否则返回默认的 docker-compose.yaml 路径
+func (c *Client) findComposeFileInDir(dir string) string {
+	composeFiles := []string{
+		"docker-compose.yml",
+		"docker-compose.yaml",
+		"compose.yml",
+		"compose.yaml",
+	}
+
+	for _, cf := range composeFiles {
+		fullPath := filepath.Join(dir, cf)
+		if _, err := os.Stat(fullPath); err == nil {
+			return fullPath
+		}
+	}
+
+	// 如果没有找到，返回默认的 docker-compose.yaml
+	return filepath.Join(dir, "docker-compose.yaml")
+}
+
 // parseStatusInfo 解析 oStatus 字符串，提取状态信息
 // oStatus 格式示例：
 // "exited(2),running(2)" 或 "running" 或 "exited"
@@ -308,7 +329,6 @@ func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent st
 
 	// 创建项目目录
 	projectPath := filepath.Join(appPath, name)
-	composeFile := filepath.Join(projectPath, "docker-compose.yaml")
 
 	// 检查项目是否已存在
 	if stat, err := os.Stat(projectPath); err == nil && stat.IsDir() {
@@ -317,7 +337,7 @@ func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent st
 			logger.Logger.Warn("项目已存在，需要 force=true 才能覆盖", zap.String("path", projectPath))
 			return "", errors.New("项目已存在，如需覆盖请使用强制模式")
 		}
-		logger.Logger.Info("项目已存在，将覆盖 docker-compose.yml 文件", zap.String("path", projectPath))
+		logger.Logger.Info("项目已存在，将覆盖 compose 文件", zap.String("path", projectPath))
 	} else {
 		// 项目目录不存在，创建目录
 		if err := os.MkdirAll(projectPath, 0755); err != nil {
@@ -327,7 +347,10 @@ func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent st
 		logger.Logger.Info("创建项目目录成功", zap.String("path", projectPath))
 	}
 
-	// 写入 docker-compose.yml 文件（如果已存在会被覆盖）
+	// 查找目录中是否已存在 compose 文件，如果存在则使用已有的文件名
+	composeFile := c.findComposeFileInDir(projectPath)
+
+	// 写入 compose 文件（如果已存在会被覆盖）
 	if err := os.WriteFile(composeFile, []byte(yamlContent), 0644); err != nil {
 		logger.Logger.Error("写入 Compose 文件失败", zap.String("file", composeFile), logger.ZapErr(err))
 		return "", errors.New("写入 Compose 文件失败: " + err.Error())
@@ -343,7 +366,10 @@ func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent st
 }
 
 // GetProjectYaml 读取项目的 docker-compose.yaml 文件内容
-func (c *Client) GetProjectYaml(composeFile string) (string, error) {
+func (c *Client) GetProjectYaml(file string) (string, error) {
+
+	dir := path.Dir(file)
+	composeFile := c.findComposeFileInDir(dir)
 	// 检查文件是否存在
 	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
 		logger.Logger.Error("Compose 文件不存在", zap.String("file", composeFile))

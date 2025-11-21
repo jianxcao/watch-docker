@@ -1,5 +1,10 @@
 # 更新说明
 
+## v0.1.4
+
+- 修复 bug
+- container 和 compose 的卡片增加重启按钮
+
 ## v0.1.3
 
 - 修复 bug
