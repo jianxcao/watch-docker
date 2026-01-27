@@ -1,0 +1,256 @@
+---
+description: Go 后端编码规范和最佳实践
+globs: backend/**/*.go
+alwaysApply: false
+---
+
+# Go 后端编码规范
+
+## 代码风格
+
+### 基本规范
+
+- 使用 `gofmt` 格式化代码
+- 使用 `golangci-lint` 进行代码检查
+- 每行代码不超过 120 字符
+- 使用 tab 缩进（Go 标准）
+
+### 命名规范
+
+```go
+// ✅ 包名：简短、小写、单数
+package dockercli
+package api
+
+// ❌ 避免：复数、下划线、驼峰
+package docker_client
+package apis
+
+// ✅ 接口名：清晰描述行为
+type Reader interface
+type ContainerManager interface
+
+// ✅ 结构体名：使用大驼峰
+type Server struct
+type ContainerStatus struct
+
+// ✅ 函数名：使用大驼峰（导出）或小驼峰（内部）
+func NewRouter() *gin.Engine
+func fetchContainers() error
+
+// ✅ 常量：使用大驼峰
+const MaxRetryCount = 3
+const DefaultTimeout = 30 * time.Second
+
+// ✅ 变量：使用小驼峰或大驼峰
+var logger *zap.Logger
+var EnvCfg = &EnvConfig{}
+```
+
+### 文件命名
+
+```bash
+# ✅ 使用小写和下划线
+container_router.go
+compose_socket.go
+docker_compose_help.go
+
+# ❌ 避免驼峰命名
+containerRouter.go
+composeSocket.go
+```
+
+## 错误处理
+
+### 错误包装
+
+```go
+// ✅ 好的错误处理：使用 fmt.Errorf 包装错误
+if err := config.Load(configPath); err != nil {
+    return fmt.Errorf("load config: %w", err)
+}
+
+// ✅ 提供上下文信息
+if err := srv.Shutdown(ctx); err != nil {
+    logger.Error("server shutdown error", zap.Error(err))
+    return fmt.Errorf("shutdown server: %w", err)
+}
+
+// ❌ 不好的错误处理：吞掉错误
+if err := doSomething(); err != nil {
+    // 什么都不做
+}
+
+// ❌ 不提供上下文
+if err := config.Load(path); err != nil {
+    return err
+}
+```
+
+### 日志记录
+
+```go
+// ✅ 使用 zap 结构化日志
+logger.Info("http server starting", zap.String("addr", cfg.Server.Addr))
+logger.Error("docker client init failed", zap.Error(err))
+logger.Warn("static directory not exists", zap.String("dir", staticDir))
+
+// ✅ 使用自定义的 logger helper
+logger.Info("config updated", logger.ZapField("key", value))
+logger.Error("operation failed", logger.ZapErr(err))
+
+// ❌ 避免使用 fmt.Println 或 log.Println
+fmt.Println("Server started")
+log.Println("Error:", err)
+```
+
+## HTTP 接口规范
+
+### 路由组织
+
+```go
+// ✅ 使用路由组和中间件
+api := r.Group("/api/v1")
+{
+    api.GET("/healthz", s.handleHealthz())
+    api.POST("/login", s.handleLogin())
+}
+
+protected := api.Group("")
+protected.Use(auth.AuthMiddleware())
+{
+    protected.GET("/containers", s.handleGetContainers())
+    protected.POST("/containers/:id/start", s.handleStartContainer())
+}
+```
+
+### Handler 函数
+
+```go
+// ✅ Handler 返回 gin.HandlerFunc
+func (s *Server) handleGetContainers() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        // 实现逻辑
+        c.JSON(http.StatusOK, NewSuccessRes(data))
+    }
+}
+
+// ✅ 使用统一的响应格式
+c.JSON(http.StatusOK, NewSuccessRes(gin.H{"containers": list}))
+c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "参数错误"))
+```
+
+### 请求参数绑定
+
+```go
+// ✅ 使用结构体绑定和验证
+type LoginRequest struct {
+    Username string `json:"username" binding:"required"`
+    Password string `json:"password" binding:"required"`
+}
+
+var req LoginRequest
+if err := c.ShouldBindJSON(&req); err != nil {
+    c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "参数错误"))
+    return
+}
+```
+
+## Context 使用
+
+```go
+// ✅ 使用 context 传递超时和取消信号
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+
+// ✅ 从 gin.Context 获取请求上下文
+dockerVersion, err := s.docker.GetVersion(c.Request.Context())
+
+// ✅ 监听 context 取消信号
+select {
+case data := <-ch:
+    // 处理数据
+case <-ctx.Done():
+    return
+}
+```
+
+## 并发处理
+
+```go
+// ✅ 使用 goroutine 启动后台任务
+go func() {
+    logger.Info("background task starting")
+    if err := task.Run(); err != nil {
+        logger.Error("task failed", zap.Error(err))
+    }
+}()
+
+// ✅ 优雅关闭
+quit := make(chan os.Signal, 1)
+signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+<-quit
+
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := srv.Shutdown(ctx); err != nil {
+    logger.Error("shutdown error", zap.Error(err))
+}
+```
+
+## 包导入顺序
+
+```go
+import (
+    // 1. 标准库
+    "context"
+    "fmt"
+    "net/http"
+    "time"
+
+    // 2. 项目内部包
+    "github.com/jianxcao/watch-docker/backend/internal/api"
+    "github.com/jianxcao/watch-docker/backend/internal/config"
+    "github.com/jianxcao/watch-docker/backend/internal/dockercli"
+
+    // 3. 第三方库
+    "github.com/gin-gonic/gin"
+    "go.uber.org/zap"
+)
+```
+
+## 代码组织
+
+### 结构体定义
+
+```go
+// ✅ 字段按照重要性和类型分组
+type Server struct {
+    // 核心依赖
+    logger    *zap.Logger
+    docker    *dockercli.Client
+    
+    // 业务组件
+    scanner   *scanner.Scanner
+    scheduler *scheduler.Scheduler
+    
+    // WebSocket 管理器
+    streamManagerString *wsstream.StreamManager[string]
+    streamManagerBytes  *wsstream.StreamManager[[]byte]
+}
+```
+
+### 接收者方法
+
+```go
+// ✅ 使用指针接收者修改状态
+func (s *Server) updateConfig(cfg *Config) error {
+    s.config = cfg
+    return nil
+}
+
+// ✅ 使用值接收者读取数据（小对象）
+func (c Config) GetTimeout() time.Duration {
+    return c.Timeout
+}
+```

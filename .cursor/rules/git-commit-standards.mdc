@@ -1,0 +1,230 @@
+---
+description: Git 提交规范和最佳实践
+alwaysApply: true
+---
+
+# Git 提交规范
+
+## Commit Message 格式
+
+遵循 Conventional Commits 规范：
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+### Type（必填）
+
+提交类型说明：
+
+- `feat`: 新功能（feature）
+- `fix`: 修复 bug
+- `docs`: 文档更新
+- `style`: 代码格式调整（不影响代码运行）
+- `refactor`: 重构（既不是新增功能，也不是修复 bug）
+- `perf`: 性能优化
+- `test`: 测试相关
+- `chore`: 构建过程或辅助工具的变动
+- `ci`: CI/CD 配置文件和脚本的变动
+- `build`: 影响构建系统或外部依赖的更改
+
+### Scope（可选）
+
+影响范围，例如：
+
+- `backend`: 后端代码
+- `frontend`: 前端代码
+- `api`: API 接口
+- `ui`: 用户界面
+- `docker`: Docker 相关
+- `docs`: 文档
+
+### Subject（必填）
+
+- 简短描述（不超过 50 字符）
+- 使用现在时态："add" 而不是 "added"
+- 不要大写首字母
+- 结尾不加句号
+
+### Body（可选）
+
+- 详细描述改动内容
+- 解释为什么做这个改动
+- 与之前行为的对比
+
+### Footer（可选）
+
+- 关闭的 Issue：`Closes #123`
+- 不兼容改动：`BREAKING CHANGE: 说明`
+
+## 提交示例
+
+### 基本示例
+
+```bash
+# ✅ 新增功能
+feat(backend): add container export API
+
+实现容器导出功能，支持通过 API 导出容器为 tar 文件
+- 添加 /api/v1/containers/:id/export 接口
+- 支持大文件流式下载
+- 添加 token 认证
+
+# ✅ 修复 bug
+fix(frontend): fix memory leak in WebSocket connection
+
+修复 WebSocket 连接未正确关闭导致的内存泄漏问题
+
+# ✅ 文档更新
+docs: update README with 2FA setup instructions
+
+添加双因素认证配置说明和使用指南
+
+# ✅ 性能优化
+perf(frontend): optimize container list rendering
+
+使用虚拟滚动优化大量容器的列表渲染性能
+
+# ✅ 重构
+refactor(backend): simplify error handling logic
+
+统一错误处理逻辑，使用自定义错误类型
+
+# ✅ 样式调整
+style(frontend): format code with prettier
+
+使用 prettier 格式化所有前端代码
+
+# ✅ 构建配置
+chore(docker): update base image to alpine 3.19
+
+# ✅ 测试
+test(backend): add unit tests for compose client
+```
+
+### 复杂示例（包含 body）
+
+```bash
+feat(frontend): add responsive design for mobile devices
+
+实现移动端响应式布局：
+- 添加移动端导航抽屉
+- 优化容器卡片在小屏幕上的显示
+- 添加设备类型检测工具函数
+- 支持平板设备的特殊处理
+
+测试覆盖：iPhone、iPad、Android 手机和平板
+```
+
+### 不兼容改动示例
+
+```bash
+feat(api): change container stats API response format
+
+BREAKING CHANGE: 容器统计 API 响应格式变更
+
+旧格式：
+{
+  "cpu": 50.5,
+  "memory": 1024000
+}
+
+新格式：
+{
+  "cpu": { "usage": 50.5, "cores": 4 },
+  "memory": { "usage": 1024000, "limit": 2048000 }
+}
+```
+
+## 提交最佳实践
+
+### 提交频率
+
+```bash
+# ✅ 小步提交，每个提交只包含一个逻辑改动
+git commit -m "feat(backend): add container list API"
+git commit -m "feat(frontend): implement container list page"
+git commit -m "docs: add API documentation"
+
+# ❌ 避免一次提交包含多个不相关的改动
+git commit -m "feat: add multiple features and fix bugs"
+```
+
+### 提交前检查
+
+```bash
+# ✅ 提交前检查代码
+1. 运行测试：确保所有测试通过
+2. 代码检查：运行 linter
+3. 格式化：使用 prettier/gofmt 格式化代码
+4. 审查改动：使用 git diff 检查所有改动
+
+# ✅ 使用 git add -p 选择性暂存
+git add -p  # 交互式选择要暂存的改动
+```
+
+### 分支命名
+
+```bash
+# ✅ 使用清晰的分支名称
+feature/container-export
+fix/websocket-memory-leak
+refactor/error-handling
+docs/api-documentation
+
+# ❌ 避免模糊的分支名
+dev
+test
+tmp
+```
+
+## 多人协作
+
+### Pull Request 标题
+
+```bash
+# ✅ 使用与 commit message 相同的格式
+feat(frontend): add container filtering功能
+fix(backend): resolve race condition in scheduler
+```
+
+### PR 描述模板
+
+```markdown
+## 改动说明
+简要描述这个 PR 做了什么
+
+## 改动类型
+- [ ] 新功能
+- [ ] Bug 修复
+- [ ] 文档更新
+- [ ] 性能优化
+- [ ] 重构
+- [ ] 其他
+
+## 测试
+说明如何测试这些改动
+
+## 相关 Issue
+Closes #123
+
+## 截图（如果适用）
+添加截图说明 UI 改动
+```
+
+## 提交检查清单
+
+在提交代码前，确保：
+
+- [ ] Commit message 遵循规范格式
+- [ ] 代码通过所有测试
+- [ ] 代码已格式化
+- [ ] 移除了调试代码和 console.log
+- [ ] 更新了相关文档
+- [ ] 每个提交只包含一个逻辑改动
+- [ ] 提交信息清晰描述了改动内容
+- [ ] 检查了 git diff，确认所有改动都是预期的
