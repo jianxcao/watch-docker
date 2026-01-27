@@ -268,11 +268,12 @@ func (c *Client) PullProject(ctx context.Context, composeFile string) error {
 
 // DeleteProject 删除项目及其所有资源
 // 如果是 draft 状态，直接删除配置文件和目录
-// 如果是其他状态，先执行 docker-compose down，然后删除配置文件和目录
+// 如果是其他状态，只执行 docker-compose down 清理 Docker 资源，不删除目录
 func (c *Client) DeleteProject(ctx context.Context, composeFile string, status StackStatus) error {
 	projectPath := path.Dir(composeFile)
+	projectName := path.Base(projectPath)
 
-	// 如果不是 draft 状态，先执行 docker-compose down 清理容器、网络和卷
+	// 如果不是 draft 状态，只执行 docker-compose down 清理容器、网络和卷，不删除目录
 	if status != StatusDraft {
 		res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
 			ExecPath:      projectPath,
@@ -284,17 +285,62 @@ func (c *Client) DeleteProject(ctx context.Context, composeFile string, status S
 		if res.Error != nil {
 			return res.Error
 		}
+
+		logger.Logger.Info("删除项目成功（仅清理Docker资源，保留目录）",
+			zap.String("projectPath", projectPath),
+			zap.String("status", string(status)))
+		return nil
 	}
 
-	// 删除项目目录和配置文件
-	if status == StatusDraft || status == StatusCreatedStack {
-		if err := os.RemoveAll(projectPath); err != nil {
-			logger.Logger.Error("删除项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
-			return errors.New("删除项目目录失败: " + err.Error())
+	// 如果是 draft 状态，在删除目录前再次确认项目的实际状态，避免竞态条件
+	// 重新查询项目列表，确认当前实际状态
+	projects, err := c.ListProjects(ctx)
+	if err != nil {
+		logger.Logger.Error("查询项目状态失败", zap.String("project", projectName), logger.ZapErr(err))
+		return errors.New("查询项目状态失败: " + err.Error())
+	}
+
+	// 查找当前项目的实际状态
+	currentStatus := StatusDraft
+	for _, p := range projects {
+		if p.Name == projectName {
+			currentStatus = p.Status
+			break
 		}
 	}
 
-	logger.Logger.Info("删除项目成功",
+	// 如果项目状态已经不是 draft，只清理 Docker 资源，不删除目录
+	if currentStatus != StatusDraft {
+		logger.Logger.Warn("项目状态已变更，只清理Docker资源，不删除目录",
+			zap.String("project", projectName),
+			zap.String("originalStatus", string(status)),
+			zap.String("currentStatus", string(currentStatus)))
+
+		res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
+			ExecPath:      projectPath,
+			Args:          []string{"down", "--volumes", "--remove-orphans"},
+			OperationName: "delete project (status changed)",
+			NeedOutput:    true,
+		})
+		logger.Logger.Info("删除APP（Docker资源，状态变更）", zap.String("output", string(res.Output)))
+		if res.Error != nil {
+			return res.Error
+		}
+
+		logger.Logger.Info("删除项目成功（状态已变更，仅清理Docker资源，保留目录）",
+			zap.String("projectPath", projectPath),
+			zap.String("currentStatus", string(currentStatus)))
+		return nil
+	}
+
+	// 确认仍然是 draft 状态，删除项目目录
+	logger.Logger.Info("删除项目目录", zap.String("path", projectPath), zap.String("status", string(currentStatus)))
+	if err := os.RemoveAll(projectPath); err != nil {
+		logger.Logger.Error("删除项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
+		return errors.New("删除项目目录失败: " + err.Error())
+	}
+
+	logger.Logger.Info("删除项目成功（删除目录）",
 		zap.String("projectPath", projectPath),
 		zap.String("status", string(status)))
 
