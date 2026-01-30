@@ -39,8 +39,8 @@ COPY backend/ ./
 # 下载依赖
 RUN go mod download
 
-# 编译应用 - 使用动态平台参数
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a -installsuffix cgo -o watch-docker cmd/watch-docker/main.go
+# 编译应用 - 使用动态平台参数，添加 docker 构建标签
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags docker -a -installsuffix cgo -o watch-docker cmd/watch-docker/main.go
 
 # 运行阶段
 FROM alpine:latest

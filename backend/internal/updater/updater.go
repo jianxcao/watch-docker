@@ -135,6 +135,15 @@ func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) 
 		logger.Logger.Info("容器完全停止，文件系统已释放", zap.String("containerID", uctx.containerID))
 	}
 
+	// 检查容器是否仍然存在，如果容器已被删除则直接返回（认为是正常情况）
+	_, err = u.docker.InspectContainer(ctx, uctx.containerID)
+	if err != nil {
+		logger.Logger.Info("容器不存在，无需继续更新操作",
+			zap.String("containerID", uctx.containerID),
+			zap.Error(err))
+		return nil
+	}
+
 	// 获取容器名称并重命名旧容器
 	uctx.oldName = oldInfo.Name
 	if len(uctx.oldName) > 0 && uctx.oldName[0] == '/' {

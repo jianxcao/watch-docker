@@ -1,0 +1,42 @@
+[Unit]
+Description=Watch Docker - Docker Container Management and Monitoring Tool
+Documentation=https://github.com/jianxcao/watch-docker
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# 使用 root 用户运行（可根据需要修改）
+User=root
+WorkingDirectory=/root/.watch-docker
+
+# 环境变量配置
+Environment="CONFIG_PATH=/root/.watch-docker"
+Environment="CONFIG_FILE=config.yaml"
+Environment="USER_NAME=admin"
+Environment="USER_PASSWORD=admin"
+Environment="STATIC_DIR="
+Environment="IS_OPEN_DOCKER_SHELL=false"
+Environment="IS_SECONDARY_VERIFICATION=false"
+
+# 可执行文件路径
+ExecStart=/usr/local/bin/watch-docker
+
+# 重启策略
+Restart=on-failure
+RestartSec=10s
+
+# 安全设置
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/root/.watch-docker
+
+# 日志配置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=watch-docker
+
+[Install]
+WantedBy=multi-user.target

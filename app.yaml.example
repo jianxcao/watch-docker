@@ -1,0 +1,109 @@
+# Watch Docker 应用配置文件
+# 此文件用于配置应用运行时环境，与 config.yaml（Docker 业务配置）分离
+#
+# 配置文件说明：
+#   - app.yaml        - 应用环境配置（本文件，用户名密码、功能开关等）
+#   - config.yaml     - Docker 业务配置（扫描、通知、服务器等）
+#
+# 配置优先级：环境变量 > app.yaml > 默认值
+#
+# 复制此文件为 app.yaml 并根据需要修改
+
+# =============================================================================
+# 认证配置
+# =============================================================================
+
+# 登录用户名
+# 环境变量：USER_NAME
+username: "admin"
+
+# 登录密码
+# 环境变量：USER_PASSWORD
+# ⚠️ 安全警告：请立即修改默认密码！
+password: "admin"
+
+# 是否启用双因素认证（2FA）
+# 环境变量：IS_SECONDARY_VERIFICATION
+enable_2fa: false
+
+# 2FA 允许的域名白名单（逗号分隔）
+# 环境变量：TWOFA_ALLOWED_DOMAINS
+# 空值表示允许所有域名
+twofa_allowed_domains: ""
+
+# =============================================================================
+# 静态资源配置
+# =============================================================================
+
+# 静态资源目录
+# 环境变量：STATIC_DIR
+# 空字符串表示使用嵌入在二进制中的资源（推荐）
+# 如需自定义前端，设置为前端构建产物目录，例如："/path/to/custom/frontend"
+static_dir: ""
+
+# =============================================================================
+# 功能开关
+# =============================================================================
+
+# 是否开启容器 Shell 功能
+# 环境变量：IS_OPEN_DOCKER_SHELL
+# 启用后可以直接在 Web 界面进入容器终端
+enable_docker_shell: false
+
+# =============================================================================
+# 应用配置
+# =============================================================================
+
+# 应用路径
+# 环境变量：APP_PATH
+app_path: ""
+
+# 应用版本
+# 环境变量：VERSION_WATCH_DOCKER
+version: "v0.1.6"
+
+# =============================================================================
+# 说明
+# =============================================================================
+#
+# 1. 配置文件职责分离：
+#    - app.yaml（本文件）      - 应用环境配置（认证、功能开关等）
+#    - config.yaml             - Docker 业务配置（扫描、通知、服务器等）
+#
+# 2. 配置方式：
+#    方式1：修改此文件（推荐）
+#    方式2：使用环境变量（Docker 或 systemd）
+#    方式3：混合使用（环境变量优先级更高）
+#
+# 3. 环境变量对应关系：
+#    username              -> USER_NAME
+#    password              -> USER_PASSWORD
+#    enable_2fa            -> IS_SECONDARY_VERIFICATION
+#    twofa_allowed_domains -> TWOFA_ALLOWED_DOMAINS
+#    static_dir            -> STATIC_DIR
+#    enable_docker_shell   -> IS_OPEN_DOCKER_SHELL
+#    app_path              -> APP_PATH
+#    version               -> VERSION_WATCH_DOCKER
+#
+# 4. 修改配置后需要重启应用：
+#    systemctl restart watch-docker
+#    或直接重启应用进程
+#
+# 5. 安全建议：
+#    - 立即修改默认密码
+#    - 设置文件权限：chmod 600 ~/.watch-docker/app.yaml
+#    - 设置目录权限：chmod 700 ~/.watch-docker
+#    - 如使用环境变量，避免在命令行明文传递密码
+#
+# 6. Docker 部署：
+#    推荐使用环境变量：
+#    docker run -e USER_NAME=myuser -e USER_PASSWORD=mypass ...
+#
+#    或挂载配置文件：
+#    docker run -v ~/.watch-docker/app.yaml:/root/.watch-docker/app.yaml ...
+#
+# 7. 更多配置说明请查看：
+#    - doc/configuration-guide.md  - 完整配置指南
+#    - config.yaml.example         - Docker 业务配置示例
+#
+# =============================================================================
