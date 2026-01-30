@@ -193,9 +193,91 @@ Watch Docker 是一个**现代化的 Docker 容器管理平台**，专为简化 
 
 ## 🚀 快速开始
 
-### 方式一：Docker Compose（推荐）
+### 方式一：原生安装包（推荐）
 
-只需 3 步，即可启动：
+无需 Docker，直接在主机上运行，支持 Linux、Windows、macOS。
+
+#### Linux (Debian/Ubuntu)
+
+```bash
+# 下载并安装 DEB 包
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_x86_64.deb
+sudo dpkg -i watch-docker_*_linux_x86_64.deb
+
+# 启用并启动服务
+sudo systemctl enable watch-docker@$USER
+sudo systemctl start watch-docker@$USER
+
+# 查看状态
+sudo systemctl status watch-docker@$USER
+```
+
+#### Linux (RHEL/CentOS/Fedora)
+
+```bash
+# 下载并安装 RPM 包
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_x86_64.rpm
+sudo rpm -i watch-docker_*_linux_x86_64.rpm
+
+# 启用并启动服务
+sudo systemctl enable watch-docker@$USER
+sudo systemctl start watch-docker@$USER
+```
+
+#### macOS (Homebrew)
+
+```bash
+# 添加 tap 并安装
+brew tap jianxcao/tap
+brew install watch-docker
+
+# 启动服务（可选）
+brew services start watch-docker
+```
+
+#### macOS (手动安装)
+
+```bash
+# 下载对应架构的二进制
+# Intel: watch-docker_*_darwin_x86_64.tar.gz
+# Apple Silicon: watch-docker_*_darwin_arm64.tar.gz
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_darwin_arm64.tar.gz
+tar -xzf watch-docker_*_darwin_arm64.tar.gz
+
+# 安装到系统路径
+sudo install -m 755 watch-docker /usr/local/bin/
+
+# 直接运行
+watch-docker
+```
+
+#### Windows
+
+1. 从 [Releases](https://github.com/jianxcao/watch-docker/releases/latest) 下载 `WatchDocker-Setup.exe`
+2. 双击运行安装程序
+3. 安装完成后，可选择安装为 Windows 服务
+4. 访问 `http://localhost:8080`
+
+#### 通用安装脚本（Linux/macOS）
+
+```bash
+# 一键安装脚本
+curl -fsSL https://raw.githubusercontent.com/jianxcao/watch-docker/main/scripts/install.sh | bash
+```
+
+**安装后：**
+
+- 配置文件位于：`~/.watch-docker/config.yaml`
+- 访问地址：`http://localhost:8080`
+- 默认账户：`admin / admin`
+
+> 💡 **提示**：首次登录后请立即修改默认密码！
+
+---
+
+### 方式二：Docker Compose
+
+适合在 Docker 环境中运行，只需 3 步：
 
 **1. 创建 `docker-compose.yaml` 文件：**
 
@@ -243,7 +325,7 @@ docker-compose up -d
 
 🎉 **就这么简单！** 现在你可以开始管理你的 Docker 容器了。
 
-### 方式二：Docker 命令
+### 方式三：Docker 命令
 
 ```bash
 docker run -d \
@@ -538,7 +620,6 @@ Watch Docker 支持二次验证功能，为您的管理界面提供额外的安�
 Watch Docker 提供了两种二次验证方式：
 
 1. **OTP（一次性密码）**
-
    - 基于 TOTP（时间型一次性密码）协议
    - 支持 Google Authenticator、Authy、微软身份验证器等应用
    - 30 秒刷新一次的 6 位验证码
@@ -580,14 +661,12 @@ docker run -d \
 ### 首次设置流程
 
 1. **启用功能后首次登录**
-
    - 输入用户名和密码
    - 系统提示设置二次验证
 
 2. **选择验证方式**
 
    **OTP 方式：**
-
    - 选择"OTP (一次性密码)"
    - 点击"生成二维码"
    - 使用身份验证器应用扫描二维码
@@ -595,7 +674,6 @@ docker run -d \
    - 完成设置
 
    **WebAuthn 方式：**
-
    - 选择"WebAuthn (生物验证)"
    - 点击"开始设置"
    - 按照浏览器提示完成生物识别注册
@@ -649,19 +727,16 @@ twofa:
 ### 安全建议
 
 1. **OTP 密钥备份**
-
    - 首次设置时保存二维码截图或密钥
    - 可以在多个设备上添加相同的密钥
    - 密钥丢失将无法登录，需要重新配置
 
 2. **WebAuthn 设备管理**
-
    - 建议注册多个生物识别设备
    - 定期检查已注册的凭据
    - 更换设备时记得重新设置
 
 3. **强密码配合**
-
    - 二次验证是在密码基础上的额外保护
    - 仍需设置强密码（建议 16 位以上）
    - 两层防护共同保障账户安全
@@ -697,7 +772,6 @@ twofa:
 如果不再需要二次验证功能：
 
 1. **在 Web 界面中禁用**（推荐）
-
    - 登录后进入"系统设置"
    - 点击"禁用二次验证"按钮
 

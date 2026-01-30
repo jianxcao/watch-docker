@@ -1,0 +1,211 @@
+version: 2
+
+# 注意：前端构建已在 GitHub Actions 中完成，不需要在这里重复
+# 如果本地运行 goreleaser，请先手动构建前端：
+# cd frontend && pnpm install && pnpm build
+# rm -rf backend/internal/api/static && mkdir -p backend/internal/api/static && cp -r frontend/dist/* backend/internal/api/static/
+
+builds:
+  - id: watch-docker
+    main: ./cmd/watch-docker
+    binary: watch-docker
+    dir: ./backend
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    # Windows 不支持 arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    ids:
+      - watch-docker
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    # Windows 使用 ZIP，其他使用 tar.gz
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+    files:
+      - LICENSE
+      - README.md
+      # 安装脚本（Windows 用不到，但包含也无妨）
+      - scripts/install.sh
+      - scripts/uninstall.sh
+      # 配置文件示例（分离两个文件）
+      - src: app.yaml.example
+        dst: app.yaml.example
+      - src: config.yaml.example
+        dst: config.yaml.example
+      # Windows 安装说明
+      - src: ./doc/archive/windows-install.md
+        dst: INSTALL-WINDOWS.txt
+      # 配置说明文档
+      - src: ./doc/archive/configuration-guide.md
+        dst: CONFIGURATION.md
+
+# Linux 软件包 (DEB/RPM)
+nfpms:
+  - id: watch-docker
+    package_name: watch-docker
+    vendor: jianxcao
+    homepage: https://github.com/jianxcao/watch-docker
+    maintainer: jianxcao <jianxcao@example.com>
+    description: |
+      Watch Docker - Docker Container Management and Monitoring Tool
+      一站式 Docker 容器监控、智能更新、可视化管理平台
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/local/bin
+    contents:
+      # systemd 服务文件 - 标准服务（推荐）
+      - src: ./scripts/systemd/watch-docker.service
+        dst: /lib/systemd/system/watch-docker.service
+        type: config
+      # systemd 服务文件 - 模板服务（多用户）
+      - src: ./scripts/systemd/watch-docker@.service
+        dst: /lib/systemd/system/watch-docker@.service
+        type: config
+      # 安装脚本
+      - src: ./scripts/install-service.sh
+        dst: /usr/local/share/watch-docker/install-service.sh
+        file_info:
+          mode: 0755
+      # 配置文件示例（分离两个文件）
+      - src: ./app.yaml.example
+        dst: /usr/local/share/watch-docker/app.yaml.example
+      - src: ./config.yaml.example
+        dst: /usr/local/share/watch-docker/config.yaml.example
+      # 文档
+      - src: ./doc/archive/configuration-guide.md
+        dst: /usr/local/share/doc/watch-docker/configuration-guide.md
+    scripts:
+      postinstall: ./scripts/postinstall.sh
+      preremove: ./scripts/preremove.sh
+    overrides:
+      deb:
+        dependencies:
+          - docker.io | docker-ce
+      rpm:
+        dependencies:
+          - docker
+
+# Homebrew Cask (macOS)
+# 使用 homebrew_casks 替代已弃用的 brews
+# Casks 用于预编译二进制文件，Formula 用于从源码编译
+homebrew_casks:
+  - name: watch-docker
+    repository:
+      owner: jianxcao
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # Casks 默认在 Casks 目录，不需要指定 directory
+    homepage: https://github.com/jianxcao/watch-docker
+    description: Watch Docker - Docker Container Management and Monitoring Tool
+    skip_upload: auto
+    # 指定二进制文件名
+    binaries:
+      - watch-docker
+    # 处理 macOS Gatekeeper quarantine（因为二进制未签名）
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/watch-docker"]
+          end
+          # 创建配置目录
+          (Pathname.new(ENV['HOME'])/".watch-docker").mkpath
+    # 用户提示信息
+    caveats: |
+      To start watch-docker as a service, you can create a launchd plist file at:
+        ~/Library/LaunchAgents/com.watchdocker.plist
+
+      Or use the provided plist file from the installation directory.
+
+      Configuration directory: ~/.watch-docker
+
+# Checksums
+checksum:
+  name_template: "checksums.txt"
+
+# Changelog
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^build:"
+      - "Merge pull request"
+      - "Merge branch"
+
+# Release 配置
+release:
+  github:
+    owner: jianxcao
+    name: watch-docker
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## Watch Docker {{ .Tag }}
+
+    ### 📦 安装方式
+
+    #### Linux (Debian/Ubuntu)
+    ```bash
+    wget https://github.com/jianxcao/watch-docker/releases/download/{{ .Tag }}/watch-docker_{{ .Version }}_linux_x86_64.deb
+    sudo dpkg -i watch-docker_{{ .Version }}_linux_x86_64.deb
+    ```
+
+    #### Linux (RHEL/CentOS/Fedora)
+    ```bash
+    wget https://github.com/jianxcao/watch-docker/releases/download/{{ .Tag }}/watch-docker_{{ .Version }}_linux_x86_64.rpm
+    sudo rpm -i watch-docker_{{ .Version }}_linux_x86_64.rpm
+    ```
+
+    #### macOS (Homebrew)
+    ```bash
+    brew tap jianxcao/tap
+    brew install watch-docker
+    ```
+
+    #### Windows
+    下载并运行 `WatchDocker-Setup.exe`
+
+    #### 独立二进制
+    从下方 Assets 中下载对应平台的压缩包，解压后直接运行。
+
+    ---
+  footer: |
+    ---
+
+    **完整更新日志**: https://github.com/jianxcao/watch-docker/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+# Announce (可选)
+# announce:
+#   discord:
+#     enabled: true
+#     message_template: 'Watch Docker {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'

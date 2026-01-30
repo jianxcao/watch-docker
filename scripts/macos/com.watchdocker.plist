@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.watchdocker</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/watch-docker</string>
+    </array>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CONFIG_PATH</key>
+        <string>~/.watch-docker</string>
+        <key>CONFIG_FILE</key>
+        <string>config.yaml</string>
+        <key>USER_NAME</key>
+        <string>admin</string>
+        <key>USER_PASSWORD</key>
+        <string>admin</string>
+        <key>STATIC_DIR</key>
+        <string></string>
+        <key>IS_OPEN_DOCKER_SHELL</key>
+        <string>false</string>
+        <key>IS_SECONDARY_VERIFICATION</key>
+        <string>false</string>
+    </dict>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <true/>
+    
+    <key>StandardOutPath</key>
+    <string>~/.watch-docker/stdout.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>~/.watch-docker/stderr.log</string>
+    
+    <key>WorkingDirectory</key>
+    <string>~/.watch-docker</string>
+    
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
