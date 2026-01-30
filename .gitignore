@@ -25,7 +25,14 @@ frontend/dev-dist/*
 __debug*
 frontend/dist
 
+# 后端嵌入的静态文件（保留说明文件和占位文件）
+backend/internal/api/static/*
+!backend/internal/api/static/.gitkeep
+!backend/internal/api/static/README.md
+!backend/internal/api/static/index.placeholder.html
+
 test.sh
 .secrets
 
 .env.local
+dist

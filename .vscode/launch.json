@@ -13,6 +13,7 @@
             ],
             "env": {
                 "CONFIG_PATH": "./.config",
+                "APP_PATH": "/Users/jianxiong.cao/Downloads/docker",
                 "STATIC_DIR": "${workspaceFolder}/frontend/dist",
             },
             "cwd": "${workspaceFolder}/backend"

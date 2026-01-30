@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+// staticFS 在 static_embed.go 或 static_embed_docker.go 中定义
+// 根据构建标签选择不同的实现
 
 type Server struct {
 	logger              *zap.Logger
@@ -341,23 +345,30 @@ func (s *Server) handleLogStream(c *gin.Context) {
 
 // setupStaticRoutes 设置静态文件路由 (前端资源)
 func (s *Server) setupStaticRoutes(r *gin.Engine) {
-	// 静态文件目录
 	staticDir := conf.EnvCfg.STATIC_DIR
 
-	// 检查静态文件目录是否存在
-	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		logger.Logger.Warn(fmt.Sprintf("静态文件目录不存在，跳过前端资源服务: %s", staticDir))
-		return
+	// 优先使用外部静态文件目录（用于开发或自定义）
+	if staticDir != "" {
+		if _, err := os.Stat(staticDir); err == nil {
+			logger.Logger.Info(fmt.Sprintf("使用外部静态文件目录: %s", staticDir))
+			s.setupExternalStaticRoutes(r, staticDir)
+			return
+		}
+		logger.Logger.Warn(fmt.Sprintf("外部静态文件目录不存在，使用嵌入式资源: %s", staticDir))
 	}
 
-	logger.Logger.Info(fmt.Sprintf("启用前端静态文件服务, dir=%s", staticDir))
+	// 使用嵌入式文件系统
+	logger.Logger.Info("使用嵌入式前端资源")
+	s.setupEmbeddedStaticRoutes(r)
+}
 
+// setupExternalStaticRoutes 设置外部静态文件路由
+func (s *Server) setupExternalStaticRoutes(r *gin.Engine, staticDir string) {
 	// 根路径重定向到index.html
 	r.GET("/", func(c *gin.Context) {
 		c.File(filepath.Join(staticDir, "index.html"))
 	})
 	r.HEAD("/", func(c *gin.Context) {
-		// HEAD请求只返回头部，不需要文件内容
 		c.Status(http.StatusOK)
 	})
 
@@ -370,15 +381,117 @@ func (s *Server) setupStaticRoutes(r *gin.Engine) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})
 			return
 		}
+
 		fs := gin.Dir(staticDir, false)
 		fileServerStatic := http.StripPrefix("/", http.FileServer(fs))
 		file, err := fs.Open(c.Request.URL.Path)
 		if err != nil {
 			c.File(filepath.Join(staticDir, "index.html"))
 			return
-		} else {
-			fileServerStatic.ServeHTTP(c.Writer, c.Request)
 		}
 		defer file.Close()
+		fileServerStatic.ServeHTTP(c.Writer, c.Request)
+	})
+}
+
+// setupEmbeddedStaticRoutes 设置嵌入式静态文件路由
+func (s *Server) setupEmbeddedStaticRoutes(r *gin.Engine) {
+	// 获取嵌入的静态文件子目录
+	fsys, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		logger.Logger.Error("无法加载嵌入式静态资源", zap.Error(err))
+		return
+	}
+
+	// 根路径返回 index.html
+	r.GET("/", func(c *gin.Context) {
+		data, err := fs.ReadFile(fsys, "index.html")
+		if err != nil {
+			logger.Logger.Error("无法读取 index.html", zap.Error(err))
+			c.String(http.StatusInternalServerError, "Internal Server Error")
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+	})
+
+	r.HEAD("/", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	// 处理所有非API路径的静态文件服务
+	r.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+
+		// 如果是API请求，返回404
+		if path == "/api" || strings.HasPrefix(path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})
+			return
+		}
+
+		// 清理路径
+		cleanPath := strings.TrimPrefix(path, "/")
+		if cleanPath == "" {
+			cleanPath = "index.html"
+		}
+
+		logger.Logger.Debug("处理静态文件请求", zap.String("path", path), zap.String("cleanPath", cleanPath))
+
+		// 读取文件
+		data, err := fs.ReadFile(fsys, cleanPath)
+		if err != nil {
+			// 文件不存在，返回 index.html（SPA 路由支持）
+			logger.Logger.Debug("文件不存在，返回 index.html", zap.String("cleanPath", cleanPath), zap.Error(err))
+			data, err = fs.ReadFile(fsys, "index.html")
+			if err != nil {
+				logger.Logger.Error("无法读取 index.html", zap.Error(err))
+				c.String(http.StatusInternalServerError, "Internal Server Error")
+				return
+			}
+			c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+			return
+		}
+
+		// 根据文件扩展名设置 Content-Type
+		contentType := "application/octet-stream"
+		ext := filepath.Ext(cleanPath)
+		switch ext {
+		case ".html":
+			contentType = "text/html; charset=utf-8"
+		case ".css":
+			contentType = "text/css; charset=utf-8"
+		case ".js":
+			contentType = "application/javascript; charset=utf-8"
+		case ".json":
+			contentType = "application/json; charset=utf-8"
+		case ".png":
+			contentType = "image/png"
+		case ".jpg", ".jpeg":
+			contentType = "image/jpeg"
+		case ".gif":
+			contentType = "image/gif"
+		case ".svg":
+			contentType = "image/svg+xml"
+		case ".webp":
+			contentType = "image/webp"
+		case ".woff":
+			contentType = "font/woff"
+		case ".woff2":
+			contentType = "font/woff2"
+		case ".ttf":
+			contentType = "font/ttf"
+		case ".eot":
+			contentType = "application/vnd.ms-fontobject"
+		case ".ico":
+			contentType = "image/x-icon"
+		case ".xml":
+			contentType = "application/xml"
+		case ".webmanifest":
+			contentType = "application/manifest+json"
+		case ".map":
+			contentType = "application/json"
+		}
+
+		logger.Logger.Debug("提供文件", zap.String("cleanPath", cleanPath), zap.String("contentType", contentType), zap.Int("size", len(data)))
+		c.Data(http.StatusOK, contentType, data)
 	})
 }

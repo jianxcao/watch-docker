@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: # 手动触发，用于测试
+    inputs:
+      version:
+        description: "Version tag (e.g., v0.1.0)"
+        required: true
+        type: string
+      skip_publish:
+        description: "Skip publishing to GitHub Release (for testing)"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Cache pnpm modules
+        uses: actions/cache@v3
+        with:
+          path: ~/.pnpm-store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          pnpm build
+
+      - name: Copy frontend to backend
+        run: |
+          rm -rf backend/internal/api/static
+          mkdir -p backend/internal/api/static
+          cp -r frontend/dist/* backend/internal/api/static/
+
+      - name: Verify embedded resources
+        run: |
+          ls -la backend/internal/api/static/
+          echo "Static files count: $(find backend/internal/api/static -type f | wc -l)"
+
+      # 如果是手动触发，创建 tag
+      - name: Create tag for manual trigger
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ github.event.inputs.version }} || true
+          git push origin ${{ github.event.inputs.version }} || true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.skip_publish == 'true' && '--skip-publish' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      - name: Cleanup temporary directories
+        run: |
+          # 清理构建过程中的临时目录，只保留最终产物
+          find dist -type d -name "watch-docker_*" -exec rm -rf {} + 2>/dev/null || true
+          echo "✅ 临时目录已清理"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: release-artifacts
+          # 只上传最终产物：压缩包、安装包和校验文件
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+            dist/checksums.txt
+            dist/homebrew/
