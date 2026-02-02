@@ -100,6 +100,9 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		twofa.POST("/disable", s.handleDisableTwoFA())
 	}
 
+	// 文件下载端点（使用自定义认证：支持临时 token 或常规 token）
+	api.GET("/containers/:id/files/download", s.handleDownloadContainerFile())
+
 	// 需要身份验证的接口
 	protected := api.Group("")
 	protected.Use(auth.AuthMiddleware())

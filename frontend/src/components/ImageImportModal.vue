@@ -63,17 +63,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { renderIcon } from '@/common/utils'
+import { useXhrUpload } from '@/hooks/useXhrUpload'
+import { useSettingStore } from '@/store/setting'
+import { CloudUploadOutline } from '@vicons/ionicons5'
 import {
   useMessage,
   useThemeVars,
   type UploadCustomRequestOptions,
   type UploadFileInfo,
 } from 'naive-ui'
-import { CloudUploadOutline } from '@vicons/ionicons5'
-import { renderIcon } from '@/common/utils'
-import { useXhrUpload } from '@/hooks/useXhrUpload'
-import { useSettingStore } from '@/store/setting'
+import { ref, watch } from 'vue'
 
 const theme = useThemeVars()
 const settingStore = useSettingStore()
@@ -92,7 +92,6 @@ interface Emits {
 const showModal = defineModel<boolean>('show')
 const emit = defineEmits<Emits>()
 const message = useMessage()
-const uploadRef = ref()
 const fileList = ref<UploadFileInfo[]>([])
 
 // 使用上传hooks

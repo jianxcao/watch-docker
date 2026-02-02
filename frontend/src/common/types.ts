@@ -805,3 +805,55 @@ export interface ContainerCreateResponse {
   id: string
   message: string
 }
+
+// ============= 文件浏览器相关类型 =============
+
+// 文件条目
+export interface FileEntry {
+  name: string
+  type: 'file' | 'directory' | 'symlink' | 'other'
+  size: number
+  permissions: string
+  owner: string
+  group: string
+  modified: string
+  linkTarget?: string
+  readonly?: boolean
+}
+
+// 文件列表结果
+export interface FileListResult {
+  path: string
+  entries: FileEntry[]
+}
+
+// 文件内容
+export interface FileContent {
+  content: string
+  path: string
+}
+
+// 创建文件/目录请求
+export interface CreatePathRequest {
+  path: string
+  type: 'file' | 'directory'
+}
+
+// 重命名请求
+export interface RenamePathRequest {
+  oldPath: string
+  newPath: string
+}
+
+// 修改权限请求
+export interface ChmodRequest {
+  path: string
+  mode: string
+  recursive: boolean
+}
+
+// 上传结果
+export interface UploadResult {
+  uploaded: string[]
+  errors?: string[]
+}

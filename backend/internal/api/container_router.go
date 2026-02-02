@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
+	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	"github.com/jianxcao/watch-docker/backend/internal/wsstream"
@@ -39,6 +41,20 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.POST("/containers/import", s.handleImportContainer())
 	protected.POST("/system/prune", s.handlePruneSystem())
 	protected.GET("/update/all", s.handleUpdateAll())
+
+	// 文件操作路由组
+	files := protected.Group("/containers/:id/files")
+	{
+		files.GET("", s.handleListContainerFiles())
+		files.GET("/content", s.handleGetContainerFileContent())
+		files.PUT("/content", s.handleUpdateContainerFileContent())
+		files.POST("/upload", s.handleUploadContainerFiles())
+		files.POST("/download-token", s.handleGenerateDownloadToken())
+		files.POST("/create", s.handleCreateContainerPath())
+		files.DELETE("/delete", s.handleDeleteContainerPath())
+		files.POST("/rename", s.handleRenameContainerPath())
+		files.POST("/chmod", s.handleChmodContainerPath())
+	}
 }
 
 // ContainerCreateRequest 容器创建请求
@@ -973,5 +989,481 @@ func (s *Server) handleImportContainer() gin.HandlerFunc {
 			zap.String("repository", repository),
 			zap.String("tag", tag))
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"message": "容器导入成功"}))
+	}
+}
+
+// handleListContainerFiles 列出容器文件
+func (s *Server) handleListContainerFiles() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+		path := c.DefaultQuery("path", "/")
+
+		result, err := s.docker.ListContainerDirectory(c.Request.Context(), containerID, path)
+		if err != nil {
+			s.logger.Error("list container files failed", zap.Error(err), zap.String("container", containerID), zap.String("path", path))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(result))
+	}
+}
+
+// handleGetContainerFileContent 读取容器文件内容
+func (s *Server) handleGetContainerFileContent() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+		path := c.Query("path")
+		method := c.Query("method") // 可选：cat, archive, auto
+
+		if path == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "path is required"))
+			return
+		}
+
+		var content string
+		var err error
+
+		// 根据 method 参数选择读取方式
+		switch method {
+		case "archive":
+			// 强制使用 Archive API
+			content, err = s.docker.ReadContainerFileFromArchive(c.Request.Context(), containerID, path)
+		case "auto", "":
+			// 智能选择（Archive API + 自动降级）
+			content, err = s.docker.ReadContainerFileAuto(c.Request.Context(), containerID, path)
+		case "cat":
+			// 默认使用 cat 命令（兼容性最好）
+			content, err = s.docker.ReadContainerFile(c.Request.Context(), containerID, path)
+		default:
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid method, use: cat, archive, or auto"))
+			return
+		}
+
+		if err != nil {
+			s.logger.Error("read container file failed",
+				zap.String("path", path),
+				zap.String("method", method),
+				zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		// 检查文件大小（限制 1MB）
+		// if len(content) > 1024*1024 {
+		// 	c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "文件太大（最大 1MB）"))
+		// 	return
+		// }
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"content": content,
+			"path":    path,
+		}))
+	}
+}
+
+// handleUpdateContainerFileContent 更新容器文件内容
+func (s *Server) handleUpdateContainerFileContent() gin.HandlerFunc {
+	type UpdateFileRequest struct {
+		Content string `json:"content"`
+	}
+
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+		path := c.Query("path")
+
+		if path == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "path is required"))
+			return
+		}
+
+		var req UpdateFileRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid request"))
+			return
+		}
+
+		// 检查内容大小（限制 1MB）
+		// if len(req.Content) > 1024*1024 {
+		// 	c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "content is too large (max 1MB)"))
+		// 	return
+		// }
+
+		err := s.docker.WriteContainerFile(c.Request.Context(), containerID, path, req.Content)
+		if err != nil {
+			s.logger.Error("write container file failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"success": true,
+			"path":    path,
+		}))
+	}
+}
+
+// createTarArchive 创建简单的 tar 包（用于文件上传）
+func createTarArchive(filename string, content []byte) ([]byte, error) {
+	// TAR header 512 字节
+	header := make([]byte, 512)
+
+	// 文件名 (100 bytes)
+	nameBytes := []byte(filename)
+	if len(nameBytes) > 100 {
+		return nil, fmt.Errorf("filename too long (max 100 bytes)")
+	}
+	copy(header[0:], nameBytes)
+
+	// 文件模式 (8 bytes) - 0644
+	copy(header[100:], "0000644\x00")
+
+	// UID (8 bytes)
+	copy(header[108:], "0000000\x00")
+
+	// GID (8 bytes)
+	copy(header[116:], "0000000\x00")
+
+	// 文件大小 (12 bytes octal)
+	sizeStr := fmt.Sprintf("%011o\x00", len(content))
+	copy(header[124:], sizeStr)
+
+	// 修改时间 (12 bytes octal)
+	mtimeStr := fmt.Sprintf("%011o\x00", time.Now().Unix())
+	copy(header[136:], mtimeStr)
+
+	// Checksum 占位符 (8 bytes)
+	copy(header[148:], "        ")
+
+	// 类型标志 - '0' 表示普通文件
+	header[156] = '0'
+
+	// Magic - "ustar\x00"
+	copy(header[257:], "ustar\x00")
+
+	// Version - "00"
+	copy(header[263:], "00")
+
+	// Owner name (32 bytes)
+	copy(header[265:], "root")
+
+	// Group name (32 bytes)
+	copy(header[297:], "root")
+
+	// 计算校验和
+	checksum := 0
+	for i := 0; i < 512; i++ {
+		checksum += int(header[i])
+	}
+	checksumStr := fmt.Sprintf("%06o\x00 ", checksum)
+	copy(header[148:], checksumStr)
+
+	// 计算填充到 512 字节边界
+	paddingSize := (512 - (len(content) % 512)) % 512
+	padding := make([]byte, paddingSize)
+
+	// 结束标记（两个 512 字节的零块）
+	endMarker := make([]byte, 1024)
+
+	// 组合所有部分
+	result := append(header, content...)
+	result = append(result, padding...)
+	result = append(result, endMarker...)
+
+	return result, nil
+}
+
+// handleUploadContainerFiles 处理多文件上传
+func (s *Server) handleUploadContainerFiles() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+		path := c.DefaultQuery("path", "/")
+
+		form, err := c.MultipartForm()
+		if err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid form data"))
+			return
+		}
+
+		files := form.File["files"]
+		if len(files) == 0 {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "no files provided"))
+			return
+		}
+
+		uploaded := []string{}
+		errors := []string{}
+
+		for _, fileHeader := range files {
+			file, err := fileHeader.Open()
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("%s: failed to open", fileHeader.Filename))
+				continue
+			}
+
+			// 读取文件内容
+			content, err := io.ReadAll(file)
+			file.Close() // 立即关闭文件
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("%s: failed to read", fileHeader.Filename))
+				continue
+			}
+
+			// 创建 tar 包
+			tarData, err := createTarArchive(fileHeader.Filename, content)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("%s: failed to create archive", fileHeader.Filename))
+				continue
+			}
+
+			// 上传到容器
+			err = s.docker.PutContainerArchive(c.Request.Context(), containerID, path, tarData)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", fileHeader.Filename, err))
+				continue
+			}
+
+			uploaded = append(uploaded, fileHeader.Filename)
+		}
+
+		if len(errors) > 0 && len(uploaded) == 0 {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, "failed to upload files"))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"uploaded": uploaded,
+			"errors":   errors,
+		}))
+	}
+}
+
+// handleGenerateDownloadToken 生成下载令牌
+func (s *Server) handleGenerateDownloadToken() gin.HandlerFunc {
+	type GenerateTokenRequest struct {
+		Path string `json:"path" binding:"required"`
+	}
+
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+
+		var req GenerateTokenRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid request"))
+			return
+		}
+
+		// 获取当前用户（从认证中间件设置）
+		username, exists := c.Get("username")
+		if !exists {
+			username = "anonymous"
+		}
+
+		// 生成下载令牌（有效期 60 秒）
+		tokenManager := auth.GetDownloadTokenManager()
+		token, err := tokenManager.GenerateDownloadToken(containerID, req.Path, username.(string), 60*time.Second)
+		if err != nil {
+			s.logger.Error("generate download token failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "生成下载令牌失败"))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"token":     token,
+			"expiresIn": 60, // 秒
+		}))
+	}
+}
+
+// handleDownloadContainerFile 处理文件下载（支持临时 token 和常规 token）
+func (s *Server) handleDownloadContainerFile() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+		path := c.Query("path")
+		downloadToken := c.Query("download_token")
+
+		if path == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "path is required"))
+			return
+		}
+
+		// 优先使用下载令牌验证
+		if downloadToken != "" {
+			tokenManager := auth.GetDownloadTokenManager()
+			if err := tokenManager.ValidateDownloadToken(downloadToken, containerID, path); err != nil {
+				s.logger.Warn("invalid download token", zap.Error(err), zap.String("token", downloadToken))
+				c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "无效或已过期的下载令牌"))
+				return
+			}
+			// 标记令牌已使用（用后即焚）
+			defer tokenManager.MarkTokenUsed(downloadToken)
+		} else {
+			// 使用常规 token 验证
+			if auth.IsAuthEnabled() {
+				token := c.Query("token")
+				if token == "" {
+					authHeader := c.GetHeader("Authorization")
+					if authHeader != "" {
+						tokenParts := strings.SplitN(authHeader, " ", 2)
+						if len(tokenParts) == 2 && tokenParts[0] == "Bearer" {
+							token = tokenParts[1]
+						}
+					}
+				}
+
+				if token == "" {
+					c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "需要登录"))
+					return
+				}
+
+				// 验证 token
+				if _, err := auth.ValidateToken(token); err != nil {
+					c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "无效的token"))
+					return
+				}
+			}
+		}
+
+		// 执行下载
+		reader, err := s.docker.GetContainerArchive(c.Request.Context(), containerID, path)
+		if err != nil {
+			s.logger.Error("get container archive failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+		defer reader.Close()
+
+		// 获取文件名
+		filename := filepath.Base(path)
+
+		// 设置响应头
+		c.Header("Content-Type", "application/x-tar")
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.tar\"", filename))
+
+		// 流式传输
+		_, err = io.Copy(c.Writer, reader)
+		if err != nil {
+			s.logger.Error("stream archive failed", zap.Error(err))
+		}
+	}
+}
+
+// handleCreateContainerPath 处理创建文件/目录
+func (s *Server) handleCreateContainerPath() gin.HandlerFunc {
+	type CreateRequest struct {
+		Path string `json:"path" binding:"required"`
+		Type string `json:"type" binding:"required,oneof=file directory"`
+	}
+
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+
+		var req CreateRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid request"))
+			return
+		}
+
+		var err error
+		if req.Type == "file" {
+			err = s.docker.CreateContainerFile(c.Request.Context(), containerID, req.Path)
+		} else {
+			err = s.docker.CreateContainerDirectory(c.Request.Context(), containerID, req.Path)
+		}
+
+		if err != nil {
+			s.logger.Error("create path failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"success": true,
+			"path":    req.Path,
+			"type":    req.Type,
+		}))
+	}
+}
+
+// handleDeleteContainerPath 处理删除文件/目录
+func (s *Server) handleDeleteContainerPath() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+		path := c.Query("path")
+
+		if path == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "path is required"))
+			return
+		}
+
+		err := s.docker.DeleteContainerPath(c.Request.Context(), containerID, path)
+		if err != nil {
+			s.logger.Error("delete path failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"success": true,
+		}))
+	}
+}
+
+// handleRenameContainerPath 处理重命名文件/目录
+func (s *Server) handleRenameContainerPath() gin.HandlerFunc {
+	type RenameRequest struct {
+		OldPath string `json:"oldPath" binding:"required"`
+		NewPath string `json:"newPath" binding:"required"`
+	}
+
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+
+		var req RenameRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid request"))
+			return
+		}
+
+		err := s.docker.RenameContainerPath(c.Request.Context(), containerID, req.OldPath, req.NewPath)
+		if err != nil {
+			s.logger.Error("rename path failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"success": true,
+		}))
+	}
+}
+
+// handleChmodContainerPath 处理修改文件权限
+func (s *Server) handleChmodContainerPath() gin.HandlerFunc {
+	type ChmodRequest struct {
+		Path      string `json:"path" binding:"required"`
+		Mode      string `json:"mode" binding:"required"`
+		Recursive bool   `json:"recursive"`
+	}
+
+	return func(c *gin.Context) {
+		containerID := c.Param("id")
+
+		var req ChmodRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid request"))
+			return
+		}
+
+		err := s.docker.ChmodContainerPath(c.Request.Context(), containerID, req.Path, req.Mode, req.Recursive)
+		if err != nil {
+			s.logger.Error("chmod failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
+			return
+		}
+
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
+			"success": true,
+		}))
 	}
 }

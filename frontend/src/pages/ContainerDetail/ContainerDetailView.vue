@@ -116,6 +116,19 @@
           </template>
           <StorageTab :container-detail="containerDetail" @volume-click="handleVolumeClick" />
         </n-tab-pane>
+
+        <!-- Tab 8: 文件 -->
+        <n-tab-pane name="files" tab="文件">
+          <template #tab>
+            <div class="flex items-center gap-2">
+              <n-icon size="18">
+                <FolderOutline />
+              </n-icon>
+              <span>文件</span>
+            </div>
+          </template>
+          <FilesTab :container-id="containerId" />
+        </n-tab-pane>
       </n-tabs>
     </template>
 
@@ -171,6 +184,7 @@ import {
   TrashOutline,
   RefreshOutline,
   SyncOutline,
+  FolderOutline,
 } from '@vicons/ionicons5'
 import DocumentIcon from '@/assets/svg/log.svg?component'
 import NetworkIcon from '@/assets/svg/networkIO.svg?component'
@@ -190,6 +204,7 @@ import ShellTab from './ShellTab.vue'
 import ConfigTab from './ConfigTab.vue'
 import NetworkTab from './NetworkTab.vue'
 import StorageTab from './StorageTab.vue'
+import FilesTab from './FilesTab.vue'
 
 const route = useRoute()
 const router = useRouter()

@@ -162,6 +162,9 @@ const http = {
   post<P = any, T = any>(url: string, data?: any, config?: AxiosRequestConfig<any> | undefined) {
     return axios.post<IResData<P>, IResData<P>, T>(url, data, config)
   },
+  put<P = any, T = any>(url: string, data?: any, config?: AxiosRequestConfig<any> | undefined) {
+    return axios.put<IResData<P>, IResData<P>, T>(url, data, config)
+  },
   delete<P = any, T = any>(url: string, config?: AxiosRequestConfig<T> | undefined) {
     return axios.delete<IResData<P>, IResData<P>, T>(url, config)
   },
