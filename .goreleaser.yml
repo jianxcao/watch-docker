@@ -102,13 +102,13 @@ nfpms:
     scripts:
       postinstall: ./scripts/postinstall.sh
       preremove: ./scripts/preremove.sh
-    overrides:
-      deb:
-        dependencies:
-          - docker.io | docker-ce
-      rpm:
-        dependencies:
-          - docker
+    # overrides:
+    #   deb:
+    #     dependencies:
+    #       - docker.io | docker-ce
+    #   rpm:
+    #     dependencies:
+    #       - docker
 
 # Homebrew Cask (macOS)
 # 使用 homebrew_casks 替代已弃用的 brews
