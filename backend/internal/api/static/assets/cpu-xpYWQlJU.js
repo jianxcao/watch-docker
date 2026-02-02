@@ -1,0 +1,2 @@
+import{Kt as e,Yt as t,un as n}from"./ui-CdsL-WMe.js";var r={xmlns:`http://www.w3.org/2000/svg`,width:`16`,height:`16`,viewBox:`0 0 24 24`};function i(i,a){return n(),t(`svg`,r,[...a[0]||=[e(`g`,{fill:`none`,stroke:`currentColor`,"stroke-linecap":`round`,"stroke-linejoin":`round`,"stroke-width":`2`},[e(`rect`,{width:`14`,height:`14`,x:`5`,y:`5`,rx:`1`}),e(`path`,{d:`M9 9h6v6H9zM3 10h2M3 14h2M10 3v2M14 3v2M21 10h-2M21 14h-2M14 21v-2M10 21v-2`})],-1)]])}var a={render:i};export{a as t};
+//# sourceMappingURL=cpu-xpYWQlJU.js.map

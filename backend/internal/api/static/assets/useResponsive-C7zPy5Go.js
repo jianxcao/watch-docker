@@ -1,0 +1,2 @@
+import{a as e}from"./common-B7iQJWwr.js";function t(){let t=e({mobile:640,tablet:768,laptop:1024,desktop:1280,desktopLarge:1600});return{isMobile:t.smaller(`tablet`),isTablet:t.between(`tablet`,`laptop`),isLaptop:t.between(`laptop`,`desktop`),isDesktop:t.between(`desktop`,`desktopLarge`),isDesktopLarge:t.greaterOrEqual(`desktopLarge`),isSmallScreen:t.smaller(`laptop`),isLargeScreen:t.greaterOrEqual(`laptop`)}}export{t};
+//# sourceMappingURL=useResponsive-C7zPy5Go.js.map
