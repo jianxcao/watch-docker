@@ -50,6 +50,9 @@ archives:
       # 安装脚本（Windows 用不到，但包含也无妨）
       - scripts/install.sh
       - scripts/uninstall.sh
+      # macOS launchd 配置文件
+      - src: scripts/macos/com.watchdocker.plist
+        dst: com.watchdocker.plist
       # 配置文件示例（分离两个文件）
       - src: app.yaml.example
         dst: app.yaml.example
@@ -58,6 +61,9 @@ archives:
       # Windows 安装说明
       - src: ./doc/archive/windows-install.md
         dst: INSTALL-WINDOWS.txt
+      # macOS 安装说明
+      - src: ./doc/archive/macos-install.md
+        dst: INSTALL-MACOS.md
       # 配置说明文档
       - src: ./doc/archive/configuration-guide.md
         dst: CONFIGURATION.md
@@ -137,12 +143,39 @@ homebrew_casks:
           (Pathname.new(ENV['HOME'])/".watch-docker").mkpath
     # 用户提示信息
     caveats: |
-      To start watch-docker as a service, you can create a launchd plist file at:
-        ~/Library/LaunchAgents/com.watchdocker.plist
+      📦 安装完成！配置目录：~/.watch-docker
 
-      Or use the provided plist file from the installation directory.
+      🚀 设置开机自启动：
 
-      Configuration directory: ~/.watch-docker
+      1. 查找 watch-docker 安装路径：
+         which watch-docker
+
+      2. 复制提供的 launchd 配置文件：
+         cp "$(brew --prefix)/Caskroom/watch-docker/*/com.watchdocker.plist" ~/Library/LaunchAgents/
+
+      3. 编辑配置文件，确认二进制路径正确：
+         # 对于 Apple Silicon (M1/M2/M3):
+         /opt/homebrew/bin/watch-docker
+         # 对于 Intel Mac:
+         /usr/local/bin/watch-docker
+
+      4. 加载并启动服务：
+         launchctl load ~/Library/LaunchAgents/com.watchdocker.plist
+         launchctl start com.watchdocker
+
+      📝 服务管理命令：
+         启动: launchctl start com.watchdocker
+         停止: launchctl stop com.watchdocker
+         重启: launchctl kickstart -k gui/$(id -u)/com.watchdocker
+         查看状态: launchctl list | grep watchdocker
+         卸载自启: launchctl unload ~/Library/LaunchAgents/com.watchdocker.plist
+
+      📖 查看日志：
+         tail -f ~/.watch-docker/stdout.log
+         tail -f ~/.watch-docker/stderr.log
+
+      ⚙️ 默认访问：http://localhost:8080
+         默认用户名/密码：admin/admin
 
 # Checksums
 checksum:

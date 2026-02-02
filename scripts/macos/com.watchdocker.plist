@@ -7,11 +7,17 @@
     
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/watch-docker</string>
+        <!-- Homebrew 会自动创建 symlink 到 /usr/local/bin -->
+        <!-- 对于 Apple Silicon: /opt/homebrew/bin/watch-docker -->
+        <!-- 对于 Intel Mac: /usr/local/bin/watch-docker -->
+        <!-- 用户需要根据实际安装路径修改 -->
+        <string>/opt/homebrew/bin/watch-docker</string>
     </array>
     
     <key>EnvironmentVariables</key>
     <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>CONFIG_PATH</key>
         <string>~/.watch-docker</string>
         <key>CONFIG_FILE</key>
