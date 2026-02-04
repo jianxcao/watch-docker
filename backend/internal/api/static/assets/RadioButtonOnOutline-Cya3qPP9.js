@@ -1,0 +1,2 @@
+import{Jt as e,Zt as t,mn as n,tn as r}from"./ui-DURGis9H.js";var i={xmlns:`http://www.w3.org/2000/svg`,"xmlns:xlink":`http://www.w3.org/1999/xlink`,viewBox:`0 0 512 512`},a=r({name:`RadioButtonOnOutline`,render:function(r,a){return n(),t(`svg`,i,a[0]||=[e(`path`,{d:`M448 256c0-106-86-192-192-192S64 150 64 256s86 192 192 192s192-86 192-192z`,fill:`none`,stroke:`currentColor`,"stroke-miterlimit":`10`,"stroke-width":`32`},null,-1),e(`circle`,{cx:`256`,cy:`256`,r:`144`,fill:`currentColor`},null,-1)])}});export{a as t};
+//# sourceMappingURL=RadioButtonOnOutline-Cya3qPP9.js.map
