@@ -90,14 +90,21 @@ jobs:
           git add -f backend/internal/api/static/
           git commit -m "chore: update static files for release" || echo "No changes to commit"
 
-      # 如果是手动触发，创建 tag
+      # 如果是手动触发，可选择是否创建 tag
       - name: Create tag for manual trigger
         if: github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ github.event.inputs.version }} || true
-          git push origin ${{ github.event.inputs.version }} || true
+          
+          # 检查 tag 是否已存在
+          if git rev-parse "${{ github.event.inputs.version }}" >/dev/null 2>&1; then
+            echo "⚠️ Tag ${{ github.event.inputs.version }} 已存在"
+          else
+            echo "✅ 创建新 tag: ${{ github.event.inputs.version }}"
+            git tag ${{ github.event.inputs.version }}
+            git push origin ${{ github.event.inputs.version }} || echo "Tag 推送失败（可能已存在）"
+          fi
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -108,6 +115,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # 手动触发时使用指定的版本号，否则使用 git tag
+          GORELEASER_CURRENT_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || '' }}
 
       - name: Cleanup temporary directories
         run: |

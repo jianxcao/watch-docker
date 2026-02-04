@@ -234,8 +234,8 @@ Watch Docker 是一个**现代化的 Docker 容器管理平台**，专为简化 
 
 ```bash
 # 下载并安装 DEB 包
-wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_x86_64.deb
-sudo dpkg -i watch-docker_*_linux_x86_64.deb
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_amd64.deb
+sudo dpkg -i watch-docker_*_linux_amd64.deb
 
 # 启用并启动服务
 sudo systemctl enable watch-docker@$USER
@@ -249,8 +249,8 @@ sudo systemctl status watch-docker@$USER
 
 ```bash
 # 下载并安装 RPM 包
-wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_x86_64.rpm
-sudo rpm -i watch-docker_*_linux_x86_64.rpm
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_amd64.rpm
+sudo rpm -i watch-docker_*_linux_amd64.rpm
 
 # 启用并启动服务
 sudo systemctl enable watch-docker@$USER

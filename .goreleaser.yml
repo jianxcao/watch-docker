@@ -209,14 +209,14 @@ release:
 
     #### Linux (Debian/Ubuntu)
     ```bash
-    wget https://github.com/jianxcao/watch-docker/releases/download/{{ .Tag }}/watch-docker_{{ .Version }}_linux_x86_64.deb
-    sudo dpkg -i watch-docker_{{ .Version }}_linux_x86_64.deb
+    wget https://github.com/jianxcao/watch-docker/releases/download/{{ .Tag }}/watch-docker_{{ .Version }}_linux_amd64.deb
+    sudo dpkg -i watch-docker_{{ .Version }}_linux_amd64.deb
     ```
 
     #### Linux (RHEL/CentOS/Fedora)
     ```bash
-    wget https://github.com/jianxcao/watch-docker/releases/download/{{ .Tag }}/watch-docker_{{ .Version }}_linux_x86_64.rpm
-    sudo rpm -i watch-docker_{{ .Version }}_linux_x86_64.rpm
+    wget https://github.com/jianxcao/watch-docker/releases/download/{{ .Tag }}/watch-docker_{{ .Version }}_linux_amd64.rpm
+    sudo rpm -i watch-docker_{{ .Version }}_linux_amd64.rpm
     ```
 
     #### macOS (Homebrew)

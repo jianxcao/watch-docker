@@ -67,29 +67,29 @@ func NewEnvConfig() *EnvConfig {
 		v.SetConfigType("yaml")
 
 		if err := v.ReadInConfig(); err == nil {
-			// 从配置文件中读取值（环境变量优先，不覆盖已有的环境变量）
-			if !isEnvSet("USER_NAME") && v.IsSet("username") {
+			// 从配置文件中读取值：app.yaml 已配置的项优先于环境变量
+			if v.IsSet("username") {
 				cfg.USER_NAME = v.GetString("username")
 			}
-			if !isEnvSet("USER_PASSWORD") && v.IsSet("password") {
+			if v.IsSet("password") {
 				cfg.USER_PASSWORD = v.GetString("password")
 			}
-			if !isEnvSet("IS_SECONDARY_VERIFICATION") && v.IsSet("enable_2fa") {
+			if v.IsSet("enable_2fa") {
 				cfg.IS_SECONDARY_VERIFICATION = v.GetBool("enable_2fa")
 			}
-			if !isEnvSet("TWOFA_ALLOWED_DOMAINS") && v.IsSet("twofa_allowed_domains") {
+			if v.IsSet("twofa_allowed_domains") {
 				cfg.TWOFA_ALLOWED_DOMAINS = v.GetString("twofa_allowed_domains")
 			}
-			if !isEnvSet("STATIC_DIR") && v.IsSet("static_dir") {
+			if v.IsSet("static_dir") {
 				cfg.STATIC_DIR = v.GetString("static_dir")
 			}
-			if !isEnvSet("IS_OPEN_DOCKER_SHELL") && v.IsSet("enable_docker_shell") {
+			if v.IsSet("enable_docker_shell") {
 				cfg.IS_OPEN_DOCKER_SHELL = v.GetBool("enable_docker_shell")
 			}
-			if !isEnvSet("APP_PATH") && v.IsSet("app_path") {
+			if v.IsSet("app_path") {
 				cfg.APP_PATH = v.GetString("app_path")
 			}
-			if !isEnvSet("VERSION_WATCH_DOCKER") && v.IsSet("version") {
+			if v.IsSet("version") {
 				cfg.VERSION_WATCH_DOCKER = v.GetString("version")
 			}
 
@@ -136,7 +136,7 @@ func createExampleAppConfig(path string) {
 	exampleContent := `# Watch Docker 应用配置文件
 # 此文件用于配置应用运行时环境，与 config.yaml（Docker 业务配置）分离
 # 
-# 配置优先级：环境变量 > app.yaml > 默认值
+# 配置优先级：app.yaml > 环境变量 > 默认值
 #
 # 复制此文件为 app.yaml 并根据需要修改
 
@@ -182,8 +182,6 @@ enable_docker_shell: false
 # 应用路径
 app_path: ""
 
-# 应用版本
-version: "v0.1.6"
 
 # =============================================================================
 # 说明
