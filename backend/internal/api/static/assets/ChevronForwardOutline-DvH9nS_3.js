@@ -1,0 +1,2 @@
+import{$t as e,Kt as t,Yt as n,un as r}from"./ui-CdsL-WMe.js";var i={xmlns:`http://www.w3.org/2000/svg`,"xmlns:xlink":`http://www.w3.org/1999/xlink`,viewBox:`0 0 512 512`},a=e({name:`ChevronForwardOutline`,render:function(e,a){return r(),n(`svg`,i,a[0]||=[t(`path`,{fill:`none`,stroke:`currentColor`,"stroke-linecap":`round`,"stroke-linejoin":`round`,"stroke-width":`48`,d:`M184 112l144 144l-144 144`},null,-1)])}});export{a as t};
+//# sourceMappingURL=ChevronForwardOutline-DvH9nS_3.js.map
