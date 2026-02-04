@@ -3,9 +3,12 @@ package composecli
 import (
 	"context"
 	"io"
+	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/jianxcao/watch-docker/backend/internal/config"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -124,6 +127,62 @@ func copyStreamWithCancel(ctx context.Context, dst io.Writer, src io.Reader, str
 	}
 }
 
+// appendProxyEnv 添加代理相关的环境变量
+// 注意：只有 HTTP/HTTPS 代理才会被设置为环境变量
+// SOCKS5 代理无法通过环境变量传递给 Docker Compose 命令行工具
+func appendProxyEnv(env []string, proxyURL string) []string {
+	// 移除已存在的代理环境变量
+	filteredEnv := make([]string, 0, len(env))
+	for _, e := range env {
+		key := strings.ToUpper(strings.Split(e, "=")[0])
+		if key != "HTTP_PROXY" && key != "HTTPS_PROXY" && key != "NO_PROXY" {
+			filteredEnv = append(filteredEnv, e)
+		}
+	}
+
+	// 解析代理 URL 检查协议类型
+	parsedURL, err := url.Parse(proxyURL)
+	if err != nil {
+		logger.Logger.Warn("解析代理URL失败，跳过设置环境变量",
+			zap.String("proxy", proxyURL),
+			logger.ZapErr(err))
+		return filteredEnv
+	}
+
+	// 检查代理协议类型
+	scheme := strings.ToLower(parsedURL.Scheme)
+	switch scheme {
+	case "http", "https":
+		// HTTP/HTTPS 代理可以通过环境变量传递
+		filteredEnv = append(filteredEnv,
+			"HTTP_PROXY="+proxyURL,
+			"HTTPS_PROXY="+proxyURL,
+			"http_proxy="+proxyURL,
+			"https_proxy="+proxyURL,
+		)
+		logger.Logger.Info("为Docker Compose设置HTTP代理环境变量",
+			zap.String("proxy", proxyURL),
+			zap.String("scheme", scheme))
+
+	case "socks5", "socks5h":
+		// SOCKS5 代理无法通过标准的 HTTP_PROXY 环境变量传递给 Docker Compose
+		logger.Logger.Warn("Docker Compose命令行工具不支持SOCKS5代理",
+			zap.String("proxy", proxyURL),
+			zap.String("提示", "SOCKS5代理仅对Docker CLI (SDK)有效，Docker Compose操作将不使用代理"))
+		logger.Logger.Warn("如需让Docker Compose使用代理，请考虑以下方案：",
+			zap.String("方案1", "使用HTTP/HTTPS代理替代SOCKS5"),
+			zap.String("方案2", "配置Docker守护进程使用代理（修改/etc/docker/daemon.json）"),
+			zap.String("方案3", "使用privoxy等工具将SOCKS5转换为HTTP代理"))
+
+	default:
+		logger.Logger.Warn("不支持的代理协议类型，跳过设置环境变量",
+			zap.String("proxy", proxyURL),
+			zap.String("scheme", scheme))
+	}
+
+	return filteredEnv
+}
+
 // parseExitCode 解析命令退出码并记录日志
 func parseExitCode(waitErr error, ctx context.Context, operationName string) int {
 	exitCode := 0
@@ -175,6 +234,17 @@ func ExecuteDockerComposeCommand(ctx context.Context, options ExecDockerComposeO
 	logger.Logger.Info("ExecuteDockerComposeCommand", zap.String("execPath", options.ExecPath), zap.Strings("args", fullArgs))
 	cmd := exec.CommandContext(ctx, "docker", fullArgs...)
 	cmd.Dir = options.ExecPath
+
+	// 设置环境变量（继承当前进程的环境）
+	cmd.Env = os.Environ()
+
+	// 如果配置了代理，添加代理环境变量
+	cfg := config.Get()
+	if cfg.Proxy.URL != "" {
+		cmd.Env = appendProxyEnv(cmd.Env, cfg.Proxy.URL)
+		logger.Logger.Info("Docker Compose命令使用代理", zap.String("proxy", cfg.Proxy.URL))
+	}
+
 	result := &ExecDockerComposeResult{}
 	if options.NeedOutput {
 		result.Output, result.Error = cmd.CombinedOutput()
@@ -192,6 +262,16 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 	cmd := exec.CommandContext(cmdCtx, "docker", fullArgs...)
 	cmd.Dir = options.ExecPath
 	logger.Logger.Info("ExecuteDockerComposeCommandStream", zap.String("args", strings.Join(fullArgs, " ")))
+
+	// 设置环境变量（继承当前进程的环境）
+	cmd.Env = os.Environ()
+
+	// 如果配置了代理，添加代理环境变量
+	cfg := config.Get()
+	if cfg.Proxy.URL != "" {
+		cmd.Env = appendProxyEnv(cmd.Env, cfg.Proxy.URL)
+		logger.Logger.Info("Docker Compose流式命令使用代理", zap.String("proxy", cfg.Proxy.URL))
+	}
 
 	result := &ExecDockerComposeStreamResult{
 		ExitCode: make(chan int, 1), // 缓冲通道，确保不会阻塞
