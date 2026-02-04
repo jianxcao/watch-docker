@@ -83,6 +83,26 @@ jobs:
           ls -la backend/internal/api/static/
           echo "Static files count: $(find backend/internal/api/static -type f | wc -l)"
 
+      - name: Extract version from package.json
+        id: package_version
+        run: |
+          VERSION=$(node -p "require('./frontend/package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Package.json version: $VERSION"
+          
+          # 如果是 tag 触发，验证 tag 与 package.json 版本是否一致
+          if [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.ref_name }}" ]; then
+            TAG_VERSION="${{ github.ref_name }}"
+            # 移除 v 前缀
+            TAG_VERSION_NO_V="${TAG_VERSION#v}"
+            if [ "$TAG_VERSION_NO_V" != "$VERSION" ]; then
+              echo "⚠️ 警告: Git tag ($TAG_VERSION) 与 package.json version ($VERSION) 不一致"
+              echo "建议: 确保 git tag 与 package.json version 保持一致"
+            else
+              echo "✅ Git tag 与 package.json version 一致"
+            fi
+          fi
+
       - name: Commit built static files
         run: |
           git config user.name "github-actions[bot]"

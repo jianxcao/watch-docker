@@ -28,6 +28,7 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
+      - -X github.com/jianxcao/watch-docker/backend/internal/conf.Version={{.Version}}
 
 archives:
   - id: default

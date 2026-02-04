@@ -10,6 +10,9 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Version 应用版本号，构建时通过 ldflags 注入（从 frontend/package.json）
+var Version = "dev"
+
 // EnvConfig 应用环境配置（与 Docker 业务配置分离）
 // 这些是应用运行所需的环境变量配置，不是 Docker 业务逻辑配置
 type EnvConfig struct {
@@ -54,11 +57,15 @@ func NewEnvConfig() *EnvConfig {
 		fmt.Printf("警告: 环境变量加载错误: %v\n", err)
 	}
 
-	// 2. 扩展 CONFIG_PATH 中的 ~
+	// 2. 设置版本号（构建时注入，不从配置文件读取）
+	cfg.VERSION_WATCH_DOCKER = Version
+
+	// 3. 扩展 CONFIG_PATH 中的 ~
 	cfg.CONFIG_PATH = expandPath(cfg.CONFIG_PATH)
 
-	// 3. 尝试从应用环境配置文件加载（app.yaml）
+	// 4. 尝试从应用环境配置文件加载（app.yaml）
 	// 这个文件专门用于应用环境配置，与 config.yaml（Docker 业务配置）分离
+	// 注意：version 不从配置文件读取，始终使用构建时注入的版本号
 	envFile := filepath.Join(cfg.CONFIG_PATH, cfg.ENV_FILE)
 	if _, err := os.Stat(envFile); err == nil {
 		// 应用配置文件存在，尝试读取
@@ -89,9 +96,7 @@ func NewEnvConfig() *EnvConfig {
 			if v.IsSet("app_path") {
 				cfg.APP_PATH = v.GetString("app_path")
 			}
-			if v.IsSet("version") {
-				cfg.VERSION_WATCH_DOCKER = v.GetString("version")
-			}
+			// version 不从配置文件读取
 
 			fmt.Printf("✅ 已从应用配置文件加载: %s\n", envFile)
 		} else {
@@ -103,11 +108,11 @@ func NewEnvConfig() *EnvConfig {
 		fmt.Printf("     可以创建 app.yaml 以持久化应用配置（用户名、密码等）\n")
 	}
 
-	// 4. 再次扩展路径中的 ~（配置文件中可能也有）
+	// 5. 再次扩展路径中的 ~（配置文件中可能也有）
 	cfg.STATIC_DIR = expandPath(cfg.STATIC_DIR)
 	cfg.APP_PATH = expandPath(cfg.APP_PATH)
 
-	// 5. 自动创建配置目录（如果不存在）
+	// 6. 自动创建配置目录（如果不存在）
 	if cfg.CONFIG_PATH != "" {
 		if err := os.MkdirAll(cfg.CONFIG_PATH, 0755); err != nil {
 			fmt.Printf("警告: 无法创建配置目录 %s: %v\n", cfg.CONFIG_PATH, err)

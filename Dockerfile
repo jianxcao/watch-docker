@@ -27,6 +27,9 @@ ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
 
+# 版本号参数（从 frontend/package.json 传入）
+ARG VERSION=dev
+
 # 设置工作目录
 WORKDIR /app
 
@@ -39,8 +42,11 @@ COPY backend/ ./
 # 下载依赖
 RUN go mod download
 
-# 编译应用 - 使用动态平台参数，添加 docker 构建标签
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags docker -a -installsuffix cgo -o watch-docker cmd/watch-docker/main.go
+# 编译应用 - 使用动态平台参数，添加 docker 构建标签，并注入版本号
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -tags docker -a -installsuffix cgo \
+    -ldflags="-s -w -X github.com/jianxcao/watch-docker/backend/internal/conf.Version=${VERSION}" \
+    -o watch-docker cmd/watch-docker/main.go
 
 # 运行阶段
 FROM alpine:latest

@@ -52,23 +52,40 @@ jobs:
         with:
           install: true
 
-      - name: Extract version from tag
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Extract version from package.json
         id: extract_version
         run: |
+          # 从 frontend/package.json 读取版本号
+          PACKAGE_VERSION=$(node -p "require('./frontend/package.json').version")
+          echo "package_version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Package.json version: $PACKAGE_VERSION"
+          
           if [ "${{ github.event_name }}" = "push" ]; then
             # 从 git tag 提取版本号 (v1.1.0 -> 1.1.0)
-            VERSION=${GITHUB_REF#refs/tags/v}
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+            TAG_VERSION=${GITHUB_REF#refs/tags/v}
+            echo "version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+            echo "tag=v$TAG_VERSION" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
+            
+            # 验证 tag 版本与 package.json 版本是否一致
+            if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+              echo "⚠️ 警告: Git tag ($TAG_VERSION) 与 package.json version ($PACKAGE_VERSION) 不一致"
+            else
+              echo "✅ Git tag 与 package.json version 一致"
+            fi
           else
-            # 手动触发
+            # 手动触发：使用 package.json 版本号
             VERSION="${{ github.event.inputs.tag }}"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
             echo "tag=$VERSION" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
           fi
-          echo "提取的版本号: $VERSION"
+          echo "🔖 使用版本号: $PACKAGE_VERSION"
 
       - name: Login to Docker Hub
         if: github.event_name != 'pull_request'
