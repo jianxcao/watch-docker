@@ -16,7 +16,7 @@ type EnvConfig struct {
 	CONFIG_PATH               string `default:"~/.watch-docker" mapstructure:"config_path"`
 	CONFIG_FILE               string `default:"config.yaml" mapstructure:"config_file"` // Docker 业务配置文件
 	ENV_FILE                  string `default:"app.yaml" mapstructure:"env_file"`       // 应用环境配置文件（新）
-	VERSION_WATCH_DOCKER      string `default:"v0.1.6" mapstructure:"version"`
+	VERSION_WATCH_DOCKER      string `default:"v0.1.7" mapstructure:"version"`
 	USER_NAME                 string `default:"admin" mapstructure:"username"`
 	USER_PASSWORD             string `default:"admin" mapstructure:"password"`
 	STATIC_DIR                string `default:"" mapstructure:"static_dir"` // 空字符串表示使用嵌入式资源
@@ -88,9 +88,6 @@ func NewEnvConfig() *EnvConfig {
 			}
 			if v.IsSet("app_path") {
 				cfg.APP_PATH = v.GetString("app_path")
-			}
-			if v.IsSet("version") {
-				cfg.VERSION_WATCH_DOCKER = v.GetString("version")
 			}
 
 			fmt.Printf("✅ 已从应用配置文件加载: %s\n", envFile)
