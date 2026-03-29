@@ -1,0 +1,2 @@
+import{Jt as e,Zt as t,mn as n}from"./ui-DURGis9H.js";var r={xmlns:`http://www.w3.org/2000/svg`,viewBox:`0 0 32 32`};function i(i,a){return n(),t(`svg`,r,[...a[0]||=[e(`circle`,{cx:`16`,cy:`8`,r:`2`,fill:`currentColor`},null,-1),e(`circle`,{cx:`16`,cy:`16`,r:`2`,fill:`currentColor`},null,-1),e(`circle`,{cx:`16`,cy:`24`,r:`2`,fill:`currentColor`},null,-1)]])}var a={render:i};export{a as t};
+//# sourceMappingURL=overflowMenuVertical-BxoOPIl_.js.map
