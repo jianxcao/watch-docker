@@ -43,6 +43,7 @@ func main() {
 	}
 	defer log.Sync() //nolint:errcheck
 	log.Info("starting watch-docker", zap.String("configPath", configPath))
+	log.Info("version info", zap.String("version", conf.GetVersion()))
 	// init long-lived clients
 	dockerClient, err := dockercli.New(context.Background(), cfg.Docker.Host)
 	if err != nil {

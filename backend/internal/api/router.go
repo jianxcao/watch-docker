@@ -158,7 +158,7 @@ func (s *Server) handleGetInfo() gin.HandlerFunc {
 			"dockerGitCommit":                dockerVersion.GitCommit,
 			"dockerGoVersion":                dockerVersion.GoVersion,
 			"dockerBuildTime":                dockerVersion.BuildTime,
-			"version":                        envCfg.VERSION_WATCH_DOCKER,
+			"version":                        conf.GetVersion(),
 			"appPath":                        envCfg.APP_PATH,
 			"isOpenDockerShell":              conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
 			"isSecondaryVerificationEnabled": conf.EnvCfg.IS_SECONDARY_VERIFICATION,
