@@ -13,10 +13,11 @@ export interface SystemInfo {
   dockerGitCommit: string
   dockerGoVersion: string
   dockerBuildTime: string
-  version: string
+  version: Record<string, any>
   appPath: string
   isOpenDockerShell: boolean
   isSecondaryVerificationEnabled?: boolean
+  isComposeEnabled?: boolean
 }
 // 容器资源统计信息
 export interface ContainerStats {

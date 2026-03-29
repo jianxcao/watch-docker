@@ -117,7 +117,7 @@ const imageStore = useImageStore()
 const settingStore = useSettingStore()
 
 // 版本信息
-const version = computed(() => settingStore.systemInfo?.version)
+const version = computed(() => settingStore.systemInfo?.version.version)
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
@@ -174,7 +174,7 @@ const menuOptions = computed<MenuOption[]>(
         key: 'home',
         icon: renderIcon(HomeOutline, { size: 20 }),
       },
-      {
+      settingStore.systemInfo?.isComposeEnabled && {
         label: 'Compose 项目',
         key: 'compose',
         icon: renderIcon(ComposeIcon, { size: 20 }),

@@ -23,3 +23,11 @@ func GetVersion() string {
 	}
 	return Version
 }
+
+func GetVersionInfo() map[string]string {
+	return map[string]string{
+		"version":   Version,
+		"commit":    Commit,
+		"buildTime": BuildTime,
+	}
+}

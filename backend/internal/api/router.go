@@ -158,10 +158,11 @@ func (s *Server) handleGetInfo() gin.HandlerFunc {
 			"dockerGitCommit":                dockerVersion.GitCommit,
 			"dockerGoVersion":                dockerVersion.GoVersion,
 			"dockerBuildTime":                dockerVersion.BuildTime,
-			"version":                        conf.GetVersion(),
+			"version":                        conf.GetVersionInfo(),
 			"appPath":                        envCfg.APP_PATH,
 			"isOpenDockerShell":              conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
 			"isSecondaryVerificationEnabled": conf.EnvCfg.IS_SECONDARY_VERIFICATION,
+			"isComposeEnabled":               config.Get().Compose.Enabled,
 		}
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"info": info}))
