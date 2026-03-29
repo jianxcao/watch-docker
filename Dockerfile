@@ -27,6 +27,36 @@ ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
 
+# 添加版本信息构建参数
+ARG VERSION="dev"
+ARG COMMIT="unknown"
+ARG BUILD_TIME="unknown"
+
+# 设置工作目录
+WORKDIR /app
+
+# 安装git、ca-certificates 以及构建所需工具链（gcc、musl-dev 等）
+RUN apk add --no-cache git ca-certificates build-base pkgconfig binutils musl-dev lld binutils-gold
+
+# 复制后端代码
+COPY backend/ ./
+
+# 下载依赖
+RUN go mod download
+
+# 编译应用 - 使用动态平台参数，添加 docker 构建标签，通过 ldflags 注入版本信息
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags docker -a -installsuffix cgo \
+    -ldflags="-X github.com/jianxcao/watch-docker/backend/internal/conf.Version=${VERSION} \
+              -X github.com/jianxcao/watch-docker/backend/internal/conf.Commit=${COMMIT} \
+              -X github.com/jianxcao/watch-docker/backend/internal/conf.BuildTime=${BUILD_TIME}" \
+    -o watch-docker cmd/watch-docker/main.go
+FROM golang:1.25.1-alpine AS backend-builder
+
+# 添加平台参数，由 Docker buildx 自动提供
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+
 # 设置工作目录
 WORKDIR /app
 

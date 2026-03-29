@@ -19,7 +19,16 @@ import type {
   NetworkPruneResponse,
   NetworkConnectRequest,
   NetworkDisconnectRequest,
+  FileListResult,
+  FileContent,
+  CreatePathRequest,
+  RenamePathRequest,
+  ChmodRequest,
+  UploadResult,
 } from './types'
+
+// request 实例别名（使用 axios）
+const request = axios
 
 // 健康检查相关
 export const healthApi = {
@@ -86,10 +95,16 @@ export const containerApi = {
   stopContainer: (id: string) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_STOP(id)),
 
   // 重启容器
-  restartContainer: (id: string) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_RESTART(id)),
+  restartContainer: (id: string) =>
+    axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_RESTART(id)),
 
   // 删除容器
-  deleteContainer: (id: string, force: boolean = false, removeVolumes: boolean = false, removeNetworks: boolean = false) =>
+  deleteContainer: (
+    id: string,
+    force: boolean = false,
+    removeVolumes: boolean = false,
+    removeNetworks: boolean = false,
+  ) =>
     axios.delete<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_DELETE(id), {
       params: { force, removeVolumes, removeNetworks },
     }),
@@ -252,6 +267,92 @@ export const api = {
 }
 
 export default api
+
+// ==================== 容器文件操作 API ====================
+
+// 列出文件
+export const listContainerFiles = (containerId: string, path: string = '/') => {
+  return request.get<FileListResult>(`/containers/${containerId}/files`, {
+    params: { path },
+  })
+}
+
+// 获取文件内容
+export const getContainerFileContent = (containerId: string, path: string) => {
+  return request.get<FileContent>(`/containers/${containerId}/files/content`, {
+    params: { path },
+  })
+}
+
+// 更新文件内容
+export const updateContainerFileContent = (containerId: string, path: string, content: string) => {
+  return request.put<{ success: boolean; path: string }>(
+    `/containers/${containerId}/files/content`,
+    { content },
+    { params: { path } },
+  )
+}
+
+// 上传文件
+export const uploadContainerFiles = (containerId: string, path: string, files: File[]) => {
+  const formData = new FormData()
+  files.forEach((file) => {
+    formData.append('files', file)
+  })
+
+  return request.post<UploadResult>(`/containers/${containerId}/files/upload`, formData, {
+    params: { path },
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+// 生成下载令牌
+export const generateDownloadToken = (containerId: string, path: string) => {
+  return request.post<{ token: string; expiresIn: number }>(
+    `/containers/${containerId}/files/download-token`,
+    { path },
+  )
+}
+
+// 构造下载 URL（使用临时 token）
+export const getDownloadUrl = (containerId: string, path: string, downloadToken: string) => {
+  return `/api/v1/containers/${containerId}/files/download?path=${encodeURIComponent(path)}&download_token=${downloadToken}`
+}
+
+// 构造下载 URL（使用用户 token，备用方案）
+export const getDownloadUrlWithToken = (containerId: string, path: string, token: string) => {
+  return `/api/v1/containers/${containerId}/files/download?path=${encodeURIComponent(path)}&token=${token}`
+}
+
+// @deprecated 使用 generateDownloadToken + getDownloadUrl 代替
+export const getContainerFileDownloadUrl = (containerId: string, path: string) => {
+  return `/api/v1/containers/${containerId}/files/download?path=${encodeURIComponent(path)}`
+}
+
+// 创建文件或目录
+export const createContainerPath = (containerId: string, data: CreatePathRequest) => {
+  return request.post<{ success: boolean; path: string; type: string }>(
+    `/containers/${containerId}/files/create`,
+    data,
+  )
+}
+
+// 删除文件或目录
+export const deleteContainerPath = (containerId: string, path: string) => {
+  return request.delete<{ success: boolean }>(`/containers/${containerId}/files/delete`, {
+    params: { path },
+  })
+}
+
+// 重命名文件或目录
+export const renameContainerPath = (containerId: string, data: RenamePathRequest) => {
+  return request.post<{ success: boolean }>(`/containers/${containerId}/files/rename`, data)
+}
+
+// 修改文件权限
+export const chmodContainerPath = (containerId: string, data: ChmodRequest) => {
+  return request.post<{ success: boolean }>(`/containers/${containerId}/files/chmod`, data)
+}
 
 // 单独导出常用的API函数，方便直接导入
 export const { importContainer } = containerApi

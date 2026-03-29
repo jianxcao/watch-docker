@@ -17,12 +17,12 @@ Watch Docker 是一个现代化的 Docker 容器管理平台，提供：
 
 ```bash
 # Debian/Ubuntu
-wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_x86_64.deb
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_amd64.deb
 sudo dpkg -i watch-docker_*.deb
 sudo systemctl enable --now watch-docker@$USER
 
 # RHEL/CentOS/Fedora
-wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_x86_64.rpm
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_amd64.rpm
 sudo rpm -i watch-docker_*.rpm
 sudo systemctl enable --now watch-docker@$USER
 ```

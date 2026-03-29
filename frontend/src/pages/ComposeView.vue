@@ -1,114 +1,128 @@
 <template>
   <div class="compose-page">
     <!-- 页面头部操作 -->
-    <n-space>
-      <!-- 状态筛选菜单 -->
-      <n-dropdown :options="statusFilterMenuOptions" @select="handleFilterSelect">
-        <n-button circle size="small" :type="statusFilter ? 'primary' : 'default'">
-          <template #icon>
-            <n-icon>
-              <FunnelOutline />
-            </n-icon>
-          </template>
-        </n-button>
-      </n-dropdown>
-
-      <!-- 排序菜单 -->
-      <n-dropdown :options="sortMenuOptions" @select="handleSortSelect">
-        <n-button circle size="small" :type="isSortActive ? 'primary' : 'default'">
-          <template #icon>
-            <n-icon>
-              <SwapVerticalOutline />
-            </n-icon>
-          </template>
-        </n-button>
-      </n-dropdown>
-
-      <!-- 搜索框 -->
-      <n-input
-        v-model:value="searchKeyword"
-        placeholder="搜索项目名称或路径"
-        style="width: 200px"
-        clearable
-      >
-        <template #prefix>
-          <n-icon>
-            <SearchOutline />
-          </n-icon>
-        </template>
-      </n-input>
-    </n-space>
-
-    <!-- 项目列表 -->
-    <div class="compose-content">
-      <n-spin :show="composeStore.loading && filteredProjects.length === 0">
-        <!-- 空状态 -->
-        <div v-if="filteredProjects.length === 0 && !composeStore.loading" class="empty-state">
-          <n-empty description="没有找到 Compose 项目">
-            <template #extra>
-              <n-button @click="handleRefresh">刷新数据</n-button>
+    <template v-if="isComposeEnabled">
+      <n-space>
+        <!-- 状态筛选菜单 -->
+        <n-dropdown :options="statusFilterMenuOptions" @select="handleFilterSelect">
+          <n-button circle size="small" :type="statusFilter ? 'primary' : 'default'">
+            <template #icon>
+              <n-icon>
+                <FunnelOutline />
+              </n-icon>
             </template>
-          </n-empty>
-        </div>
+          </n-button>
+        </n-dropdown>
 
-        <!-- 项目网格 -->
-        <div
-          v-else
-          class="compose-grid"
-          :class="{
-            'grid-cols-1': isMobile,
-            'grid-cols-2': isTablet || isLaptop,
-            'grid-cols-3': isDesktop,
-            'grid-cols-4': isDesktopLarge,
-          }"
+        <!-- 排序菜单 -->
+        <n-dropdown :options="sortMenuOptions" @select="handleSortSelect">
+          <n-button circle size="small" :type="isSortActive ? 'primary' : 'default'">
+            <template #icon>
+              <n-icon>
+                <SwapVerticalOutline />
+              </n-icon>
+            </template>
+          </n-button>
+        </n-dropdown>
+
+        <!-- 搜索框 -->
+        <n-input
+          v-model:value="searchKeyword"
+          placeholder="搜索项目名称或路径"
+          style="width: 200px"
+          clearable
         >
-          <ComposeCard
-            v-for="project in filteredProjects"
-            :key="project.name"
-            :project="project"
-            :loading="composeStore.isProjectOperating(project.name).value"
-            @log="() => handleViewLogs(project)"
-          />
-        </div>
-      </n-spin>
-    </div>
+          <template #prefix>
+            <n-icon>
+              <SearchOutline />
+            </n-icon>
+          </template>
+        </n-input>
+      </n-space>
 
-    <!-- 页面标题信息 -->
-    <Teleport to="#header" defer>
-      <div class="welcome-card">
-        <div>
-          <n-h2 class="m-0 text-lg"> Compose 项目管理 </n-h2>
-          <n-text depth="3" class="text-xs max-md:hidden">
-            共 {{ composeStore.stats.total }} 个项目， {{ composeStore.stats.running }} 个运行中
-          </n-text>
-        </div>
-        <div class="flex gap-2">
-          <n-button circle size="tiny" type="primary" @click="handleAddProject">
-            <template #icon>
-              <n-icon>
-                <AddCircleOutline />
-              </n-icon>
-            </template>
-          </n-button>
-          <!-- 刷新按钮 -->
-          <n-button @click="handleRefresh" :loading="composeStore.loading" circle size="tiny">
-            <template #icon>
-              <n-icon>
-                <RefreshOutline />
-              </n-icon>
-            </template>
-          </n-button>
-        </div>
+      <!-- 项目列表 -->
+      <div class="compose-content">
+        <n-spin :show="composeStore.loading && filteredProjects.length === 0">
+          <!-- 空状态 -->
+          <div v-if="filteredProjects.length === 0 && !composeStore.loading" class="empty-state">
+            <n-empty description="没有找到 Compose 项目">
+              <template #extra>
+                <n-button @click="handleRefresh">刷新数据</n-button>
+              </template>
+            </n-empty>
+          </div>
+
+          <!-- 项目网格 -->
+          <div
+            v-else
+            class="compose-grid"
+            :class="{
+              'grid-cols-1': isMobile,
+              'grid-cols-2': isTablet || isLaptop,
+              'grid-cols-3': isDesktop,
+              'grid-cols-4': isDesktopLarge,
+            }"
+          >
+            <ComposeCard
+              v-for="project in filteredProjects"
+              :key="project.name"
+              :project="project"
+              :loading="composeStore.isProjectOperating(project.name).value"
+              @log="() => handleViewLogs(project)"
+            />
+          </div>
+        </n-spin>
       </div>
-    </Teleport>
 
-    <!-- 日志弹窗 -->
-    <ComposeLogsModal v-model:show="showLogsModal" :project="currentProject" />
+      <!-- 页面标题信息 -->
+      <Teleport to="#header" defer>
+        <div class="welcome-card">
+          <div>
+            <n-h2 class="m-0 text-lg"> Compose 项目管理 </n-h2>
+            <n-text depth="3" class="text-xs max-md:hidden">
+              共 {{ composeStore.stats.total }} 个项目， {{ composeStore.stats.running }} 个运行中
+            </n-text>
+          </div>
+          <div class="flex gap-2">
+            <n-button circle size="tiny" type="primary" @click="handleAddProject">
+              <template #icon>
+                <n-icon>
+                  <AddCircleOutline />
+                </n-icon>
+              </template>
+            </n-button>
+            <!-- 刷新按钮 -->
+            <n-button @click="handleRefresh" :loading="composeStore.loading" circle size="tiny">
+              <template #icon>
+                <n-icon>
+                  <RefreshOutline />
+                </n-icon>
+              </template>
+            </n-button>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- 日志弹窗 -->
+      <ComposeLogsModal v-model:show="showLogsModal" :project="currentProject" />
+    </template>
+
+    <template v-else>
+      <div class="empty-state">
+        <n-empty description="系统未开启 Compose 功能" />
+      </div>
+      <Teleport to="#header" defer>
+        <div class="welcome-card">
+          <n-h2 class="m-0 text-lg"> Compose 项目管理 </n-h2>
+        </div>
+      </Teleport>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { useSettingStore } from '@/store/setting'
 import { useCompose } from '@/hooks/useCompose'
 import { useResponsive } from '@/hooks/useResponsive'
 import { useComposeStore } from '@/store/compose'
@@ -127,7 +141,7 @@ import {
   WarningOutline,
   AddCircleOutline,
 } from '@vicons/ionicons5'
-import { computed, onMounted, ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { NIcon, type DropdownOption } from 'naive-ui'
 import { renderIcon, sleep } from '@/common/utils'
 import type { ComposeProject } from '@/common/types'
@@ -135,6 +149,9 @@ import type { ComposeProject } from '@/common/types'
 const router = useRouter()
 const showLogsModal = ref(false)
 const currentProject = ref<ComposeProject | null>(null)
+
+const settingStore = useSettingStore()
+const isComposeEnabled = computed(() => settingStore.systemInfo?.isComposeEnabled)
 
 const composeStore = useComposeStore()
 const { handleRefresh } = useCompose()
@@ -260,17 +277,27 @@ const handleSortSelect = (key: string) => {
 }
 
 // 组件挂载后加载数据
-onMounted(async () => {
-  try {
-    await composeStore.fetchProjects()
-  } catch (error) {
-    console.error('初始化 Compose 项目数据失败:', error)
+// onMounted(async () => {
+//   if (!isComposeEnabled.value) {
+//     return
+//   }
+//   try {
+//     await composeStore.fetchProjects()
+//   } catch (error) {
+//     console.error('初始化 Compose 项目数据失败:', error)
+//   }
+// })
+
+watchEffect(() => {
+  if (isComposeEnabled.value) {
+    composeStore.fetchProjects()
   }
 })
+
 const visibility = useDocumentVisibility()
 
 watch(visibility, (newVal) => {
-  if (newVal === 'visible') {
+  if (newVal === 'visible' && isComposeEnabled.value) {
     sleep(1000).then(() => {
       composeStore.fetchProjects()
     })

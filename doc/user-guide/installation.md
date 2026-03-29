@@ -39,7 +39,7 @@
 
 ```bash
 # AMD64
-wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_x86_64.deb
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_amd64.deb
 
 # ARM64
 wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_arm64.deb
@@ -76,7 +76,7 @@ sudo systemctl status watch-docker@$USER
 
 ```bash
 # AMD64
-wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_x86_64.rpm
+wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_amd64.rpm
 
 # ARM64
 wget https://github.com/jianxcao/watch-docker/releases/latest/download/watch-docker_*_linux_arm64.rpm

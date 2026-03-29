@@ -238,7 +238,7 @@ const isPruning = ref(false)
 
 // 版本信息
 const appVersion = 'v' + __APP_VERSION__
-const version = computed(() => settingStore.systemInfo?.version)
+const version = computed(() => settingStore.systemInfo?.version.version)
 
 const systemHealthText = computed(() => {
   switch (appStore.systemHealth) {

@@ -100,6 +100,9 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		twofa.POST("/disable", s.handleDisableTwoFA())
 	}
 
+	// 文件下载端点（使用自定义认证：支持临时 token 或常规 token）
+	api.GET("/containers/:id/files/download", s.handleDownloadContainerFile())
+
 	// 需要身份验证的接口
 	protected := api.Group("")
 	protected.Use(auth.AuthMiddleware())
@@ -155,10 +158,11 @@ func (s *Server) handleGetInfo() gin.HandlerFunc {
 			"dockerGitCommit":                dockerVersion.GitCommit,
 			"dockerGoVersion":                dockerVersion.GoVersion,
 			"dockerBuildTime":                dockerVersion.BuildTime,
-			"version":                        envCfg.VERSION_WATCH_DOCKER,
+			"version":                        conf.GetVersionInfo(),
 			"appPath":                        envCfg.APP_PATH,
 			"isOpenDockerShell":              conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
 			"isSecondaryVerificationEnabled": conf.EnvCfg.IS_SECONDARY_VERIFICATION,
+			"isComposeEnabled":               config.Get().Compose.Enabled,
 		}
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"info": info}))

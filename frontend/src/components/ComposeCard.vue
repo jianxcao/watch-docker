@@ -281,6 +281,7 @@ const handleMenuSelect = (key: string) => {
       handleDelete(props.project)
       break
     case 'view-logs':
+    case 'logs':
       emit('log')
       break
     case 'create':

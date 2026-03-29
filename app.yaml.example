@@ -58,9 +58,6 @@ enable_docker_shell: false
 # 环境变量：APP_PATH
 app_path: ""
 
-# 应用版本
-# 环境变量：VERSION_WATCH_DOCKER
-version: "v0.1.6"
 
 # =============================================================================
 # 说明
@@ -83,7 +80,6 @@ version: "v0.1.6"
 #    static_dir            -> STATIC_DIR
 #    enable_docker_shell   -> IS_OPEN_DOCKER_SHELL
 #    app_path              -> APP_PATH
-#    version               -> VERSION_WATCH_DOCKER
 #
 # 4. 修改配置后需要重启应用：
 #    systemctl restart watch-docker

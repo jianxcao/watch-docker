@@ -17,6 +17,8 @@ declare module 'vue' {
     ContainerImportModal: typeof import('./src/components/ContainerImportModal.vue')['default']
     ContainerLogsModal: typeof import('./src/components/ContainerLogsModal.vue')['default']
     ContainerShellView: typeof import('./src/components/ContainerShellView.vue')['default']
+    FileBrowserPanel: typeof import('./src/components/FileBrowser/FileBrowserPanel.vue')['default']
+    FileEditor: typeof import('./src/components/FileBrowser/FileEditor.vue')['default']
     ImageCard: typeof import('./src/components/ImageCard.vue')['default']
     ImageImportModal: typeof import('./src/components/ImageImportModal.vue')['default']
     LayoutView: typeof import('./src/components/LayoutView.vue')['default']
