@@ -81,7 +81,7 @@ RestartSec=5s
 Environment="CONFIG_PATH=/root/.watch-docker"
 
 # 安全设置
-ProtectSystem=strict
+ProtectSystem=full
 ReadWritePaths=/root/.watch-docker
 NoNewPrivileges=true
 PrivateTmp=true
@@ -110,7 +110,7 @@ RestartSec=5s
 Environment="CONFIG_PATH=%h/.watch-docker"
 
 # 安全设置
-ProtectSystem=strict
+ProtectSystem=full
 ReadWritePaths=%h/.watch-docker
 NoNewPrivileges=true
 PrivateTmp=true
@@ -366,7 +366,7 @@ chmod 755 "$CONFIG_DIR"
 ```ini
 [Service]
 # 限制写入权限
-ProtectSystem=strict
+ProtectSystem=full
 # 只允许写入配置目录
 ReadWritePaths=%h/.watch-docker
 # 其他安全设置

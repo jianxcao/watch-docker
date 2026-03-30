@@ -30,7 +30,7 @@ RestartSec=10s
 # 安全设置
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
+ProtectSystem=full
 ReadWritePaths=/root/.watch-docker
 
 # 日志配置
