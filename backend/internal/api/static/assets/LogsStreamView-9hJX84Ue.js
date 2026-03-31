@@ -1,0 +1,11 @@
+import{F as e,Fn as t,Jt as n,Qt as r,Yt as i,hn as a,nn as o,tn as s}from"./ui-Cv1Ns3ON.js";import{c}from"./common-DvA0WTiu.js";import{t as l}from"./index-Ccyx6KHe.js";import{t as u}from"./TermView-DXOh8uTJ.js";var d={xmlns:`http://www.w3.org/2000/svg`,"xmlns:xlink":`http://www.w3.org/1999/xlink`,viewBox:`0 0 512 512`},f=o({name:`PlayOutline`,render:function(e,t){return a(),r(`svg`,d,t[0]||=[i(`path`,{d:`M112 111v290c0 17.44 17 28.52 31 20.16l247.9-148.37c12.12-7.25 12.12-26.33 0-33.58L143 90.84c-14-8.36-31 2.72-31 20.16z`,fill:`none`,stroke:`currentColor`,"stroke-miterlimit":`10`,"stroke-width":`32`},null,-1)])}}),p={xmlns:`http://www.w3.org/2000/svg`,"xmlns:xlink":`http://www.w3.org/1999/xlink`,viewBox:`0 0 512 512`},m=o({name:`StopOutline`,render:function(e,t){return a(),r(`svg`,p,t[0]||=[i(`rect`,{x:`96`,y:`96`,width:`320`,height:`320`,rx:`24`,ry:`24`,fill:`none`,stroke:`currentColor`,"stroke-linejoin":`round`,"stroke-width":`32`},null,-1)])}}),h={class:`logs-container`},g=l(o({__name:`LogsStreamView`,props:{socketUrl:{},height:{default:`calc(90vh - 104px)`}},setup(i,{expose:o}){let l=i,d=e(),f=t(),p={disableStdin:navigator.maxTouchPoints>0,cursorBlink:!1,fontSize:13,scrollback:1e3,convertEol:!0},{status:m,close:g,open:_}=c(l.socketUrl,{autoReconnect:!1,immediate:!1,autoConnect:!1,onMessage:(e,t)=>{f.value&&t.data&&(t.data instanceof ArrayBuffer?f.value.write(new Uint8Array(t.data)):typeof t.data==`string`&&f.value.write(t.data))},onConnected:e=>{f.value?.writeln(`\x1B[32m已连接到日志流\x1B[0m\r
+`),e&&(e.binaryType=`arraybuffer`)},onDisconnected:()=>{f.value?.writeln(`\r
+\x1B[33m日志流已断开\x1B[0m\r
+`)},onError:()=>{f.value?.writeln(`\r
+\x1B[31m连接错误\x1B[0m\r
+`),d.error(`日志连接失败`)}}),v=n(()=>m.value===`CONNECTING`),y=n(()=>m.value===`OPEN`),b=()=>{f.value?.writeln(`\r
+\x1B[33m正在连接日志流...\x1B[0m\r
+`),_()};return o({close:g,handleReconnect:()=>{g(),f.value?.clear(),f.value?.writeln(`\r
+\x1B[33m正在重新连接日志流...\x1B[0m\r
+`),setTimeout(()=>{_()},100)},handleClearLogs:()=>{f.value?.clear()},isConnecting:v,isConnected:y}),(e,t)=>(a(),r(`div`,h,[s(u,{ref_key:`termRef`,ref:f,config:p,onReady:b,height:i.height},null,8,[`height`])]))}}),[[`__scopeId`,`data-v-7cf14811`]]);export{m as n,f as r,g as t};
+//# sourceMappingURL=LogsStreamView-9hJX84Ue.js.map
