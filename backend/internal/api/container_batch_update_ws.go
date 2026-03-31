@@ -3,12 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -49,9 +49,7 @@ type batchUpdateContainerInfo struct {
 }
 
 var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin:       auth.CheckWebSocketOrigin,
 	HandshakeTimeout:  10 * time.Second,
 	ReadBufferSize:    4096,
 	WriteBufferSize:   4096,

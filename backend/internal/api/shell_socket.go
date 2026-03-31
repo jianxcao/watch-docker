@@ -20,9 +20,7 @@ import (
 
 // shellUpgrader WebSocket 升级器（用于 Shell）
 var shellUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin:       auth.CheckWebSocketOrigin,
 	HandshakeTimeout:  10 * time.Second,
 	ReadBufferSize:    4096,
 	WriteBufferSize:   4096,

@@ -381,14 +381,20 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, path s
 	}, nil
 }
 
-// sanitizePath 清理文件路径防止命令注入
+// sanitizePath 清理文件路径防止命令注入和路径穿越
 func sanitizePath(path string) string {
-	// 移除危险字符
 	dangerous := []string{";", "&", "|", "`", "$", "(", ")", "{", "}", "[", "]", "<", ">", "'", "\"", "\\"}
 	result := path
 	for _, char := range dangerous {
 		result = strings.ReplaceAll(result, char, "")
 	}
+
+	result = filepath.Clean(result)
+
+	if !strings.HasPrefix(result, "/") {
+		result = "/" + result
+	}
+
 	return result
 }
 
@@ -647,10 +653,13 @@ func (c *Client) RenameContainerPath(ctx context.Context, containerID, oldPath, 
 func (c *Client) ChmodContainerPath(ctx context.Context, containerID, path, mode string, recursive bool) error {
 	safePath := sanitizePath(path)
 
-	// 验证 mode 格式（应该是八进制数字，如 "755" 或 "0644"）
-	// 简单的验证：只允许数字和八进制格式
-	if len(mode) == 0 {
-		return fmt.Errorf("mode cannot be empty")
+	if len(mode) == 0 || len(mode) > 4 {
+		return fmt.Errorf("invalid mode format")
+	}
+	for _, ch := range mode {
+		if ch < '0' || ch > '7' {
+			return fmt.Errorf("invalid mode: must be octal digits (0-7)")
+		}
 	}
 
 	cmd := []string{"chmod"}

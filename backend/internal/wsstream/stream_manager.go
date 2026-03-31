@@ -3,6 +3,7 @@ package wsstream
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,13 +14,48 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin:       CheckWebSocketOrigin,
 	HandshakeTimeout:  10 * time.Second,
 	ReadBufferSize:    4096,
 	WriteBufferSize:   4096,
 	EnableCompression: true,
+}
+
+// CheckWebSocketOrigin 验证 WebSocket Origin 防止 CSWSH 攻击
+// 只比较主机名（不含端口），以兼容反向代理场景
+func CheckWebSocketOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	host := r.Host
+	if host == "" {
+		host = r.Header.Get("Host")
+	}
+	if host == "" {
+		return false
+	}
+	originHost := origin
+	if idx := strings.Index(originHost, "://"); idx >= 0 {
+		originHost = originHost[idx+3:]
+	}
+	if idx := strings.Index(originHost, "/"); idx >= 0 {
+		originHost = originHost[:idx]
+	}
+	return strings.EqualFold(stripPort(originHost), stripPort(host))
+}
+
+// stripPort 从 host:port 中去掉端口部分
+func stripPort(hostPort string) string {
+	if strings.HasPrefix(hostPort, "[") {
+		if idx := strings.Index(hostPort, "]"); idx >= 0 {
+			return hostPort[1:idx]
+		}
+	}
+	if idx := strings.LastIndex(hostPort, ":"); idx >= 0 {
+		return hostPort[:idx]
+	}
+	return hostPort
 }
 
 // StreamManager 管理所有的 StreamHub（泛型版本）

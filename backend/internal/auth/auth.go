@@ -1,11 +1,17 @@
 package auth
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,10 +20,38 @@ import (
 )
 
 var (
-	jwtSecret       = []byte("watch-docker-secret-key") // 在生产环境中应该使用更安全的密钥
+	jwtSecret       []byte
+	jwtSecretOnce   sync.Once
 	ErrInvalidToken = errors.New("invalid token")
 	ErrTokenExpired = errors.New("token expired")
 )
+
+func initJWTSecret() {
+	if envSecret := os.Getenv("JWT_SECRET"); envSecret != "" {
+		jwtSecret = []byte(envSecret)
+		return
+	}
+
+	secretFile := filepath.Join(conf.EnvCfg.CONFIG_PATH, ".jwt_secret")
+	if data, err := os.ReadFile(secretFile); err == nil && len(data) >= 32 {
+		jwtSecret = data
+		return
+	}
+
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		panic(fmt.Sprintf("failed to generate JWT secret: %v", err))
+	}
+	jwtSecret = secret
+
+	_ = os.MkdirAll(conf.EnvCfg.CONFIG_PATH, 0700)
+	_ = os.WriteFile(secretFile, secret, 0600)
+}
+
+func getJWTSecret() []byte {
+	jwtSecretOnce.Do(initJWTSecret)
+	return jwtSecret
+}
 
 type Claims struct {
 	Username      string `json:"username"`
@@ -36,10 +70,10 @@ func hashPassword(password string) string {
 // GenerateToken 生成JWT token
 func GenerateToken(username string) (string, error) {
 	envCfg := conf.EnvCfg
-	expirationTime := time.Now().Add(24 * 365 * time.Hour)
+	expirationTime := time.Now().Add(30 * 24 * time.Hour)
 	claims := &Claims{
 		Username:      username,
-		PasswordHash:  hashPassword(envCfg.USER_PASSWORD), // 存储密码哈希
+		PasswordHash:  hashPassword(envCfg.USER_PASSWORD),
 		TwoFAVerified: true,
 		IsTempToken:   false,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -49,7 +83,7 @@ func GenerateToken(username string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(getJWTSecret())
 }
 
 // GenerateTempToken 生成临时 token（需要二次验证）
@@ -69,7 +103,7 @@ func GenerateTempToken(username string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(getJWTSecret())
 }
 
 // UpgradeTempToken 将临时 token 升级为完整 token
@@ -105,7 +139,10 @@ func ValidateTempToken(tokenString string) (*Claims, error) {
 func ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return getJWTSecret(), nil
 	})
 
 	if err != nil {
@@ -195,10 +232,12 @@ func AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
-// ValidateCredentials 验证用户凭据
+// ValidateCredentials 验证用户凭据（时序安全比较，防止时序攻击）
 func ValidateCredentials(username, password string) bool {
 	envCfg := conf.EnvCfg
-	return username == envCfg.USER_NAME && password == envCfg.USER_PASSWORD
+	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(envCfg.USER_NAME)) == 1
+	passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(envCfg.USER_PASSWORD)) == 1
+	return usernameMatch && passwordMatch
 }
 
 // IsAuthEnabled 检查是否启用了身份验证
