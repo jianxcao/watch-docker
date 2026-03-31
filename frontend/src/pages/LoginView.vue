@@ -76,7 +76,7 @@
         <n-card size="small" embedded>
           <n-space justify="space-between" align="center">
             <n-text depth="3">Docker: {{ settingStore.systemInfo.dockerVersion }}</n-text>
-            <n-text depth="3">{{ settingStore.systemInfo.version }}</n-text>
+            <n-text depth="3">{{ settingStore.systemInfo.version.version }}</n-text>
           </n-space>
         </n-card>
       </div>

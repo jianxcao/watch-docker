@@ -2,11 +2,14 @@
   <div
     class="container-card"
     :data-theme="settingStore.setting.theme"
-    :class="{ 'card-updating': isUpdating }"
+    :class="{ 'card-updating': isUpdating, 'card-operating': isOperating }"
     @click="handleCardClick"
   >
-    <!-- 状态指示条 -->
-    <div class="status-bar" :class="container.running ? 'running' : 'stopped'"></div>
+    <!-- 状态指示条 / 操作进度条 -->
+    <div v-if="isOperating" class="operation-progress-bar">
+      <div class="progress-bar-inner"></div>
+    </div>
+    <div v-else class="status-bar" :class="container.running ? 'running' : 'stopped'"></div>
     <div class="card-content">
       <!-- 容器头部信息 -->
       <div class="container-header">
@@ -151,6 +154,16 @@
         </div>
       </div>
     </div>
+
+    <!-- 操作状态浮层 -->
+    <Transition name="op-fade">
+      <div v-if="isOperating" class="operation-overlay">
+        <div class="operation-overlay-content">
+          <div class="operation-spinner"></div>
+          <span class="operation-text">{{ operationText }}</span>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -161,7 +174,7 @@ import CreateTimeIcon from '@/assets/svg/createTime.svg?component'
 import MemoryIcon from '@/assets/svg/memory.svg?component'
 import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
 import HeartLineIcon from '@/assets/svg/hartLine.svg?component'
-import type { ContainerStatus } from '@/common/types'
+import type { ContainerStatus, ContainerOperationState } from '@/common/types'
 import { formatBytes, formatBytesPerSecond, formatPercent, formatTime } from '@/common/utils'
 import { useContainerStore } from '@/store/container'
 import { useSettingStore } from '@/store/setting'
@@ -223,6 +236,36 @@ const containerStore = useContainerStore()
 // 是否正在更新
 const isUpdating = computed(() => containerStore.isContainerUpdating(props.container.id))
 
+// 操作状态
+const operationState = computed<ContainerOperationState>(() =>
+  containerStore.getOperationState(props.container.id),
+)
+const isOperating = computed(() => operationState.value.type !== 'idle')
+
+const operationTextMap: Record<string, string> = {
+  starting: '启动中...',
+  stopping: '停止中...',
+  restarting: '重启中...',
+  updating: '更新中...',
+  deleting: '删除中...',
+  exporting: '导出中...',
+}
+
+const updateStepTextMap: Record<string, string> = {
+  pulling: '正在拉取镜像',
+  stopping: '正在停止旧容器',
+  creating: '正在创建新容器',
+  starting: '正在启动新容器',
+}
+
+const operationText = computed(() => {
+  const state = operationState.value
+  if (state.type === 'updating' && state.step) {
+    return `更新中 - ${updateStepTextMap[state.step] ?? state.step}`
+  }
+  return operationTextMap[state.type] ?? ''
+})
+
 const statusConfig = computed(() => {
   return {
     color: props.container.running ? 'bg-emerald-500' : 'bg-slate-500',
@@ -261,6 +304,7 @@ const formatPorts = (ports: any[]): string => {
 
 // 下拉菜单选项
 const dropdownOptions = computed(() => {
+  const disabled = isOperating.value
   const options: any[] = [
     {
       key: 'detail',
@@ -284,7 +328,6 @@ const dropdownOptions = computed(() => {
     },
   ]
 
-  // 如果有可用更新，添加更新选项
   if (props.container.status === 'UpdateAvailable') {
     options.push({
       key: 'update',
@@ -293,11 +336,10 @@ const dropdownOptions = computed(() => {
         h(NIcon, null, {
           default: () => h(SyncOutline),
         }),
-      disabled: props.loading,
+      disabled,
     })
   }
 
-  // 启动/停止/重启选项
   if (props.container.running) {
     options.push(
       {
@@ -307,7 +349,7 @@ const dropdownOptions = computed(() => {
           h(NIcon, null, {
             default: () => h(RefreshOutline),
           }),
-        disabled: props.loading,
+        disabled,
       },
       {
         key: 'stop',
@@ -316,7 +358,7 @@ const dropdownOptions = computed(() => {
           h(NIcon, null, {
             default: () => h(StopCircleOutline),
           }),
-        disabled: props.loading,
+        disabled,
       },
     )
   } else {
@@ -327,7 +369,7 @@ const dropdownOptions = computed(() => {
         h(NIcon, null, {
           default: () => h(PlayCircleOutline),
         }),
-      disabled: props.loading,
+      disabled,
     })
   }
 
@@ -339,6 +381,7 @@ const dropdownOptions = computed(() => {
         h(NIcon, null, {
           default: () => h(DownloadOutline),
         }),
+      disabled,
     },
     {
       type: 'divider',
@@ -357,7 +400,7 @@ const dropdownOptions = computed(() => {
             default: () => h(TrashOutline),
           },
         ),
-      disabled: props.loading,
+      disabled,
     },
   )
 
@@ -458,6 +501,91 @@ const handleCardClick = () => {
     }
   }
 
+  .operation-progress-bar {
+    height: 4px;
+    width: 100%;
+    background: rgba(59, 130, 246, 0.15);
+    overflow: hidden;
+
+    .progress-bar-inner {
+      height: 100%;
+      width: 40%;
+      background: linear-gradient(90deg, #3b82f6, #60a5fa, #3b82f6);
+      border-radius: 2px;
+      animation: progress-slide 1.5s ease-in-out infinite;
+    }
+  }
+
+  @keyframes progress-slide {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(350%);
+    }
+  }
+
+  .operation-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: rgba(15, 23, 42, 0.75);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(59, 130, 246, 0.2);
+    padding: 10px 16px;
+
+    .operation-overlay-content {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .operation-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(96, 165, 250, 0.25);
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    .operation-text {
+      font-size: 13px;
+      color: #93c5fd;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .op-fade-enter-active {
+    transition: all 0.25s ease-out;
+  }
+  .op-fade-leave-active {
+    transition: all 0.2s ease-in;
+  }
+  .op-fade-enter-from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  .op-fade-leave-to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  &.card-operating {
+    pointer-events: auto;
+  }
+
   .card-content {
     padding: 16px;
     display: flex;
@@ -531,6 +659,28 @@ const handleCardClick = () => {
     .container-logo {
       border: 1px solid rgba(0, 188, 125, 0.2);
       background: linear-gradient(135deg, rgba(3, 2, 19, 0.1) 0%, rgba(3, 2, 19, 0.05) 100%);
+    }
+  }
+
+  &[data-theme='light'] .operation-overlay {
+    background: rgba(248, 250, 252, 0.85);
+    border-top-color: rgba(59, 130, 246, 0.15);
+
+    .operation-spinner {
+      border-color: rgba(37, 99, 235, 0.2);
+      border-top-color: #2563eb;
+    }
+
+    .operation-text {
+      color: #2563eb;
+    }
+  }
+
+  &[data-theme='light'] .operation-progress-bar {
+    background: rgba(59, 130, 246, 0.1);
+
+    .progress-bar-inner {
+      background: linear-gradient(90deg, #2563eb, #3b82f6, #2563eb);
     }
   }
 

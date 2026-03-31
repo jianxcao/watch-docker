@@ -75,6 +75,80 @@ func (u *Updater) UpdateContainer(ctx context.Context, containerID string, image
 	return nil
 }
 
+// UpdateProgressCallback 更新进度回调
+type UpdateProgressCallback struct {
+	OnStep         func(step, message string)
+	OnPullProgress func(progress dockercli.PullProgress)
+}
+
+// UpdateContainerWithProgress 带进度回调的容器更新
+func (u *Updater) UpdateContainerWithProgress(ctx context.Context, containerID, imageRef string, cb *UpdateProgressCallback) error {
+	mutex := u.getContainerLock(containerID)
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	logger.Logger.Info("开始更新容器（带进度）", zap.String("containerID", containerID), zap.String("imageRef", imageRef))
+
+	uctx := &updateContext{
+		containerID: containerID,
+		imageRef:    imageRef,
+	}
+
+	// 1. 拉取镜像（带进度）
+	if cb != nil && cb.OnStep != nil {
+		cb.OnStep("pulling", "正在拉取镜像 "+imageRef)
+	}
+	logger.Logger.Info("开始拉取镜像", zap.String("imageRef", imageRef))
+	err := u.docker.ImagePullWithProgress(ctx, imageRef, func(p dockercli.PullProgress) {
+		if cb != nil && cb.OnPullProgress != nil {
+			cb.OnPullProgress(p)
+		}
+	})
+	if err != nil {
+		logger.Logger.Error("拉取镜像失败", zap.String("imageRef", imageRef), zap.Error(err))
+		return fmt.Errorf("pull: %w", err)
+	}
+	logger.Logger.Info("镜像拉取成功", zap.String("imageRef", imageRef))
+
+	// 2. 准备旧容器
+	if cb != nil && cb.OnStep != nil {
+		cb.OnStep("stopping", "正在停止旧容器")
+	}
+	if err := u.prepareOldContainer(ctx, uctx); err != nil {
+		return err
+	}
+
+	// 3. 创建新容器
+	if cb != nil && cb.OnStep != nil {
+		cb.OnStep("creating", "正在创建新容器")
+	}
+	if err := u.createContainerWithRetry(ctx, uctx); err != nil {
+		u.rollbackOnCreateFailure(ctx, uctx)
+		return err
+	}
+
+	// 4. 启动新容器
+	if uctx.wasRunning {
+		if cb != nil && cb.OnStep != nil {
+			cb.OnStep("starting", "正在启动新容器")
+		}
+		if err := u.startContainerWithRetry(ctx, uctx); err != nil {
+			u.rollbackOnStartFailure(ctx, uctx)
+			return err
+		}
+		logger.Logger.Info("新容器已启动", zap.String("containerID", uctx.newID))
+	} else {
+		logger.Logger.Info("新容器已创建但未启动", zap.String("containerID", uctx.newID))
+	}
+
+	// 5. 清理
+	if cb != nil && cb.OnStep != nil {
+		cb.OnStep("cleanup", "正在清理旧容器")
+	}
+	u.finalCleanup(ctx, uctx)
+	return nil
+}
+
 // updateContext 更新操作的上下文信息
 type updateContext struct {
 	containerID string

@@ -1,7 +1,7 @@
 import { composeApi } from '@/common/api'
-import type { ComposeAction, ComposeProject } from '@/common/types'
+import type { ComposeAction, ComposeProject, ComposeOperationState } from '@/common/types'
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, reactive } from 'vue'
 
 export const useComposeStore = defineStore('compose', () => {
   const message = window.$message
@@ -10,6 +10,9 @@ export const useComposeStore = defineStore('compose', () => {
   const projects = ref<ComposeProject[]>([])
   const loading = ref(false)
   const operationLoading = ref<Record<string, boolean>>({})
+
+  // 操作状态追踪：projectName -> 操作状态
+  const operationStates = reactive(new Map<string, ComposeOperationState>())
 
   const stats = computed(() => ({
     total: projects.value.length,
@@ -27,6 +30,18 @@ export const useComposeStore = defineStore('compose', () => {
   // 设置项目操作状态
   const setProjectOperating = (projectName: string, isOperating: boolean) => {
     operationLoading.value[projectName] = isOperating
+  }
+
+  const setOperationState = (projectName: string, state: ComposeOperationState) => {
+    operationStates.set(projectName, state)
+  }
+
+  const clearOperationState = (projectName: string) => {
+    operationStates.delete(projectName)
+  }
+
+  const getOperationState = (projectName: string): ComposeOperationState => {
+    return operationStates.get(projectName) ?? { type: 'idle' }
   }
 
   // 获取项目列表
@@ -52,6 +67,18 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
+  // action 到操作状态的映射
+  const actionToOperationType = (action: ComposeAction): ComposeOperationState['type'] => {
+    const map: Record<ComposeAction, ComposeOperationState['type']> = {
+      start: 'starting',
+      stop: 'stopping',
+      restart: 'restarting',
+      delete: 'deleting',
+      create: 'creating',
+    }
+    return map[action] ?? 'idle'
+  }
+
   // 执行项目操作
   const executeProjectAction = async (
     project: ComposeProject,
@@ -61,6 +88,7 @@ export const useComposeStore = defineStore('compose', () => {
     const { refreshAfter = true } = options || {}
 
     setProjectOperating(project.name, true)
+    setOperationState(project.name, { type: actionToOperationType(action) })
 
     try {
       let response
@@ -112,6 +140,7 @@ export const useComposeStore = defineStore('compose', () => {
       throw error
     } finally {
       setProjectOperating(project.name, false)
+      clearOperationState(project.name)
     }
   }
 
@@ -205,12 +234,18 @@ export const useComposeStore = defineStore('compose', () => {
     projects,
     loading,
     operationLoading,
+    operationStates,
     stats,
 
     // 工具函数
     isProjectOperating,
     setProjectOperating,
     findProject,
+
+    // 操作状态方法
+    setOperationState,
+    clearOperationState,
+    getOperationState,
 
     // 操作方法
     fetchProjects,

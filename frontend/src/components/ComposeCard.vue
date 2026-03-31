@@ -2,9 +2,17 @@
   <div
     class="compose-card"
     :data-theme="settingStore.setting.theme"
-    :class="['card-status-' + project.status, { 'card-updating': loading }]"
+    :class="[
+      'card-status-' + project.status,
+      { 'card-updating': loading, 'card-operating': isOperating },
+    ]"
     @click="handleCardClick"
   >
+    <!-- 操作进度条 -->
+    <div v-if="isOperating" class="operation-progress-bar">
+      <div class="progress-bar-inner"></div>
+    </div>
+
     <div class="card-content">
       <!-- 项目头部信息 -->
       <div class="project-header">
@@ -63,6 +71,7 @@
           v-if="project.status === 'exited' || project.status === 'partial'"
           text
           class="action-btn"
+          :disabled="isOperating"
           @click="handleMenuSelect('start')"
         >
           <template #icon>
@@ -76,6 +85,7 @@
           v-if="project.status === 'running' || project.status === 'partial'"
           text
           class="action-btn"
+          :disabled="isOperating"
           @click="handleMenuSelect('stop')"
         >
           <template #icon>
@@ -89,6 +99,7 @@
           v-if="project.status === 'running'"
           text
           class="action-btn"
+          :disabled="isOperating"
           @click="handleMenuSelect('restart')"
         >
           <template #icon>
@@ -106,6 +117,7 @@
           "
           text
           class="action-btn"
+          :disabled="isOperating"
           @click="handleMenuSelect('create')"
         >
           <template #icon>
@@ -125,18 +137,31 @@
         </n-button>
       </div>
     </div>
+
+    <!-- 操作状态浮层 -->
+    <Transition name="op-fade">
+      <div v-if="isOperating" class="operation-overlay">
+        <div class="operation-overlay-content">
+          <div class="operation-spinner"></div>
+          <span class="operation-text">{{ operationText }}</span>
+        </div>
+      </div>
+    </Transition>
   </div>
 
   <!-- Pull 日志弹窗 -->
   <ComposePullLogsModal v-model:show="showPullLogs" :project="project" />
+  <!-- Create 日志弹窗 -->
+  <ComposeCreateLogsModal v-model:show="showCreateLogs" :project="project" />
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NIcon, type DropdownOption } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
-import type { ComposeProject } from '@/common/types'
+import { useComposeStore } from '@/store/compose'
+import type { ComposeProject, ComposeOperationState } from '@/common/types'
 
 import ComposeIcon from '@/assets/svg/compose.svg?component'
 import {
@@ -153,10 +178,13 @@ import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
 import { useCompose } from '@/hooks/useCompose'
 import { renderIcon } from '@/common/utils'
 import ComposePullLogsModal from '@/components/ComposePullLogsModal.vue'
+import ComposeCreateLogsModal from '@/components/ComposeCreateLogsModal.vue'
 
-const { handleStart, handleStop, handleRestart, handleDelete, handleCreate } = useCompose()
+const { handleStart, handleStop, handleRestart, handleDelete } = useCompose()
 const router = useRouter()
 const showPullLogs = ref(false)
+const showCreateLogs = ref(false)
+const composeStore = useComposeStore()
 
 interface Props {
   project: ComposeProject
@@ -167,6 +195,30 @@ const emit = defineEmits(['log'])
 
 const props = defineProps<Props>()
 const settingStore = useSettingStore()
+
+// 操作状态
+const operationState = computed<ComposeOperationState>(() =>
+  composeStore.getOperationState(props.project.name),
+)
+const isOperating = computed(() => operationState.value.type !== 'idle')
+
+const operationTextMap: Record<string, string> = {
+  starting: '启动中...',
+  stopping: '停止中...',
+  restarting: '重启中...',
+  creating: '创建中...',
+  pulling: '拉取镜像中...',
+  deleting: '删除中...',
+}
+
+const operationText = computed(() => operationTextMap[operationState.value.type] ?? '')
+
+// 当 pull 弹窗关闭时清除 pulling 状态
+watch(showPullLogs, (newVal) => {
+  if (!newVal && operationState.value.type === 'pulling') {
+    composeStore.clearOperationState(props.project.name)
+  }
+})
 
 // 获取状态文本
 const getStatusText = (status: string) => {
@@ -184,14 +236,16 @@ const getStatusText = (status: string) => {
 
 // 下拉菜单选项
 const dropdownOptions = computed<DropdownOption[]>(() => {
+  const disabled = isOperating.value
   const options: DropdownOption[] = []
   const project = props.project
-  // 根据项目状态显示不同的操作选项
+
   if (project.status === 'exited' || project.status === 'partial') {
     options.push({
       label: '启动',
       key: 'start',
       icon: renderIcon(PlayOutline),
+      disabled,
     })
   }
 
@@ -201,11 +255,13 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
         label: '停止',
         key: 'stop',
         icon: renderIcon(StopOutline),
+        disabled,
       },
       {
         label: '重启',
         key: 'restart',
         icon: renderIcon(ReloadOutline),
+        disabled,
       },
     )
   }
@@ -215,6 +271,7 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
       label: '创建',
       key: 'create',
       icon: renderIcon(RefreshOutline),
+      disabled,
     },
     {
       type: 'divider',
@@ -283,9 +340,10 @@ const handleMenuSelect = (key: string) => {
       emit('log')
       break
     case 'create':
-      handleCreate(props.project)
+      showCreateLogs.value = true
       break
     case 'pull':
+      composeStore.setOperationState(props.project.name, { type: 'pulling' })
       showPullLogs.value = true
       break
   }
@@ -307,6 +365,93 @@ const handleMenuSelect = (key: string) => {
   &:hover {
     transform: translateY(-2px);
     box-shadow: var(--box-shadow-1);
+  }
+
+  .operation-progress-bar {
+    height: 3px;
+    width: 100%;
+    background: rgba(59, 130, 246, 0.15);
+    overflow: hidden;
+
+    .progress-bar-inner {
+      height: 100%;
+      width: 40%;
+      background: linear-gradient(90deg, #3b82f6, #60a5fa, #3b82f6);
+      border-radius: 2px;
+      animation: compose-progress-slide 1.5s ease-in-out infinite;
+    }
+  }
+
+  @keyframes compose-progress-slide {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(350%);
+    }
+  }
+
+  .operation-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: rgba(15, 23, 42, 0.75);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(59, 130, 246, 0.2);
+    padding: 10px 16px;
+
+    .operation-overlay-content {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .operation-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(96, 165, 250, 0.25);
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: compose-spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    .operation-text {
+      font-size: 13px;
+      color: #93c5fd;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+  }
+
+  @keyframes compose-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .op-fade-enter-active {
+    transition: all 0.25s ease-out;
+  }
+  .op-fade-leave-active {
+    transition: all 0.2s ease-in;
+  }
+  .op-fade-enter-from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  .op-fade-leave-to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  &.card-operating {
+    .card-content {
+      opacity: 0.85;
+    }
   }
 
   .card-content {
@@ -661,6 +806,28 @@ const handleMenuSelect = (key: string) => {
         background: rgba(226, 232, 240, 0.5);
         color: #334155;
       }
+    }
+  }
+
+  .operation-progress-bar {
+    background: rgba(59, 130, 246, 0.1);
+
+    .progress-bar-inner {
+      background: linear-gradient(90deg, #2563eb, #3b82f6, #2563eb);
+    }
+  }
+
+  .operation-overlay {
+    background: rgba(248, 250, 252, 0.85);
+    border-top-color: rgba(59, 130, 246, 0.15);
+
+    .operation-spinner {
+      border-color: rgba(37, 99, 235, 0.2);
+      border-top-color: #2563eb;
+    }
+
+    .operation-text {
+      color: #2563eb;
     }
   }
 }

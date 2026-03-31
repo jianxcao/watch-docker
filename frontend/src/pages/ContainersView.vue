@@ -61,7 +61,6 @@
             v-for="container in filteredContainers"
             :key="container.id"
             :container="container"
-            :loading="operationLoading"
             @start="() => handleStart(container)"
             @stop="() => handleStop(container)"
             @restart="() => handleRestart(container)"
@@ -95,7 +94,6 @@
             size="large"
             circle
             @click="handleBatchUpdate"
-            :loading="containerStore.batchUpdating"
             class="fab-button"
           >
             <template #icon>
@@ -152,6 +150,8 @@
     <ContainerImportModal v-model:show="showImportModal" @success="handleImportSuccess" />
     <!-- 容器日志弹窗 -->
     <ContainerLogsModal v-model:show="showLogsModal" :container="currentContainer" />
+    <!-- 批量更新进度弹窗 -->
+    <BatchUpdateModal v-model:show="showBatchUpdateModal" />
   </div>
 </template>
 
@@ -165,6 +165,7 @@ import { renderIcon } from '@/common/utils'
 import ContainerCard from '@/components/ContainerCard.vue'
 import ContainerImportModal from '@/components/ContainerImportModal.vue'
 import ContainerLogsModal from '@/components/ContainerLogsModal.vue'
+import BatchUpdateModal from '@/components/BatchUpdateModal.vue'
 import type { ContainerStatus } from '@/common/types'
 import {
   SearchOutline,
@@ -189,6 +190,7 @@ import { useAppStore } from '@/store/app'
 const router = useRouter()
 const containerStore = useContainerStore()
 const containerHooks = useContainer()
+const { showBatchUpdateModal } = containerHooks
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 const appStore = useAppStore()
 
@@ -197,7 +199,6 @@ const searchKeyword = ref('')
 const statusFilter = ref<string | null>(null)
 const sortBy = ref<string>('name') // 默认按名称排序
 const sortOrder = ref<'asc' | 'desc'>('asc') // 排序方向，默认升序
-const operationLoading = ref(false)
 const showImportModal = ref(false)
 const showLogsModal = ref(false)
 const currentContainer = ref<ContainerStatus | null>(null)
@@ -364,50 +365,12 @@ const filteredContainers = computed(() => {
 })
 
 // 操作处理函数
-const handleStart = async (container: ContainerStatus) => {
-  operationLoading.value = true
-  try {
-    await containerHooks.handleStart(container)
-  } finally {
-    operationLoading.value = false
-  }
-}
-
-const handleStop = async (container: ContainerStatus) => {
-  operationLoading.value = true
-  try {
-    await containerHooks.handleStop(container)
-  } finally {
-    operationLoading.value = false
-  }
-}
-
-const handleRestart = async (container: ContainerStatus) => {
-  operationLoading.value = true
-  try {
-    await containerHooks.handleRestart(container)
-  } finally {
-    operationLoading.value = false
-  }
-}
-
-const handleUpdate = async (container: ContainerStatus) => {
-  await containerHooks.handleUpdate(container)
-}
-
-const handleDelete = async (container: ContainerStatus) => {
-  operationLoading.value = true
-  try {
-    await containerHooks.handleDelete(container)
-  } finally {
-    operationLoading.value = false
-  }
-}
-
-// 处理导出容器
-const handleExport = async (container: ContainerStatus) => {
-  await containerHooks.handleExport(container)
-}
+const handleStart = (container: ContainerStatus) => containerHooks.handleStart(container)
+const handleStop = (container: ContainerStatus) => containerHooks.handleStop(container)
+const handleRestart = (container: ContainerStatus) => containerHooks.handleRestart(container)
+const handleUpdate = (container: ContainerStatus) => containerHooks.handleUpdate(container)
+const handleDelete = (container: ContainerStatus) => containerHooks.handleDelete(container)
+const handleExport = (container: ContainerStatus) => containerHooks.handleExport(container)
 
 const handleLogs = async (container: ContainerStatus) => {
   currentContainer.value = container
@@ -422,8 +385,8 @@ const handleCreateContainer = () => {
   router.push({ name: 'container-create' })
 }
 
-const handleBatchUpdate = async () => {
-  await containerHooks.handleBatchUpdate()
+const handleBatchUpdate = () => {
+  containerHooks.handleBatchUpdate()
 }
 
 const handleRefresh = async () => {

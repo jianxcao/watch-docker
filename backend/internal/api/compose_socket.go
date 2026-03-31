@@ -117,6 +117,26 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 	}
 }
 
+// handleComposeUpExistingWebSocket 处理已有 Compose 项目的 up 操作 WebSocket（含 pull 进度）
+func (s *Server) handleComposeUpExistingWebSocket() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		projectName := c.Param("projectName")
+		composeFile := c.Query("composeFile")
+
+		if projectName == "" || composeFile == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing projectName or composeFile"})
+			return
+		}
+
+		projectPath := path.Dir(composeFile)
+		key := fmt.Sprintf("compose-up-existing-%s", projectName)
+
+		s.streamManagerBytes.HandleWebSocket(c, key, func() wsstream.StreamSource[[]byte] {
+			return wsstream.NewComposeUpExistingSource(projectPath, projectName)
+		})
+	}
+}
+
 // handleComposePullWebSocket 处理 Compose 项目拉取镜像的 WebSocket 连接
 func (s *Server) handleComposePullWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
