@@ -231,26 +231,24 @@ const dropdownOptions = computed<DropdownOption[]>(() => {
       icon: renderIcon(LogIcon),
     },
   )
-  if (project.status !== 'unknown') {
-    let label = '删除应用'
-    if (project.status === 'draft' || project.status === 'created_stack') {
-      label = '删除配置'
-    }
-    options.push(
-      {
-        type: 'divider',
-        key: 'divider2',
-      },
-      {
-        label: label,
-        key: 'delete',
-        icon: renderIcon(TrashOutline),
-        props: {
-          style: 'color: #ff4d4f',
-        },
-      },
-    )
+  let label = '删除应用'
+  if (project.status === 'draft' || project.status === 'created_stack') {
+    label = '删除配置'
   }
+  options.push(
+    {
+      type: 'divider',
+      key: 'divider2',
+    },
+    {
+      label: label,
+      key: 'delete',
+      icon: renderIcon(TrashOutline),
+      props: {
+        style: 'color: #ff4d4f',
+      },
+    },
+  )
 
   return options
 })

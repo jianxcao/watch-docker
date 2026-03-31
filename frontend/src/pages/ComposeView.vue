@@ -288,12 +288,15 @@ const handleSortSelect = (key: string) => {
 //   }
 // })
 
-watchEffect(() => {
-  if (isComposeEnabled.value) {
-    composeStore.fetchProjects()
-  }
-})
-
+watch(
+  isComposeEnabled,
+  (enabled) => {
+    if (enabled) {
+      composeStore.fetchProjects()
+    }
+  },
+  { immediate: true },
+)
 const visibility = useDocumentVisibility()
 
 watch(visibility, (newVal) => {
