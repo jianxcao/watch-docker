@@ -1,0 +1,2 @@
+import{Qt as e,Yt as t,hn as n,nn as r}from"./ui-Cv1Ns3ON.js";var i={xmlns:`http://www.w3.org/2000/svg`,"xmlns:xlink":`http://www.w3.org/1999/xlink`,viewBox:`0 0 512 512`},a=r({name:`EllipsisHorizontal`,render:function(r,a){return n(),e(`svg`,i,a[0]||=[t(`circle`,{cx:`256`,cy:`256`,r:`48`,fill:`currentColor`},null,-1),t(`circle`,{cx:`416`,cy:`256`,r:`48`,fill:`currentColor`},null,-1),t(`circle`,{cx:`96`,cy:`256`,r:`48`,fill:`currentColor`},null,-1)])}});export{a as t};
+//# sourceMappingURL=EllipsisHorizontal-jldVofad.js.map
