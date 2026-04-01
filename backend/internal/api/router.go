@@ -44,7 +44,7 @@ type Server struct {
 func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
-	// r.Use(ginzap(logger))
+	r.Use(auth.SecurityHeadersMiddleware())
 
 	// 创建 WebSocket 管理器（string 类型用于 JSON 文本）
 	streamManagerString := wsstream.NewStreamManager[string]()
@@ -224,6 +224,15 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
+		clientIP := c.ClientIP()
+		limiter := auth.GetLoginRateLimiter()
+
+		if limiter.IsBlocked(clientIP) {
+			s.logger.Warn("login blocked due to rate limit", zap.String("ip", clientIP))
+			c.JSON(http.StatusTooManyRequests, NewErrorResCode(CodeBadRequest, "登录尝试次数过多，请稍后再试"))
+			return
+		}
+
 		var req LoginRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "用户名和密码不能为空"))
@@ -232,10 +241,17 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 
 		// 验证用户凭据
 		if !auth.ValidateCredentials(req.Username, req.Password) {
-			s.logger.Warn("login failed", zap.String("username", req.Username))
-			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "用户名或密码错误"))
+			blocked, remaining := limiter.RecordFailure(clientIP)
+			s.logger.Warn("login failed", zap.String("username", req.Username), zap.String("ip", clientIP), zap.Int("remaining", remaining))
+			if blocked {
+				c.JSON(http.StatusTooManyRequests, NewErrorResCode(CodeBadRequest, "登录尝试次数过多，请15分钟后再试"))
+			} else {
+				c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "用户名或密码错误"))
+			}
 			return
 		}
+
+		limiter.RecordSuccess(clientIP)
 
 		// 检查是否启用二次验证
 		envCfg := conf.EnvCfg

@@ -8,91 +8,91 @@ export const useCompose = () => {
   const message = useMessage()
   const composeStore = useComposeStore()
 
-  // 执行项目操作的通用处理函数
-  const executeAction = async (
+  // 执行项目操作（阻塞式确认弹窗，用于破坏性操作）
+  const executeActionWithConfirm = async (
     project: ComposeProject,
     action: ComposeAction,
-    confirmMessage?: string,
+    confirmMessage: string,
   ) => {
-    // 如果需要确认对话框
-    if (confirmMessage) {
-      return new Promise<void>((resolve, reject) => {
-        const d = dialog.warning({
-          title: '确认操作',
-          content: confirmMessage,
-          positiveText: '确认',
-          negativeText: '取消',
-          onPositiveClick: async () => {
-            d.loading = true
-            try {
-              await composeStore.executeProjectAction(project, action)
-              resolve()
-            } catch (error) {
-              reject(error)
-            } finally {
-              d.loading = false
-            }
-          },
-          onNegativeClick: () => {
-            reject(new Error('用户取消操作'))
-          },
-        })
+    return new Promise<void>((resolve, reject) => {
+      const d = dialog.warning({
+        title: '确认操作',
+        content: confirmMessage,
+        positiveText: '确认',
+        negativeText: '取消',
+        onPositiveClick: async () => {
+          d.loading = true
+          try {
+            await composeStore.executeProjectAction(project, action)
+            resolve()
+          } catch (error) {
+            reject(error)
+          } finally {
+            d.loading = false
+          }
+        },
+        onNegativeClick: () => {
+          reject(new Error('用户取消操作'))
+        },
       })
-    } else {
-      // 直接执行操作
-      return composeStore.executeProjectAction(project, action)
-    }
+    })
   }
 
-  // 启动项目
-  const handleStart = async (project: ComposeProject) => {
-    try {
-      await executeAction(project, 'start')
-    } catch (error) {
-      console.error('启动项目失败:', error)
-    }
+  // 执行项目操作（非阻塞式确认弹窗，确认后立即关闭弹窗，卡片展示进度）
+  const executeActionWithQuickConfirm = (
+    project: ComposeProject,
+    action: ComposeAction,
+    confirmMessage: string,
+  ) => {
+    dialog.warning({
+      title: '确认操作',
+      content: confirmMessage,
+      positiveText: '确认',
+      negativeText: '取消',
+      onPositiveClick: () => {
+        composeStore.executeProjectAction(project, action)
+      },
+    })
   }
 
-  // 停止项目
-  const handleStop = async (project: ComposeProject) => {
-    try {
-      await executeAction(project, 'stop')
-    } catch (error) {
-      console.error('停止项目失败:', error)
-    }
-  }
-  // 重启项目
-  const handleRestart = async (project: ComposeProject) => {
-    try {
-      await executeAction(project, 'restart')
-    } catch (error) {
-      console.error('重启项目失败:', error)
-    }
+  // 直接执行操作（无确认弹窗，卡片展示进度）
+  const executeAction = (project: ComposeProject, action: ComposeAction) => {
+    composeStore.executeProjectAction(project, action)
   }
 
-  // 重新创建项目
-  const handleCreate = async (project: ComposeProject) => {
-    try {
-      await executeAction(
-        project,
-        'create',
-        `确定要重新创建项目 "${project.name}" 吗？这将停止并删除所有容器，然后重新创建它们。`,
-      )
-    } catch (error) {
-      console.error('重新创建项目失败:', error)
-    }
+  // 启动项目（直接执行，卡片展示进度）
+  const handleStart = (project: ComposeProject) => {
+    executeAction(project, 'start')
   }
 
-  // 删除项目
+  // 停止项目（直接执行，卡片展示进度）
+  const handleStop = (project: ComposeProject) => {
+    executeAction(project, 'stop')
+  }
+
+  // 重启项目（直接执行，卡片展示进度）
+  const handleRestart = (project: ComposeProject) => {
+    executeAction(project, 'restart')
+  }
+
+  // 重新创建项目（确认后立即关闭弹窗，卡片展示进度）
+  const handleCreate = (project: ComposeProject) => {
+    executeActionWithQuickConfirm(
+      project,
+      'create',
+      `确定要重新创建项目 "${project.name}" 吗？这将停止并删除所有容器，然后重新创建它们。`,
+    )
+  }
+
+  // 删除项目（阻塞式确认，完成后关闭弹窗）
   const handleDelete = async (project: ComposeProject) => {
     try {
-      // 根据项目状态显示不同的删除提示
       const confirmMessage =
         project.status === 'draft' || project.status === 'created_stack'
           ? `确定要删除项目 "${project.name}" 吗？这将删除该项目的配置文件（草稿）。此操作不可撤销！`
           : `确定要删除项目 "${project.name}" 吗？这将停止并删除所有容器、网络和卷。此操作不可撤销！`
 
-      await executeAction(project, 'delete', confirmMessage)
+      await executeActionWithConfirm(project, 'delete', confirmMessage)
     } catch (error) {
       console.error('删除项目失败:', error)
     }

@@ -8,7 +8,9 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    BatchUpdateModal: typeof import('./src/components/BatchUpdateModal.vue')['default']
     ComposeCard: typeof import('./src/components/ComposeCard.vue')['default']
+    ComposeCreateLogsModal: typeof import('./src/components/ComposeCreateLogsModal.vue')['default']
     ComposeCreateProgress: typeof import('./src/components/ComposeCreateProgress.vue')['default']
     ComposeLogsModal: typeof import('./src/components/ComposeLogsModal.vue')['default']
     ComposePullLogsModal: typeof import('./src/components/ComposePullLogsModal.vue')['default']

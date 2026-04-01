@@ -11,15 +11,14 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
 )
 
 // containerShellUpgrader WebSocket 升级器（用于容器 Shell）
 var containerShellUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin:       auth.CheckWebSocketOrigin,
 	HandshakeTimeout:  10 * time.Second,
 	ReadBufferSize:    4096,
 	WriteBufferSize:   4096,

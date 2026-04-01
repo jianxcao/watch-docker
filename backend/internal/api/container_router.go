@@ -33,6 +33,7 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.GET("/containers/:id/shell/ws", s.handleContainerShellWebSocket())
 	protected.POST("/containers/:id/update", s.handleUpdateContainer())
 	protected.POST("/updates/run", s.handleBatchUpdate())
+	protected.GET("/updates/batch/ws", s.handleBatchUpdateWebSocket())
 	protected.POST("/containers/:id/stop", s.handleStopContainer())
 	protected.POST("/containers/:id/start", s.handleStartContainer())
 	protected.POST("/containers/:id/restart", s.handleRestartContainer())

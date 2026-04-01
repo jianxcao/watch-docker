@@ -1,5 +1,5 @@
 import { containerApi } from '@/common/api'
-import type { BatchUpdateResult, ContainerStatus } from '@/common/types'
+import type { BatchUpdateResult, ContainerStatus, ContainerOperationState } from '@/common/types'
 import useStatsWebSocket from '@/hooks/useStatsWebSocket'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -11,6 +11,9 @@ export const useContainerStore = defineStore('container', () => {
   const loading = ref(false)
   const updating = ref(new Set<string>())
   const batchUpdating = ref(false)
+
+  // 操作状态追踪：containerId -> 操作状态
+  const operationStates = ref(new Map<string, ContainerOperationState>())
 
   // WebSocket 相关状态
   const statsWebSocket = useStatsWebSocket()
@@ -42,6 +45,23 @@ export const useContainerStore = defineStore('container', () => {
     error: errorContainers.value.length,
     skipped: skippedContainers.value.length,
   }))
+
+  // 操作状态方法
+  const setOperationState = (id: string, state: ContainerOperationState) => {
+    const map = new Map(operationStates.value)
+    map.set(id, state)
+    operationStates.value = map
+  }
+
+  const clearOperationState = (id: string) => {
+    const map = new Map(operationStates.value)
+    map.delete(id)
+    operationStates.value = map
+  }
+
+  const getOperationState = (id: string): ContainerOperationState => {
+    return operationStates.value.get(id) ?? { type: 'idle' }
+  }
 
   // 方法：获取容器列表
   const fetchContainers = async (isUserCache = true, isHaveUpdate = true) => {
@@ -78,10 +98,11 @@ export const useContainerStore = defineStore('container', () => {
   // 方法：更新单个容器
   const updateContainer = async (id: string, image?: string): Promise<boolean> => {
     updating.value.add(id)
+    setOperationState(id, { type: 'updating', step: 'pulling' })
     try {
       const data = await containerApi.updateContainer(id, image)
       if (data.code === 0) {
-        await fetchContainers() // 重新获取列表
+        await fetchContainers()
         return true
       } else {
         throw new Error(data.msg)
@@ -91,6 +112,7 @@ export const useContainerStore = defineStore('container', () => {
       throw error
     } finally {
       updating.value.delete(id)
+      clearOperationState(id)
     }
   }
 
@@ -100,7 +122,7 @@ export const useContainerStore = defineStore('container', () => {
     try {
       const data = await containerApi.batchUpdate()
       if (data.code === 0) {
-        await fetchContainers() // 重新获取列表
+        await fetchContainers()
         return data.data
       } else {
         throw new Error(data.msg)
@@ -115,10 +137,11 @@ export const useContainerStore = defineStore('container', () => {
 
   // 方法：启动容器
   const startContainer = async (id: string): Promise<boolean> => {
+    setOperationState(id, { type: 'starting' })
     try {
       const data = await containerApi.startContainer(id)
       if (data.code === 0) {
-        await fetchContainers() // 重新获取列表
+        await fetchContainers()
         return true
       } else {
         throw new Error(data.msg)
@@ -126,32 +149,37 @@ export const useContainerStore = defineStore('container', () => {
     } catch (error) {
       console.error('启动容器失败:', error)
       throw error
+    } finally {
+      clearOperationState(id)
     }
   }
 
   // 方法：停止容器
   const stopContainer = async (id: string): Promise<boolean> => {
+    setOperationState(id, { type: 'stopping' })
     try {
       const data = await containerApi.stopContainer(id)
       if (data.code === 0) {
-        await fetchContainers() // 重新获取列表
+        await fetchContainers()
         return true
       } else {
         throw new Error(data.msg)
       }
     } catch (error) {
       console.error('停止容器失败:', error)
-
       throw error
+    } finally {
+      clearOperationState(id)
     }
   }
 
   // 方法：重启容器
   const restartContainer = async (id: string): Promise<boolean> => {
+    setOperationState(id, { type: 'restarting' })
     try {
       const data = await containerApi.restartContainer(id)
       if (data.code === 0) {
-        await fetchContainers() // 重新获取列表
+        await fetchContainers()
         return true
       } else {
         throw new Error(data.msg)
@@ -159,15 +187,18 @@ export const useContainerStore = defineStore('container', () => {
     } catch (error) {
       console.error('重启容器失败:', error)
       throw error
+    } finally {
+      clearOperationState(id)
     }
   }
 
   // 方法：删除容器
   const deleteContainer = async (id: string, force: boolean = false, removeVolumes: boolean = false, removeNetworks: boolean = false): Promise<boolean> => {
+    setOperationState(id, { type: 'deleting' })
     try {
       const data = await containerApi.deleteContainer(id, force, removeVolumes, removeNetworks)
       if (data.code === 0) {
-        await fetchContainers() // 重新获取列表
+        await fetchContainers()
         return true
       } else {
         throw new Error(data.msg)
@@ -175,6 +206,8 @@ export const useContainerStore = defineStore('container', () => {
     } catch (error) {
       console.error('删除容器失败:', error)
       throw error
+    } finally {
+      clearOperationState(id)
     }
   }
 
@@ -204,8 +237,6 @@ export const useContainerStore = defineStore('container', () => {
 
   // WebSocket 容器数据回调处理
   const handleContainersUpdate = (newContainers: ContainerStatus[]) => {
-    // console.debug('WebSocket received containers update:', newContainers.length, 'containers')
-    // 直接使用WebSocket接收到的完整容器数据，包括stats
     const mapContainers = new Map<string, ContainerStatus>()
     newContainers.forEach((container) => {
       mapContainers.set(container.id, container)
@@ -225,20 +256,16 @@ export const useContainerStore = defineStore('container', () => {
   // 方法：导出容器
   const exportContainer = async (id: string): Promise<boolean> => {
     try {
-      // 获取当前的token
       const { getToken } = await import('@/common/axiosConfig')
       const token = getToken()
 
-      // 构建下载URL，将token作为查询参数
       const baseUrl = '/api/v1'
       const downloadUrl = `${baseUrl}/containers/${id}/export?token=${encodeURIComponent(
         token,
       )}&_t=${Date.now()}`
 
-      // 使用window.open直接下载，浏览器会处理大文件和进度
       const downloadWindow = window.open(downloadUrl, '_blank')
 
-      // 检查是否成功打开了下载窗口
       if (!downloadWindow) {
         throw new Error('浏览器阻止了弹窗，请允许弹窗后重试')
       }
@@ -273,6 +300,7 @@ export const useContainerStore = defineStore('container', () => {
     batchUpdating,
     wsConnected,
     wsConnectionState,
+    operationStates,
 
     // 计算属性
     runningContainers,
@@ -298,5 +326,10 @@ export const useContainerStore = defineStore('container', () => {
     exportContainer,
     getContainerDetail,
     statsWebSocket,
+
+    // 操作状态方法
+    setOperationState,
+    clearOperationState,
+    getOperationState,
   }
 })

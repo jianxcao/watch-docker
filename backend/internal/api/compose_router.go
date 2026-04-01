@@ -22,6 +22,7 @@ func (s *Server) setupComposeRoutes(protected *gin.RouterGroup) {
 	protected.GET("/compose/:projectName/yaml", s.handleGetProjectYaml())
 	protected.GET("/compose/logs/:projectName/ws", s.handleComposeLogsWebSocket())
 	protected.GET("/compose/pull/:projectName/ws", s.handleComposePullWebSocket())
+	protected.GET("/compose/up/:projectName/ws", s.handleComposeUpExistingWebSocket())
 	protected.GET("/compose/create-and-up/ws", s.handleComposeCreateAndUpWebSocket())
 }
 

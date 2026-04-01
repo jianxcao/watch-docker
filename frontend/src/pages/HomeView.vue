@@ -91,7 +91,6 @@
           class="action-warning"
           size="large"
           @click="handleBatchUpdate"
-          :loading="containerStore.batchUpdating"
         >
           <template #icon>
             <n-icon>
@@ -200,6 +199,8 @@
         </div>
       </div>
     </Teleport>
+
+    <BatchUpdateModal v-model:show="showBatchUpdateModal" />
   </div>
 </template>
 
@@ -211,6 +212,7 @@ import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
 import { useContainer } from '@/hooks/useContainer'
+import BatchUpdateModal from '@/components/BatchUpdateModal.vue'
 import { useSettingStore } from '@/store/setting'
 import { api } from '@/common/api'
 import SystemIcon from '@/assets/svg/system.svg?component'
@@ -230,6 +232,7 @@ const appStore = useAppStore()
 const containerStore = useContainerStore()
 const imageStore = useImageStore()
 const containerHooks = useContainer()
+const { showBatchUpdateModal } = containerHooks
 const settingStore = useSettingStore()
 const message = useMessage()
 

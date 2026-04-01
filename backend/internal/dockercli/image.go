@@ -20,6 +20,19 @@ type ImageInfo struct {
 	Created     int64    `json:"created"`
 }
 
+// PullProgress Docker pull 进度事件
+type PullProgress struct {
+	Status         string          `json:"status"`
+	ID             string          `json:"id"`
+	Progress       string          `json:"progress"`
+	ProgressDetail *ProgressDetail `json:"progressDetail,omitempty"`
+}
+
+type ProgressDetail struct {
+	Current int64 `json:"current"`
+	Total   int64 `json:"total"`
+}
+
 // ImagePull 拉取镜像（丢弃输出以避免阻塞）
 func (c *Client) ImagePull(ctx context.Context, ref string) error {
 	rc, err := c.docker.ImagePull(ctx, ref, image.PullOptions{})
@@ -29,6 +42,29 @@ func (c *Client) ImagePull(ctx context.Context, ref string) error {
 	defer rc.Close()
 	_, _ = io.Copy(io.Discard, rc)
 	return nil
+}
+
+// ImagePullWithProgress 拉取镜像并通过回调报告进度
+func (c *Client) ImagePullWithProgress(ctx context.Context, ref string, onProgress func(PullProgress)) error {
+	rc, err := c.docker.ImagePull(ctx, ref, image.PullOptions{})
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	decoder := json.NewDecoder(rc)
+	for {
+		var progress PullProgress
+		if err := decoder.Decode(&progress); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if onProgress != nil {
+			onProgress(progress)
+		}
+	}
 }
 
 // ImageInspect 检查镜像是否存在，如果存在返回镜像信息，不存在返回错误

@@ -160,6 +160,9 @@ export interface PortInfo {
   type: string
 }
 
+// 容器错误类型
+export type ContainerErrorType = 'not_found' | 'rate_limited' | 'general' | ''
+
 // 容器状态类型
 export interface ContainerStatus {
   id: string
@@ -169,6 +172,7 @@ export interface ContainerStatus {
   status: 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error' | ''
   skipped: boolean
   skipReason: string
+  errorType?: ContainerErrorType
   labels: Record<string, string>
   lastCheckedAt: string
   startedAt: string // 容器启动时间
@@ -246,6 +250,35 @@ export interface MenuItem {
 
 // 容器操作类型
 export type ContainerAction = 'start' | 'stop' | 'update' | 'delete'
+
+// 容器操作状态（用于卡片进度指示）
+export type ContainerOperationType =
+  | 'idle'
+  | 'starting'
+  | 'stopping'
+  | 'restarting'
+  | 'updating'
+  | 'deleting'
+  | 'exporting'
+
+export interface ContainerOperationState {
+  type: ContainerOperationType
+  step?: 'pulling' | 'stopping' | 'creating' | 'starting'
+}
+
+// Compose 操作状态（用于卡片进度指示）
+export type ComposeOperationType =
+  | 'idle'
+  | 'starting'
+  | 'stopping'
+  | 'restarting'
+  | 'creating'
+  | 'pulling'
+  | 'deleting'
+
+export interface ComposeOperationState {
+  type: ComposeOperationType
+}
 
 // 状态类型
 export type ContainerStatusType = 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error'

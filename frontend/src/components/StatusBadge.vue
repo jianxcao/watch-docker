@@ -1,5 +1,16 @@
 <template>
-  <n-tag :type="badgeType" size="small" round>
+  <n-tooltip v-if="tooltipText" trigger="hover">
+    <template #trigger>
+      <n-tag :type="badgeType" size="small" round>
+        <template #icon>
+          <n-icon :component="statusIcon" />
+        </template>
+        {{ statusText }}
+      </n-tag>
+    </template>
+    {{ tooltipText }}
+  </n-tooltip>
+  <n-tag v-else :type="badgeType" size="small" round>
     <template #icon>
       <n-icon :component="statusIcon" />
     </template>
@@ -15,20 +26,21 @@ import {
   CloseCircleOutline,
   PlayCircleOutline,
   StopCircleOutline,
+  BanOutline,
+  TimeOutline,
 } from '@vicons/ionicons5'
 import MinusCircleOutline from '@/assets/svg/minusCircleOutline.svg?component'
 import type { ContainerStatus } from '@/common/types'
 
 interface Props {
   container: ContainerStatus
-  showRunningStatus?: boolean // 是否显示运行状态而非更新状态
+  showRunningStatus?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   showRunningStatus: false,
 })
 
-// 状态类型
 const badgeType = computed(() => {
   if (props.showRunningStatus) {
     return props.container.running ? 'success' : 'default'
@@ -44,6 +56,12 @@ const badgeType = computed(() => {
     case 'UpdateAvailable':
       return 'info'
     case 'Error':
+      if (props.container.errorType === 'rate_limited') {
+        return 'warning'
+      }
+      if (props.container.errorType === 'not_found') {
+        return 'default'
+      }
       return 'error'
     case 'Skipped':
       return 'default'
@@ -52,7 +70,6 @@ const badgeType = computed(() => {
   }
 })
 
-// 状态文本
 const statusText = computed(() => {
   if (props.showRunningStatus) {
     return props.container.running ? '运行中' : '已停止'
@@ -68,6 +85,12 @@ const statusText = computed(() => {
     case 'UpdateAvailable':
       return '可更新'
     case 'Error':
+      if (props.container.errorType === 'rate_limited') {
+        return '限流'
+      }
+      if (props.container.errorType === 'not_found') {
+        return '未找到'
+      }
       return '错误'
     case 'Skipped':
       return '跳过'
@@ -76,7 +99,22 @@ const statusText = computed(() => {
   }
 })
 
-// 状态图标
+const tooltipText = computed(() => {
+  if (props.container.status !== 'Error' || !props.container.running) {
+    return ''
+  }
+  if (props.container.errorType === 'rate_limited') {
+    return 'Docker Hub 请求频率超限，将在冷却后自动重试'
+  }
+  if (props.container.errorType === 'not_found') {
+    return '远程镜像或标签不存在，请检查镜像名称'
+  }
+  if (props.container.skipReason) {
+    return props.container.skipReason
+  }
+  return ''
+})
+
 const statusIcon = computed(() => {
   if (props.showRunningStatus) {
     return props.container.running ? PlayCircleOutline : StopCircleOutline
@@ -92,6 +130,12 @@ const statusIcon = computed(() => {
     case 'UpdateAvailable':
       return AlertCircleOutline
     case 'Error':
+      if (props.container.errorType === 'rate_limited') {
+        return TimeOutline
+      }
+      if (props.container.errorType === 'not_found') {
+        return BanOutline
+      }
       return CloseCircleOutline
     case 'Skipped':
       return MinusCircleOutline

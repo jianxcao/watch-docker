@@ -123,40 +123,16 @@ export function useContainer() {
     })
   }
 
-  // 批量更新（带确认）
+  // 批量更新 - 打开进度弹窗
+  const showBatchUpdateModal = ref(false)
+
   const handleBatchUpdate = () => {
     const updateableCount = store.updateableContainers.length
-
     if (updateableCount === 0) {
       message.info('当前没有可更新的容器')
       return
     }
-
-    const d = dialog.info({
-      title: '批量更新确认',
-      content: `发现 ${updateableCount} 个可更新的容器，确定要批量更新吗？`,
-      positiveText: '确认更新',
-      negativeText: '取消',
-      onPositiveClick: async () => {
-        try {
-          d.loading = true
-          const result = await store.batchUpdate()
-
-          if (result.updated.length > 0) {
-            message.success(`成功更新 ${result.updated.length} 个容器`)
-          }
-
-          if (Object.keys(result.failed).length > 0) {
-            const failedNames = Object.keys(result.failed)
-            message.warning(`${failedNames.length} 个容器更新失败: ${failedNames.join(', ')}`)
-          }
-        } catch (error: any) {
-          message.error(`批量更新失败: ${error.message}`)
-        } finally {
-          d.loading = false
-        }
-      },
-    })
+    showBatchUpdateModal.value = true
   }
 
   // 获取容器状态颜色
@@ -228,6 +204,9 @@ export function useContainer() {
     handleDelete,
     handleBatchUpdate,
     handleExport,
+
+    // 批量更新弹窗状态
+    showBatchUpdateModal,
 
     // 工具方法
     getStatusColor,
