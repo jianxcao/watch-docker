@@ -160,6 +160,9 @@ export interface PortInfo {
   type: string
 }
 
+// 容器错误类型
+export type ContainerErrorType = 'not_found' | 'rate_limited' | 'general' | ''
+
 // 容器状态类型
 export interface ContainerStatus {
   id: string
@@ -169,6 +172,7 @@ export interface ContainerStatus {
   status: 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error' | ''
   skipped: boolean
   skipReason: string
+  errorType?: ContainerErrorType
   labels: Record<string, string>
   lastCheckedAt: string
   startedAt: string // 容器启动时间

@@ -24,6 +24,7 @@ type ContainerStatus struct {
 	Skipped       bool                      `json:"skipped"`
 	SkippedUpdate bool                      `json:"skippedUpdate"`
 	SkipReason    string                    `json:"skipReason"`
+	ErrorType     string                    `json:"errorType,omitempty"` // not_found | rate_limited | general
 	Labels        map[string]string         `json:"labels"`
 	LastCheckedAt time.Time                 `json:"lastCheckedAt"`
 	StartedAt     string                    `json:"startedAt"`
@@ -155,11 +156,30 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 			}
 
 			if digestResult.Error != nil {
-				logger.Logger.Error("get remote digest",
-					zap.String("image", image),
-					logger.ZapErr(digestResult.Error))
-				st.Status = "Error"
-				st.SkipReason = "registry: " + digestResult.Error.Error()
+				errType := string(digestResult.ErrType)
+				if errType == "" {
+					errType = string(registry.ErrorTypeGeneral)
+				}
+				st.ErrorType = errType
+
+				switch digestResult.ErrType {
+				case registry.ErrorTypeRateLimited:
+					st.Status = "Error"
+					st.SkipReason = "registry 请求频率超限，请稍后重试"
+					logger.Logger.Warn("get remote digest: rate limited",
+						zap.String("image", image))
+				case registry.ErrorTypeNotFound:
+					st.Status = "Error"
+					st.SkipReason = "镜像或标签不存在"
+					logger.Logger.Warn("get remote digest: not found",
+						zap.String("image", image))
+				default:
+					st.Status = "Error"
+					st.SkipReason = "registry: " + digestResult.Error.Error()
+					logger.Logger.Error("get remote digest",
+						zap.String("image", image),
+						logger.ZapErr(digestResult.Error))
+				}
 				result[info.containerIdx] = st
 				continue
 			}

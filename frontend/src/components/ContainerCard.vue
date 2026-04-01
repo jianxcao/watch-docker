@@ -54,6 +54,19 @@
               </template>
               <span>可更新</span>
             </n-tooltip>
+            <n-tooltip
+              :delay="300"
+              v-else-if="container.status === 'Error' && container.errorType"
+            >
+              <template #trigger>
+                <div
+                  class="absolute -top-1 -right-1 w-3 h-3 rounded-full cursor-help"
+                  :class="errorDotClass"
+                >
+                </div>
+              </template>
+              <span>{{ errorTooltipText }}</span>
+            </n-tooltip>
           </div>
         </div>
         <div class="container-status">
@@ -270,6 +283,28 @@ const statusConfig = computed(() => {
   return {
     color: props.container.running ? 'bg-emerald-500' : 'bg-slate-500',
     pulseColor: props.container.running ? 'bg-emerald-400' : 'bg-slate-400',
+  }
+})
+
+const errorDotClass = computed(() => {
+  switch (props.container.errorType) {
+    case 'rate_limited':
+      return 'bg-amber-500'
+    case 'not_found':
+      return 'bg-slate-400'
+    default:
+      return 'bg-red-500'
+  }
+})
+
+const errorTooltipText = computed(() => {
+  switch (props.container.errorType) {
+    case 'rate_limited':
+      return 'Docker Hub 请求频率超限，将在冷却后自动重试'
+    case 'not_found':
+      return '远程镜像或标签不存在'
+    default:
+      return props.container.skipReason || '检查更新时出错'
   }
 })
 

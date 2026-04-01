@@ -1,5 +1,16 @@
 <template>
-  <n-tag v-if="shouldShowBadge" :type="badgeType" size="small" round>
+  <n-tooltip v-if="shouldShowBadge && tooltipText" trigger="hover">
+    <template #trigger>
+      <n-tag :type="badgeType" size="small" round>
+        <template #icon>
+          <n-icon :component="statusIcon" />
+        </template>
+        {{ statusText }}
+      </n-tag>
+    </template>
+    {{ tooltipText }}
+  </n-tooltip>
+  <n-tag v-else-if="shouldShowBadge" :type="badgeType" size="small" round>
     <template #icon>
       <n-icon :component="statusIcon" />
     </template>
@@ -9,7 +20,13 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { CheckmarkCircleOutline, AlertCircleOutline, CloseCircleOutline } from '@vicons/ionicons5'
+import {
+  CheckmarkCircleOutline,
+  AlertCircleOutline,
+  CloseCircleOutline,
+  BanOutline,
+  TimeOutline,
+} from '@vicons/ionicons5'
 import MinusCircleOutline from '@/assets/svg/minusCircleOutline.svg?component'
 import type { ContainerStatus } from '@/common/types'
 
@@ -19,22 +36,16 @@ interface Props {
 
 const props = defineProps<Props>()
 
-// 是否显示更新状态标签
 const shouldShowBadge = computed(() => {
-  // 如果容器没有运行，不显示更新状态
   if (!props.container.running) {
     return false
   }
-
-  // 如果没有状态信息或状态为空，不显示
   if (!props.container.status) {
     return false
   }
-
   return true
 })
 
-// 更新状态类型
 const badgeType = computed(() => {
   switch (props.container.status) {
     case 'UpToDate':
@@ -42,6 +53,12 @@ const badgeType = computed(() => {
     case 'UpdateAvailable':
       return 'info'
     case 'Error':
+      if (props.container.errorType === 'rate_limited') {
+        return 'warning'
+      }
+      if (props.container.errorType === 'not_found') {
+        return 'default'
+      }
       return 'error'
     case 'Skipped':
       return 'default'
@@ -50,7 +67,6 @@ const badgeType = computed(() => {
   }
 })
 
-// 更新状态文本
 const statusText = computed(() => {
   switch (props.container.status) {
     case 'UpToDate':
@@ -58,6 +74,12 @@ const statusText = computed(() => {
     case 'UpdateAvailable':
       return '可更新'
     case 'Error':
+      if (props.container.errorType === 'rate_limited') {
+        return '限流'
+      }
+      if (props.container.errorType === 'not_found') {
+        return '未找到'
+      }
       return '错误'
     case 'Skipped':
       return '跳过'
@@ -66,7 +88,22 @@ const statusText = computed(() => {
   }
 })
 
-// 更新状态图标
+const tooltipText = computed(() => {
+  if (props.container.status !== 'Error') {
+    return ''
+  }
+  if (props.container.errorType === 'rate_limited') {
+    return 'Docker Hub 请求频率超限，将在冷却后自动重试'
+  }
+  if (props.container.errorType === 'not_found') {
+    return '远程镜像或标签不存在，请检查镜像名称'
+  }
+  if (props.container.skipReason) {
+    return props.container.skipReason
+  }
+  return ''
+})
+
 const statusIcon = computed(() => {
   switch (props.container.status) {
     case 'UpToDate':
@@ -74,6 +111,12 @@ const statusIcon = computed(() => {
     case 'UpdateAvailable':
       return AlertCircleOutline
     case 'Error':
+      if (props.container.errorType === 'rate_limited') {
+        return TimeOutline
+      }
+      if (props.container.errorType === 'not_found') {
+        return BanOutline
+      }
       return CloseCircleOutline
     case 'Skipped':
       return MinusCircleOutline
