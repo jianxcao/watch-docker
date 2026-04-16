@@ -27,6 +27,7 @@ declare module 'vue' {
     LoadingView: typeof import('./src/components/LoadingView.vue')['default']
     LogsStreamView: typeof import('./src/components/LogsStreamView.vue')['default']
     MobileDrawer: typeof import('./src/components/MobileDrawer.vue')['default']
+    MobileKeyboard: typeof import('./src/components/Term/MobileKeyboard.vue')['default']
     NAlert: typeof import('naive-ui')['NAlert']
     NAvatar: typeof import('naive-ui')['NAvatar']
     NBadge: typeof import('naive-ui')['NBadge']

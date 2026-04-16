@@ -21,6 +21,14 @@
       />
     </div>
 
+    <MobileKeyboard
+      v-if="!connectionError"
+      v-model:expanded="keyboardExpanded"
+      @key="handleMobileKey"
+      @clear="clearTerminal"
+      @height-change="handleKeyboardHeightChange"
+    />
+
     <!-- 页面标题信息 -->
     <Teleport to="#header" defer>
       <div class="welcome-card">
@@ -52,14 +60,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useWebSocket } from '@vueuse/core'
 import { useMessage, useThemeVars } from 'naive-ui'
 import { RefreshOutline, CloseCircleOutline, TerminalOutline } from '@vicons/ionicons5'
 import TextClearIcon from '@/assets/svg/textClear.svg?component'
 import TermView from '@/components/Term/TermView.vue'
+import MobileKeyboard from '@/components/Term/MobileKeyboard.vue'
 import type { Terminal } from '@xterm/xterm'
 import { useSettingStore } from '@/store/setting'
+import { isMobile, isTablet } from '@/common/utils'
 
 const theme = useThemeVars()
 const message = useMessage()
@@ -69,6 +79,9 @@ const terminal = ref<Terminal>()
 const connectionError = ref<string>('')
 const connecting = ref(false)
 const isTerminalReady = ref(false)
+const isMobileDevice = ref(false)
+const keyboardExpanded = ref(false)
+const keyboardHeight = ref(0)
 
 // 终端配置
 const termConfig = {
@@ -88,7 +101,9 @@ const termConfig = {
 
 // 计算终端高度
 const termHeight = computed(() => {
-  return `calc(100vh - ${settingStore.contentSafeTop + settingStore.contentSafeBottom}px)`
+  const baseHeight = settingStore.contentSafeTop + settingStore.contentSafeBottom
+  const panelHeight = keyboardExpanded.value ? keyboardHeight.value : 0
+  return `calc(100vh - ${baseHeight + panelHeight}px)`
 })
 
 const socketUrl = computed(() => {
@@ -196,6 +211,24 @@ const clearTerminal = () => {
   }
 }
 
+// 处理移动端键盘按键
+const handleMobileKey = (sequence: string) => {
+  if (status.value === 'OPEN') {
+    send(sequence)
+  }
+  terminal.value?.focus()
+}
+
+const handleKeyboardHeightChange = (height: number) => {
+  keyboardHeight.value = height
+}
+
+// 组件挂载时检测移动设备
+onMounted(() => {
+  isMobileDevice.value = isMobile() || isTablet()
+  keyboardExpanded.value = isMobileDevice.value
+})
+
 // 组件卸载时清理
 onUnmounted(() => {
   closeWs()
@@ -228,10 +261,13 @@ onUnmounted(() => {
 .terminal-page {
   display: flex;
   flex-direction: column;
+  height: calc(100vh - var(--content-safe-top) - var(--content-safe-bottom));
+  min-height: calc(100vh - var(--content-safe-top) - var(--content-safe-bottom));
 }
 
 .terminal-container {
   flex: 1;
+  min-height: 0;
   position: relative;
   overflow: hidden;
 }
