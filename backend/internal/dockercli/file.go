@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -127,7 +128,21 @@ func (c *Client) ExecContainer(ctx context.Context, containerID string, cmd []st
 		}
 	}
 
-	// 检查是否有错误输出
+	// 通过 ContainerExecInspect 检查命令的退出码
+	inspectResp, err := c.docker.ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		logger.Logger.Warn("exec inspect failed",
+			zap.String("container", containerID),
+			zap.Strings("cmd", cmd),
+			zap.Error(err))
+	} else if inspectResp.ExitCode != 0 {
+		stderrStr := strings.TrimSpace(stderr.String())
+		if stderrStr == "" {
+			stderrStr = fmt.Sprintf("exit code %d", inspectResp.ExitCode)
+		}
+		return "", fmt.Errorf("command exited with code %d: %s", inspectResp.ExitCode, stderrStr)
+	}
+
 	if stderr.Len() > 0 {
 		logger.Logger.Warn("exec command stderr",
 			zap.String("container", containerID),
@@ -171,34 +186,36 @@ func parseLsOutput(output string) ([]FileEntry, error) {
 		remaining := strings.TrimSpace(matches[5]) // 时间 + 文件名
 
 		// 从 remaining 中分离时间和文件名
-		// 尝试多种时间格式的匹配
+		// 尝试多种时间格式的匹配（优先匹配更长/更具体的格式，避免贪婪匹配截断文件名）
 		var dateStr, namePart string
 
-		// 1. 尝试匹配 YYYY-MM-DD HH:MM:SS 格式（我们的自定义格式）
-		if timeMatch := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(.+)$`).FindStringSubmatch(remaining); len(timeMatch) == 3 {
+		if timeMatch := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+[+-]\d{4})\s+(.+)$`).FindStringSubmatch(remaining); len(timeMatch) == 3 {
+			// 1. --full-time 格式: 2024-01-01 12:00:00.000000000 +0000 或 2024-01-01 12:00:00 +0000
+			dateStr = timeMatch[1]
+			namePart = timeMatch[2]
+		} else if timeMatch := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(.+)$`).FindStringSubmatch(remaining); len(timeMatch) == 3 {
+			// 2. 自定义格式: 2024-01-01 12:00:00
 			dateStr = timeMatch[1]
 			namePart = timeMatch[2]
 		} else if timeMatch := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$`).FindStringSubmatch(remaining); len(timeMatch) == 3 {
-			// 2. 尝试匹配 YYYY-MM-DD HH:MM 格式
+			// 3. ISO 格式: 2024-01-01 12:00
 			dateStr = timeMatch[1]
 			namePart = timeMatch[2]
 		} else if timeMatch := regexp.MustCompile(`^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?)\s+(.+)$`).FindStringSubmatch(remaining); len(timeMatch) == 3 {
-			// 3. 尝试匹配 Jan 01 12:00:00 或 Jan 01 12:00 格式
+			// 4. 传统格式: Jan 01 12:00 或 Jan 01 12:00:00
 			dateStr = timeMatch[1]
 			namePart = timeMatch[2]
 		} else if timeMatch := regexp.MustCompile(`^(\w{3}\s+\d{1,2}\s+\d{4})\s+(.+)$`).FindStringSubmatch(remaining); len(timeMatch) == 3 {
-			// 4. 尝试匹配 Jan 01 2006 格式
+			// 5. 年份格式: Jan 01 2006
 			dateStr = timeMatch[1]
 			namePart = timeMatch[2]
 		} else {
-			// 5. 如果都不匹配，尝试简单分割（取最后一部分作为文件名）
+			// 6. 兜底：取最后一部分作为文件名
 			parts := strings.Fields(remaining)
 			if len(parts) >= 2 {
-				// 最后一个是文件名，前面的是时间
 				namePart = parts[len(parts)-1]
 				dateStr = strings.Join(parts[:len(parts)-1], " ")
 			} else {
-				// 无法分离，跳过这一行
 				logger.Logger.Warn("cannot parse ls line", zap.String("line", line))
 				continue
 			}
@@ -287,14 +304,17 @@ func parseFileTime(timeStr string) string {
 	// 移除多余的空格
 	timeStr = regexp.MustCompile(`\s+`).ReplaceAllString(timeStr, " ")
 
-	// 按优先级尝试多种格式
-	// 优先处理我们自定义的标准格式
+	// 处理 --full-time 格式中的纳秒部分：
+	// "2024-01-01 12:00:00.000000000 +0000" → "2024-01-01 12:00:00 +0000"
+	timeStr = regexp.MustCompile(`(\d{2}:\d{2}:\d{2})\.\d+ `).ReplaceAllString(timeStr, "${1} ")
+
 	formats := []string{
-		"2006-01-02 15:04:05", // 我们的自定义格式（最优先）
-		"2006-01-02 15:04",    // ISO 格式简化版
-		"Jan 02 15:04:05",     // 传统格式
-		"Jan 02 15:04",        // 传统格式简化版
-		"Jan 02 2006",         // 只有日期
+		"2006-01-02 15:04:05 -0700", // --full-time 格式（带时区）
+		"2006-01-02 15:04:05",       // 自定义格式
+		"2006-01-02 15:04",          // ISO 格式
+		"Jan 02 15:04:05",           // 传统格式
+		"Jan 02 15:04",              // 传统格式简化版
+		"Jan 02 2006",               // 只有日期
 	}
 
 	for _, format := range formats {
@@ -327,19 +347,14 @@ func parseFileTime(timeStr string) string {
 }
 
 // ListContainerDirectory 列出容器目录内容
+// 优先使用 exec ls 命令，全部失败时降级到 Docker Archive API
 func (c *Client) ListContainerDirectory(ctx context.Context, containerID, path string) (*FileListResult, error) {
-	// 清理路径防止注入
 	safePath := sanitizePath(path)
 
-	// 尝试多种命令，按优先级排序
 	commands := [][]string{
-		// 1. 尝试使用自定义时间格式（最标准）
 		{"ls", "-la", "--time-style=+%Y-%m-%d %H:%M:%S", safePath},
-		// 2. 尝试使用 ISO 时间格式
 		{"ls", "-la", "--time-style=iso", safePath},
-		// 3. 尝试使用完整时间格式
 		{"ls", "-la", "--full-time", safePath},
-		// 4. 降级到简单的 ls（最后选择）
 		{"ls", "-la", safePath},
 	}
 
@@ -349,7 +364,6 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, path s
 	for i, cmd := range commands {
 		output, lastErr = c.ExecContainer(ctx, containerID, cmd)
 		if lastErr == nil {
-			// 成功执行
 			if i > 0 {
 				logger.Logger.Debug("ls command succeeded",
 					zap.String("container", containerID),
@@ -367,7 +381,12 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, path s
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("failed to list directory: %w", lastErr)
+		// 所有 ls 命令都失败，降级到 Docker Archive API
+		logger.Logger.Info("all ls commands failed, falling back to archive API",
+			zap.String("container", containerID),
+			zap.String("path", safePath),
+			zap.Error(lastErr))
+		return c.listContainerDirectoryFromArchive(ctx, containerID, safePath)
 	}
 
 	entries, err := parseLsOutput(output)
@@ -379,6 +398,118 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, path s
 		Path:    safePath,
 		Entries: entries,
 	}, nil
+}
+
+// listContainerDirectoryFromArchive 通过 Docker Archive API (CopyFromContainer) 列出目录
+// 不依赖容器内的任何 shell 命令，适用于 distroless / scratch 等无 shell 镜像
+func (c *Client) listContainerDirectoryFromArchive(ctx context.Context, containerID, path string) (*FileListResult, error) {
+	reader, _, err := c.docker.CopyFromContainer(ctx, containerID, path)
+	if err != nil {
+		return nil, fmt.Errorf("archive API failed: %w", err)
+	}
+	defer reader.Close()
+
+	tarReader := tar.NewReader(reader)
+	entries := []FileEntry{}
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read tar entry failed: %w", err)
+		}
+
+		name := strings.TrimSuffix(header.Name, "/")
+
+		// CopyFromContainer 返回的 tar 以目标目录作为根
+		// 比如请求 /app，tar 中的条目是: app/, app/file1, app/sub/file2
+		// 第一个条目是目录自身（根），跳过
+		// 只保留第一层子项（不含嵌套子目录的内容）
+		parts := strings.Split(name, "/")
+		if len(parts) <= 1 {
+			// 根条目（目录自身），跳过
+			continue
+		}
+		if len(parts) > 2 {
+			// 嵌套子项，跳过（只要第一层）
+			continue
+		}
+
+		childName := parts[1]
+		if childName == "" || childName == "." || childName == ".." {
+			continue
+		}
+
+		fileType := "other"
+		linkTarget := ""
+		switch header.Typeflag {
+		case tar.TypeDir:
+			fileType = "directory"
+		case tar.TypeReg, tar.TypeRegA:
+			fileType = "file"
+		case tar.TypeSymlink:
+			fileType = "symlink"
+			linkTarget = header.Linkname
+		}
+
+		mode := header.FileInfo().Mode()
+		perms := formatPermissions(mode, header.Typeflag)
+		readonly := mode.Perm()&0222 == 0
+
+		owner := header.Uname
+		group := header.Gname
+		if owner == "" {
+			owner = fmt.Sprintf("%d", header.Uid)
+		}
+		if group == "" {
+			group = fmt.Sprintf("%d", header.Gid)
+		}
+
+		entries = append(entries, FileEntry{
+			Name:        childName,
+			Type:        fileType,
+			Size:        header.Size,
+			Permissions: perms,
+			Owner:       owner,
+			Group:       group,
+			Modified:    header.ModTime.Format(time.RFC3339),
+			LinkTarget:  linkTarget,
+			Readonly:    readonly,
+		})
+	}
+
+	return &FileListResult{
+		Path:    path,
+		Entries: entries,
+	}, nil
+}
+
+// formatPermissions 将 os.FileMode 转为 ls 风格的权限字符串（如 drwxr-xr-x）
+func formatPermissions(mode os.FileMode, tarType byte) string {
+	var buf [10]byte
+
+	switch tarType {
+	case tar.TypeDir:
+		buf[0] = 'd'
+	case tar.TypeSymlink:
+		buf[0] = 'l'
+	default:
+		buf[0] = '-'
+	}
+
+	const rwx = "rwx"
+	perm := mode.Perm()
+	for i := 0; i < 9; i++ {
+		if perm&(1<<uint(8-i)) != 0 {
+			buf[1+i] = rwx[i%3]
+		} else {
+			buf[1+i] = '-'
+		}
+	}
+
+	return string(buf[:])
 }
 
 // sanitizePath 清理文件路径防止命令注入和路径穿越
