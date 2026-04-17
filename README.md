@@ -1141,6 +1141,59 @@ cd frontend && pnpm build
 docker build -t watch-docker .
 ```
 
+### 发布
+
+项目提供了 `release.sh` 一键发布脚本，支持 GoReleaser 二进制构建和 Docker 镜像推送。
+
+#### 前置依赖
+
+- [GoReleaser](https://goreleaser.com/)：`brew install goreleaser`
+- [GitHub CLI](https://cli.github.com/)：`brew install gh`（需先 `gh auth login`）
+- Docker + Buildx（Docker 镜像发布时需要）
+
+#### 常用命令
+
+```bash
+# 全量发布（二进制 + Docker 镜像）
+./release.sh -v v0.1.13
+
+# 仅构建多平台二进制并发布到 GitHub Release（最常用）
+./release.sh -v v0.1.13 --binary-only
+
+# 仅构建 Docker 镜像并推送到 Docker Hub
+./release.sh -v v0.1.13 --docker-only
+
+# 发布 beta/预发布版本（自动标记为 Pre-release，跳过 Homebrew 发布）
+./release.sh -v v0.1.13-beta --binary-only
+
+# 本地测试构建（不推送、不发布，产物在 dist/ 目录）
+./release.sh -v v0.1.13 --dry-run
+
+# 跳过前端构建（已有 static 文件时加速发布）
+./release.sh -v v0.1.13 --binary-only --skip-frontend
+
+# 单架构 Docker 快速构建（调试用）
+./release.sh -v v0.1.13 --docker-only -p linux/arm64
+```
+
+#### 发布流程说明
+
+脚本执行的完整流程：
+
+1. **构建前端** — `pnpm build` 并复制到 `backend/internal/api/static/`
+2. **提交静态文件** — 保持 git 工作区干净（GoReleaser 要求）
+3. **创建/更新 Git Tag** — 自动管理 tag 指向最新 commit
+4. **GoReleaser 构建** — 交叉编译 Linux/macOS/Windows 二进制，生成 tar.gz/zip/deb/rpm
+5. **上传 GitHub Release** — 自动创建 Release 并上传所有构建产物
+6. **Docker 构建**（可选） — Buildx 多架构构建并推送 Docker Hub
+
+#### 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `DOCKER_USER` | Docker Hub 用户名（默认: `jianxcao`） |
+| `GITHUB_TOKEN` | GitHub Token（不提供时自动从 `gh auth token` 获取） |
+
 ---
 
 ## 🤝 贡献
