@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/config"
+	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
@@ -278,6 +279,51 @@ func (c *Client) GetRemoteDigestsBatch(ctx context.Context, imageRefs []string, 
 	}
 
 	// 2. 如果没有需要查询的，直接返回
+	if len(needQuery) == 0 {
+		return results
+	}
+
+	// 2.5 优先通过用户配置的 Docker Hub mirror 查询 docker.io 镜像
+	// 命中的镜像会从 needQuery / imageSpecs 中剔除，剩余镜像继续走 manifestpkg 流程
+	mirrors := dockercli.EnabledMirrorHosts()
+	if len(mirrors) > 0 {
+		ttlForMirror := time.Minute * 5
+		if cfgTmp := config.Get(); cfgTmp != nil && cfgTmp.Scan.CacheTTL > 0 {
+			ttlForMirror = cfgTmp.Scan.CacheTTL.Duration()
+		}
+
+		filteredQuery := needQuery[:0]
+		filteredSpecs := imageSpecs[:0]
+		for i, imageRef := range needQuery {
+			if !dockercli.IsDockerHubImage(imageRef) {
+				filteredQuery = append(filteredQuery, imageRef)
+				filteredSpecs = append(filteredSpecs, imageSpecs[i])
+				continue
+			}
+			body, digest, ok := c.queryDigestViaMirrors(imageRef, mirrors)
+			if !ok {
+				filteredQuery = append(filteredQuery, imageRef)
+				filteredSpecs = append(filteredSpecs, imageSpecs[i])
+				continue
+			}
+
+			childDigest, _ := parseManifest(body)
+			results[imageRef] = DigestResult{
+				IndexDigest: digest,
+				ChildDigest: childDigest,
+			}
+			if normalized, _, _, _, nerr := normalizeImageRef(imageRef); nerr == nil && normalized != "" {
+				c.setCache(normalized, digest, ttlForMirror, ErrorTypeNone)
+			}
+			logger.Logger.Info("mirror 命中，跳过官方查询",
+				zap.String("image", imageRef),
+				zap.String("digest", digest))
+		}
+		needQuery = filteredQuery
+		imageSpecs = filteredSpecs
+	}
+
+	// 全部命中 mirror 时直接返回
 	if len(needQuery) == 0 {
 		return results
 	}

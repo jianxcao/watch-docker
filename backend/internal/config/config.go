@@ -95,10 +95,25 @@ type RegistryAuth struct {
 	Token    string `mapstructure:"token" json:"token"`
 }
 
+// RegistryMirror Docker Hub 镜像加速器配置
+// 仅对 docker.io 镜像生效。配置多个时按数组顺序作为 fallback：
+// 先试第一个启用的 mirror，失败则试第二个，最终回退到官方 registry-1.docker.io。
+//
+// name: 显示名称（仅用于前端展示），例如 "DaoCloud"
+// url: mirror 完整地址（含协议），例如 https://docker.m.daocloud.io
+// enabled: 是否启用
+type RegistryMirror struct {
+	Name    string `mapstructure:"name" json:"name"`
+	URL     string `mapstructure:"url" json:"url"`
+	Enabled bool   `mapstructure:"enabled" json:"enabled"`
+}
+
 // RegistryConfig registry 相关配置容器
 // auth: 支持配置多个 registry 的凭据
+// mirrors: Docker Hub 镜像加速器列表（仅对 docker.io 镜像生效）
 type RegistryConfig struct {
-	Auth []RegistryAuth `mapstructure:"auth" json:"auth"`
+	Auth    []RegistryAuth   `mapstructure:"auth" json:"auth"`
+	Mirrors []RegistryMirror `mapstructure:"mirrors" json:"mirrors"`
 }
 
 // ProxyConfig 代理相关配置

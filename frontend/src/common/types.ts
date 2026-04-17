@@ -196,6 +196,15 @@ export interface RegistryAuth {
   token: string
 }
 
+// Docker Hub 镜像加速器（仅对 docker.io 镜像生效）
+// 多个 mirror 按数组顺序作为 fallback：先尝试第一个启用的，失败则尝试下一个，
+// 全部失败再回退到官方 registry-1.docker.io
+export interface RegistryMirror {
+  name: string
+  url: string
+  enabled: boolean
+}
+
 // 配置类型
 export interface Config {
   server: {
@@ -227,6 +236,7 @@ export interface Config {
   }
   registry: {
     auth: RegistryAuth[]
+    mirrors: RegistryMirror[]
   }
   logging: {
     level: string

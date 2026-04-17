@@ -96,6 +96,96 @@
           </n-form>
         </n-card>
 
+        <!-- 镜像加速 (Docker Hub Mirror) -->
+        <n-card title="镜像加速 (Docker Hub Mirror)" embedded>
+          <div class="mirror-section">
+            <n-alert title="说明" type="info" class="mb-3">
+              <div>
+                仅对 <code>docker.io</code> 镜像生效（如
+                <code>nginx</code>、<code>library/redis</code>、 <code>bitnami/xxx</code>），不影响
+                <code>ghcr.io</code> 等其他 registry。
+              </div>
+              <div class="mt-1">
+                配置多个时按列表顺序作为 fallback：先尝试第一个启用的，失败则尝试下一个，
+                最终回退到官方 <code>registry-1.docker.io</code>。
+              </div>
+              <div class="mt-1">
+                通过 mirror 拉取后会自动 retag 为原始镜像名，对容器配置完全透明。
+              </div>
+            </n-alert>
+
+            <n-space vertical>
+              <div
+                v-for="(mirror, index) in configForm.registry.mirrors"
+                :key="index"
+                class="mirror-item"
+              >
+                <n-card size="small">
+                  <n-form :model="mirror" label-placement="left" label-width="80px">
+                    <n-form-item label="名称">
+                      <n-input v-model:value="mirror.name" placeholder="例如 DaoCloud" />
+                    </n-form-item>
+                    <n-form-item label="地址">
+                      <n-input
+                        v-model:value="mirror.url"
+                        placeholder="https://docker.m.daocloud.io"
+                      />
+                    </n-form-item>
+                    <n-form-item label="启用">
+                      <n-switch v-model:value="mirror.enabled" />
+                    </n-form-item>
+                  </n-form>
+
+                  <template #action>
+                    <n-space>
+                      <n-button size="small" :disabled="index === 0" @click="moveMirror(index, -1)">
+                        <template #icon>
+                          <n-icon><ArrowUpOutline /></n-icon>
+                        </template>
+                        上移
+                      </n-button>
+                      <n-button
+                        size="small"
+                        :disabled="index === configForm.registry.mirrors.length - 1"
+                        @click="moveMirror(index, 1)"
+                      >
+                        <template #icon>
+                          <n-icon><ArrowDownOutline /></n-icon>
+                        </template>
+                        下移
+                      </n-button>
+                      <n-button @click="removeMirror(index)" type="error" size="small" ghost>
+                        删除
+                      </n-button>
+                    </n-space>
+                  </template>
+                </n-card>
+              </div>
+
+              <n-space>
+                <n-dropdown
+                  trigger="click"
+                  :options="mirrorPresetOptions"
+                  @select="onSelectMirrorPreset"
+                >
+                  <n-button type="primary" dashed>
+                    <template #icon>
+                      <n-icon><AddOutline /></n-icon>
+                    </template>
+                    添加常用预设
+                  </n-button>
+                </n-dropdown>
+                <n-button dashed @click="addCustomMirror">
+                  <template #icon>
+                    <n-icon><AddOutline /></n-icon>
+                  </template>
+                  添加自定义
+                </n-button>
+              </n-space>
+            </n-space>
+          </div>
+        </n-card>
+
         <!-- 仓库认证设置 -->
         <n-card title="仓库认证" embedded>
           <div class="registry-auth-section">
@@ -197,8 +287,8 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
-import type { Config } from '@/common/types'
-import { AddOutline, SaveOutline } from '@vicons/ionicons5'
+import type { Config, RegistryMirror } from '@/common/types'
+import { AddOutline, ArrowUpOutline, ArrowDownOutline, SaveOutline } from '@vicons/ionicons5'
 import { configApi } from '@/common/api'
 
 const message = useMessage()
@@ -246,6 +336,7 @@ const configForm = reactive<Config>({
   },
   registry: {
     auth: [],
+    mirrors: [],
   },
   logging: {
     level: 'info',
@@ -293,6 +384,66 @@ const removeAuth = (index: number) => {
   configForm.registry.auth.splice(index, 1)
 }
 
+// ===== 镜像加速 (Docker Hub Mirror) =====
+
+// 常用镜像加速预设（仅展示，可由用户自由编辑）
+const mirrorPresets: Array<{ key: string; name: string; url: string }> = [
+  { key: 'daocloud', name: 'DaoCloud', url: 'https://docker.m.daocloud.io' },
+  { key: '1panel', name: '1Panel', url: 'https://docker.1panel.live' },
+  { key: 'atomhub', name: 'AtomHub', url: 'https://hub.atomgit.com' },
+  { key: 'tencent', name: '腾讯云', url: 'https://mirror.ccs.tencentyun.com' },
+  { key: 'netease', name: '网易', url: 'https://hub-mirror.c.163.com' },
+  { key: 'baidu', name: '百度云', url: 'https://mirror.baidubce.com' },
+  { key: 'ustc', name: '中科大', url: 'https://docker.mirrors.ustc.edu.cn' },
+]
+
+const mirrorPresetOptions = computed(() => {
+  const exists = new Set(
+    configForm.registry.mirrors.map((m) => (m.url || '').replace(/\/+$/, '').toLowerCase()),
+  )
+  return mirrorPresets.map((p) => ({
+    key: p.key,
+    label: `${p.name} (${p.url})`,
+    disabled: exists.has(p.url.toLowerCase()),
+  }))
+})
+
+const onSelectMirrorPreset = (key: string) => {
+  const preset = mirrorPresets.find((p) => p.key === key)
+  if (!preset) {
+    return
+  }
+  const mirror: RegistryMirror = {
+    name: preset.name,
+    url: preset.url,
+    enabled: true,
+  }
+  configForm.registry.mirrors.push(mirror)
+}
+
+const addCustomMirror = () => {
+  configForm.registry.mirrors.push({
+    name: '',
+    url: '',
+    enabled: true,
+  })
+}
+
+const removeMirror = (index: number) => {
+  configForm.registry.mirrors.splice(index, 1)
+}
+
+// direction: -1 上移，1 下移
+const moveMirror = (index: number, direction: -1 | 1) => {
+  const list = configForm.registry.mirrors
+  const target = index + direction
+  if (target < 0 || target >= list.length) {
+    return
+  }
+  const [item] = list.splice(index, 1)
+  list.splice(target, 0, item)
+}
+
 // 保存配置
 const handleSave = async () => {
   if (saving.value) {
@@ -322,6 +473,16 @@ const loadConfig = async () => {
     if (response.code === 0 && response.data?.config) {
       // 将服务器返回的配置合并到表单中
       Object.assign(configForm, response.data.config)
+      // 兼容旧配置：mirrors 字段可能不存在
+      if (!configForm.registry) {
+        configForm.registry = { auth: [], mirrors: [] }
+      }
+      if (!Array.isArray(configForm.registry.mirrors)) {
+        configForm.registry.mirrors = []
+      }
+      if (!Array.isArray(configForm.registry.auth)) {
+        configForm.registry.auth = []
+      }
       message.success('配置加载成功')
     } else {
       throw new Error(response.msg || '获取配置失败')
