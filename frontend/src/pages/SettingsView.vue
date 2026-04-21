@@ -388,6 +388,7 @@ const removeAuth = (index: number) => {
 
 // 常用镜像加速预设（仅展示，可由用户自由编辑）
 const mirrorPresets: Array<{ key: string; name: string; url: string }> = [
+  { key: '1ms', name: '毫秒镜像', url: 'https://docker.1ms.run' },
   { key: 'daocloud', name: 'DaoCloud', url: 'https://docker.m.daocloud.io' },
   { key: '1panel', name: '1Panel', url: 'https://docker.1panel.live' },
   { key: 'atomhub', name: 'AtomHub', url: 'https://hub.atomgit.com' },
