@@ -128,7 +128,8 @@ homebrew_casks:
     repository:
       owner: jianxcao
       name: homebrew-tap
-      token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      # 使用 GoReleaser 模板读环境变量；CI 里在 workflow 的 env 中注入 secrets（见 release.yml）
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     # Casks 默认在 Casks 目录，不需要指定 directory
     homepage: https://github.com/jianxcao/watch-docker
     description: Watch Docker - Docker Container Management and Monitoring Tool
