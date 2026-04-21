@@ -128,7 +128,7 @@ homebrew_casks:
     repository:
       owner: jianxcao
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
     # Casks 默认在 Casks 目录，不需要指定 directory
     homepage: https://github.com/jianxcao/watch-docker
     description: Watch Docker - Docker Container Management and Monitoring Tool

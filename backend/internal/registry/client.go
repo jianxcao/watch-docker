@@ -23,10 +23,10 @@ import (
 type ErrorType string
 
 const (
-	ErrorTypeNone         ErrorType = ""
-	ErrorTypeNotFound     ErrorType = "not_found"
-	ErrorTypeRateLimited  ErrorType = "rate_limited"
-	ErrorTypeGeneral      ErrorType = "general"
+	ErrorTypeNone        ErrorType = ""
+	ErrorTypeNotFound    ErrorType = "not_found"
+	ErrorTypeRateLimited ErrorType = "rate_limited"
+	ErrorTypeGeneral     ErrorType = "general"
 )
 
 type CacheEntry struct {
@@ -221,8 +221,9 @@ type DigestResult struct {
 }
 
 // GetRemoteDigestsBatch 批量获取多个镜像的远程 digest
-// 使用 manifest 库的批量模式，支持批量认证和并发查询
-func (c *Client) GetRemoteDigestsBatch(ctx context.Context, imageRefs []string, isUserCache bool, concurrency int) map[string]DigestResult {
+// 使用 manifest 库的批量模式，支持批量认证和并发查询。
+// 当 cacheOnly=true 时，只读取缓存，不会发起任何远程请求。
+func (c *Client) GetRemoteDigestsBatch(ctx context.Context, imageRefs []string, isUserCache bool, cacheOnly bool, concurrency int) map[string]DigestResult {
 	results := make(map[string]DigestResult)
 
 	if len(imageRefs) == 0 {
@@ -256,6 +257,12 @@ func (c *Client) GetRemoteDigestsBatch(ctx context.Context, imageRefs []string, 
 				}
 				continue
 			}
+		}
+
+		if cacheOnly {
+			// 只读缓存模式：缓存未命中时直接返回空结果，不触发远程查询。
+			results[imageRef] = DigestResult{}
+			continue
 		}
 
 		// 检查该镜像所在 registry 是否被限流

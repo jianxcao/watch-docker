@@ -62,7 +62,12 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 			continue
 		}
 		imageTags[imageID] = img.RepoTags
-		imageDigests[imageID] = img.RepoDigests
+		if len(img.RepoDigests) > 0 {
+			imageDigests[imageID] = img.RepoDigests
+		} else if img.ID != "" {
+			// 本地镜像可能没有 RepoDigests，回退到镜像 ID（sha256:...）
+			imageDigests[imageID] = []string{img.ID}
+		}
 	}
 
 	result := make([]ContainerInfo, 0, len(containers))
@@ -98,13 +103,19 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 			})
 		}
 
+		repoDigests := imageDigests[ct.ImageID]
+		if len(repoDigests) == 0 && ct.ImageID != "" {
+			// ImageInspect 异常或无 RepoDigests 时，继续回退到容器镜像 ID。
+			repoDigests = []string{ct.ImageID}
+		}
+
 		info := ContainerInfo{
 			ID:          ct.ID,
 			Name:        name,
 			Image:       ct.Image,
 			ImageID:     ct.ImageID,
 			RepoTags:    imageTags[ct.ImageID],
-			RepoDigests: imageDigests[ct.ImageID],
+			RepoDigests: repoDigests,
 			Labels:      ct.Labels,
 			State:       ct.State,
 			Status:      ct.Status,

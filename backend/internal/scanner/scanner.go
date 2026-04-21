@@ -101,23 +101,13 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 			continue
 		}
 
-		// 需要查询的容器
-		if isHaveUpdate {
-			imageToContainers[ct.Image] = append(imageToContainers[ct.Image], containerInfo{
-				containerIdx:  i,
-				image:         ct.Image,
-				repoDigests:   ct.RepoDigests,
-				skippedUpdate: dec.SkippedUpdate,
-			})
-		} else {
-			// 只从缓存读取
-			imageToContainers[ct.Image] = append(imageToContainers[ct.Image], containerInfo{
-				containerIdx:  i,
-				image:         ct.Image,
-				repoDigests:   ct.RepoDigests,
-				skippedUpdate: dec.SkippedUpdate,
-			})
-		}
+		// 需要查询的容器。是否允许远程查询由 isHaveUpdate 控制。
+		imageToContainers[ct.Image] = append(imageToContainers[ct.Image], containerInfo{
+			containerIdx:  i,
+			image:         ct.Image,
+			repoDigests:   ct.RepoDigests,
+			skippedUpdate: dec.SkippedUpdate,
+		})
 	}
 
 	// 2. 批量查询所有镜像
@@ -134,7 +124,8 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 		zap.Int("totalContainers", len(containers)),
 		zap.Int("uniqueImages", len(imagesToQuery)))
 
-	digestResults := s.registry.GetRemoteDigestsBatch(ctx, imagesToQuery, isUserCache, concurrency)
+	cacheOnly := !isHaveUpdate
+	digestResults := s.registry.GetRemoteDigestsBatch(ctx, imagesToQuery, isUserCache || cacheOnly, cacheOnly, concurrency)
 
 	// 3. 填充结果
 	for image, infos := range imageToContainers {
@@ -203,13 +194,38 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 }
 
 func compareDigests(currentDigests []string, remoteDigest string) bool {
+	if remoteDigest == "" {
+		return false
+	}
+
 	for _, d := range currentDigests {
-		localDigest := strings.Split(d, "@")[1]
-		if localDigest == remoteDigest {
+		localDigest := extractDigest(d)
+		if localDigest != "" && localDigest == remoteDigest {
 			return true
 		}
 	}
 	return false
+}
+
+func extractDigest(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+
+	if strings.Contains(v, "@") {
+		parts := strings.SplitN(v, "@", 2)
+		if len(parts) == 2 {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+
+	// 支持仅有 digest 的格式，例如 "sha256:...."
+	if strings.HasPrefix(v, "sha256:") {
+		return v
+	}
+
+	return ""
 }
 
 // GetRegistryClient 返回 registry 客户端（用于动态更新凭据）
