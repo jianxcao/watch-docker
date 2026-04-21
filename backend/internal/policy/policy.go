@@ -26,8 +26,11 @@ type Decision struct {
 type Input struct {
 	// ImageRef 容器镜像引用，如 repo:tag 或 repo@sha256:xxx
 	ImageRef string
-	// RepoDigests 本地镜像的 RepoDigests（为空时常代表本地构建未推送）
+	// RepoDigests 本地镜像当前可用于比较的 manifest digests。
+	// 为空只表示“当前没有可比较 digest”，不再等价于“本地构建”。
 	RepoDigests []string
+	// IsLocalImage 表示镜像已被明确识别为本地构建/本地导入
+	IsLocalImage bool
 	// Labels 容器标签，支持策略控制（watchdocker.skip/watchdocker.force 等）
 	Labels map[string]string
 	// FloatingTags 配置的“浮动标签”列表；若非空，仅这些 tag 会被纳入更新检查
@@ -107,8 +110,8 @@ func Evaluate(in Input) Decision {
 	if in.SkipPinned && strings.Contains(in.ImageRef, "@sha256:") {
 		return Decision{Skipped: true, Reason: "pinned digest"}
 	}
-	// skip local build (no RepoDigests)
-	if in.SkipLocal && len(in.RepoDigests) == 0 {
+	// skip local build only when the image origin is explicitly local.
+	if in.SkipLocal && in.IsLocalImage {
 		return Decision{Skipped: true, Reason: "local build"}
 	}
 

@@ -11,23 +11,25 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
 )
 
 type ContainerInfo struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Image       string            `json:"image"`
-	ImageID     string            `json:"imageId"`
-	RepoTags    []string          `json:"repoTags"`
-	RepoDigests []string          `json:"repoDigests"`
-	Labels      map[string]string `json:"labels"`
-	State       string            `json:"state"`
-	Status      string            `json:"status"`
-	Created     int64             `json:"created"`
-	StartedAt   string            `json:"startedAt"` // 容器启动时间
-	Ports       []PortInfo        `json:"ports"`     // 端口映射信息
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Image        string            `json:"image"`
+	ImageID      string            `json:"imageId"`
+	RepoTags     []string          `json:"repoTags"`
+	RepoDigests  []string          `json:"repoDigests"`
+	IsLocalImage bool              `json:"isLocalImage"`
+	Labels       map[string]string `json:"labels"`
+	State        string            `json:"state"`
+	Status       string            `json:"status"`
+	Created      int64             `json:"created"`
+	StartedAt    string            `json:"startedAt"` // 容器启动时间
+	Ports        []PortInfo        `json:"ports"`     // 端口映射信息
 }
 
 // PortInfo 端口映射信息
@@ -55,19 +57,18 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 
 	imageTags := make(map[string][]string)
 	imageDigests := make(map[string][]string)
+	imageLocalFlags := make(map[string]bool)
 	for imageID := range imageIDSet {
-		img, err := c.docker.ImageInspect(ctx, imageID)
+		img, err := c.inspectImage(ctx, imageID)
 		if err != nil {
 			// inspect 失败则该镜像的 tags/digests 留空
 			continue
 		}
 		imageTags[imageID] = img.RepoTags
-		if len(img.RepoDigests) > 0 {
-			imageDigests[imageID] = img.RepoDigests
-		} else if img.ID != "" {
-			// 本地镜像可能没有 RepoDigests，回退到镜像 ID（sha256:...）
-			imageDigests[imageID] = []string{img.ID}
+		if digests := comparableRepoDigests(img); len(digests) > 0 {
+			imageDigests[imageID] = digests
 		}
+		imageLocalFlags[imageID] = isLocalImage(img, imageDigests[imageID])
 	}
 
 	result := make([]ContainerInfo, 0, len(containers))
@@ -104,28 +105,86 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 		}
 
 		repoDigests := imageDigests[ct.ImageID]
-		if len(repoDigests) == 0 && ct.ImageID != "" {
-			// ImageInspect 异常或无 RepoDigests 时，继续回退到容器镜像 ID。
-			repoDigests = []string{ct.ImageID}
-		}
 
 		info := ContainerInfo{
-			ID:          ct.ID,
-			Name:        name,
-			Image:       ct.Image,
-			ImageID:     ct.ImageID,
-			RepoTags:    imageTags[ct.ImageID],
-			RepoDigests: repoDigests,
-			Labels:      ct.Labels,
-			State:       ct.State,
-			Status:      ct.Status,
-			Created:     ct.Created,
-			StartedAt:   startedAt,
-			Ports:       ports,
+			ID:           ct.ID,
+			Name:         name,
+			Image:        ct.Image,
+			ImageID:      ct.ImageID,
+			RepoTags:     imageTags[ct.ImageID],
+			RepoDigests:  repoDigests,
+			IsLocalImage: imageLocalFlags[ct.ImageID],
+			Labels:       ct.Labels,
+			State:        ct.State,
+			Status:       ct.Status,
+			Created:      ct.Created,
+			StartedAt:    startedAt,
+			Ports:        ports,
 		}
 		result = append(result, info)
 	}
 	return result, nil
+}
+
+func (c *Client) inspectImage(ctx context.Context, imageID string) (image.InspectResponse, error) {
+	img, err := c.docker.ImageInspect(ctx, imageID, client.ImageInspectWithManifests(true))
+	if err == nil {
+		return img, nil
+	}
+
+	// 旧 daemon 不支持 manifests 查询时退回基础 inspect。
+	return c.docker.ImageInspect(ctx, imageID)
+}
+
+func comparableRepoDigests(img image.InspectResponse) []string {
+	if len(img.RepoDigests) > 0 {
+		return append([]string(nil), img.RepoDigests...)
+	}
+
+	digests := make([]string, 0, len(img.Manifests)+1)
+	seen := make(map[string]struct{}, len(img.Manifests)+1)
+	addDigest := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		digests = append(digests, value)
+	}
+
+	for _, manifest := range img.Manifests {
+		addDigest(manifest.ID)
+		addDigest(manifest.Descriptor.Digest.String())
+	}
+	if img.Descriptor != nil {
+		addDigest(img.Descriptor.Digest.String())
+	}
+
+	return digests
+}
+
+func isLocalImage(img image.InspectResponse, comparableDigests []string) bool {
+	if len(comparableDigests) > 0 {
+		return false
+	}
+	if strings.TrimSpace(img.Parent) != "" {
+		return true
+	}
+	return !hasNamedRepoTag(img.RepoTags)
+}
+
+func hasNamedRepoTag(tags []string) bool {
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || tag == "<none>:<none>" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // InspectContainer 返回容器的详细信息

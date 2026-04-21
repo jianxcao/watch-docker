@@ -82,6 +82,7 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 		dec := policy.Evaluate(policy.Input{
 			ImageRef:           ct.Image,
 			RepoDigests:        ct.RepoDigests,
+			IsLocalImage:       ct.IsLocalImage,
 			Labels:             ct.Labels,
 			FloatingTags:       cfg.Policy.FloatingTags,
 			SkipLocal:          cfg.Policy.SkipLocalBuild,
