@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# 请使用 release.sh 脚本代替此脚本
 # 颜色定义
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
