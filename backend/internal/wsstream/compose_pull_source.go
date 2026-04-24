@@ -2,6 +2,7 @@ package wsstream
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -21,7 +22,7 @@ func NewComposePullSource(projectPath, projectName string) *ComposePullSource {
 	return &ComposePullSource{
 		projectPath: projectPath,
 		projectName: projectName,
-		key:         projectName, // 使用 projectName 作为唯一标识
+		key:         fmt.Sprintf("compose-pull-%s", projectName),
 	}
 }
 
@@ -65,4 +66,3 @@ func (s *ComposePullSource) Stop() error {
 func (s *ComposePullSource) GetKey() string {
 	return s.key
 }
-

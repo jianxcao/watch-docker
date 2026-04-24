@@ -121,11 +121,14 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 		imagesToQuery = append(imagesToQuery, img)
 	}
 
-	logger.Logger.Debug("批量扫描镜像",
-		zap.Int("totalContainers", len(containers)),
-		zap.Int("uniqueImages", len(imagesToQuery)))
-
 	cacheOnly := !isHaveUpdate
+
+	if !isUserCache && !cacheOnly {
+		logger.Logger.Debug("批量扫描镜像",
+			zap.Int("totalContainers", len(containers)),
+			zap.Int("uniqueImages", len(imagesToQuery)))
+	}
+
 	digestResults := s.registry.GetRemoteDigestsBatch(ctx, imagesToQuery, isUserCache || cacheOnly, cacheOnly, concurrency)
 
 	// 3. 填充结果
