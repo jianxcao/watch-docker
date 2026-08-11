@@ -559,7 +559,7 @@ const handleViewContainerLogs = (container: ContainerStatus) => {
 
 // 返回
 const handleBack = () => {
-  router.push({ name: 'compose' })
+  router.push({ name: 'compose', query: route.query })
 }
 
 // 监听项目名称变化

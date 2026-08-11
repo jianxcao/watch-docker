@@ -121,7 +121,7 @@
 </template>
 
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useSettingStore } from '@/store/setting'
 import { useCompose } from '@/hooks/useCompose'
 import { useResponsive } from '@/hooks/useResponsive'
@@ -145,7 +145,15 @@ import { computed, ref, watchEffect } from 'vue'
 import { NIcon, type DropdownOption } from 'naive-ui'
 import { renderIcon, sleep } from '@/common/utils'
 import type { ComposeProject } from '@/common/types'
+import {
+  buildComposeListQuery,
+  parseComposeListQuery,
+  type ComposeListState,
+  type ComposeSortOrder,
+  type ComposeStatusFilter,
+} from './composeListQuery'
 
+const route = useRoute()
 const router = useRouter()
 const showLogsModal = ref(false)
 const currentProject = ref<ComposeProject | null>(null)
@@ -157,11 +165,25 @@ const composeStore = useComposeStore()
 const { handleRefresh } = useCompose()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 
-// 响应式状态
-const searchKeyword = ref('')
-const statusFilter = ref<string>('')
-const sortBy = ref<string>('name')
-const sortOrder = ref<'asc' | 'desc'>('asc')
+const composeListState = computed(() => parseComposeListQuery(route.query))
+
+const updateComposeListState = (patch: Partial<ComposeListState>) => {
+  const state = { ...composeListState.value, ...patch }
+  void router.replace({ query: buildComposeListQuery(route.query, state) })
+}
+
+const searchKeyword = computed({
+  get: () => composeListState.value.search,
+  set: (search: string) => updateComposeListState({ search }),
+})
+
+const statusFilter = computed({
+  get: () => composeListState.value.statusFilter,
+  set: (statusFilter: ComposeStatusFilter) => updateComposeListState({ statusFilter }),
+})
+
+const sortBy = computed(() => composeListState.value.sortBy)
+const sortOrder = computed(() => composeListState.value.sortOrder)
 
 const handleViewLogs = (project: ComposeProject) => {
   currentProject.value = project
@@ -260,20 +282,20 @@ const filteredProjects = computed(() => {
 })
 
 // 处理状态筛选选择
-const handleFilterSelect = (key: string) => {
-  statusFilter.value = key
+const handleFilterSelect = (key: string | number) => {
+  if (key === '' || key === 'running' || key === 'exited' || key === 'other') {
+    statusFilter.value = key
+  }
 }
 
 // 处理排序菜单选择
-const handleSortSelect = (key: string) => {
-  if (sortBy.value === key) {
-    // 如果选择的是相同字段，切换升序/降序
-    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
-  } else {
-    // 如果选择的是不同字段，设置新字段并默认为升序
-    sortBy.value = key
-    sortOrder.value = 'asc'
+const handleSortSelect = (key: string | number) => {
+  if (key !== 'name' && key !== 'status') {
+    return
   }
+  const nextOrder: ComposeSortOrder =
+    sortBy.value === key ? (sortOrder.value === 'asc' ? 'desc' : 'asc') : 'asc'
+  updateComposeListState({ sortBy: key, sortOrder: nextOrder })
 }
 
 // 组件挂载后加载数据

@@ -157,7 +157,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { NIcon, type DropdownOption } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
 import { useComposeStore } from '@/store/compose'
@@ -181,6 +181,7 @@ import ComposePullLogsModal from '@/components/ComposePullLogsModal.vue'
 import ComposeCreateLogsModal from '@/components/ComposeCreateLogsModal.vue'
 
 const { handleStart, handleStop, handleRestart, handleDelete } = useCompose()
+const route = useRoute()
 const router = useRouter()
 const showPullLogs = ref(false)
 const showCreateLogs = ref(false)
@@ -317,6 +318,7 @@ const handleCardClick = () => {
     params: {
       projectName: props.project.name,
     },
+    query: route.query,
   })
 }
 
