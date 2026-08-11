@@ -4,8 +4,8 @@ FROM node:22-alpine AS frontend-builder
 # 设置工作目录
 WORKDIR /app
 
-# 安装pnpm
-RUN npm install -g pnpm
+# 固定与 lockfile 生成环境一致的 pnpm，避免构建时自动升级导致配置不兼容
+RUN npm install -g pnpm@10.30.3
 
 # 复制前端代码
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
@@ -56,7 +56,7 @@ FROM alpine:latest
 
 # 安装ca-certificates、timezone数据、wget (用于健康检查)、gosu和shadow-utils
 RUN apk --no-cache add ca-certificates tzdata wget gosu shadow
-RUN apk add --no-cache dumb-init
+RUN apk add --no-cache dumb-init util-linux
 
 # 安装 Docker CLI 和 Docker Compose
 RUN apk add --no-cache docker-cli docker-cli-compose

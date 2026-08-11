@@ -19,6 +19,17 @@ export interface SystemInfo {
   isSecondaryVerificationEnabled?: boolean
   isComposeEnabled?: boolean
 }
+
+export interface ShellOption {
+  label: string
+  value: string
+}
+
+export interface ShellOptions {
+  shells: ShellOption[]
+  defaultShell: string
+  target: 'local' | 'host'
+}
 // 容器资源统计信息
 export interface ContainerStats {
   id: string

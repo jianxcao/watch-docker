@@ -45,6 +45,7 @@ password: "admin" # 登录密码（可通过 USER_PASSWORD 环境变量覆盖）
 enable_2fa: false # 是否启用双因素认证（可通过 IS_SECONDARY_VERIFICATION 覆盖）
 twofa_allowed_domains: "" # 2FA 允许的域名白名单，逗号分隔（可通过 TWOFA_ALLOWED_DOMAINS 覆盖）
 enable_docker_shell: false # 是否开启容器 shell 功能（可通过 IS_OPEN_DOCKER_SHELL 覆盖）
+terminal_target: "local" # local=当前进程环境，host=Linux Docker 宿主机（可通过 TERMINAL_TARGET 覆盖）
 
 # 应用配置
 static_dir: "" # 静态资源目录，空表示使用嵌入资源（可通过 STATIC_DIR 覆盖）
@@ -135,6 +136,7 @@ logging:
 | ---------------------- | ------- | ------------------------------- |
 | `STATIC_DIR`           | `""`    | 静态资源目录（空=使用嵌入资源） |
 | `IS_OPEN_DOCKER_SHELL` | `false` | 是否开启容器 shell              |
+| `TERMINAL_TARGET`      | `local` | 终端目标：local 或 host         |
 | `APP_PATH`             | `""`    | Docker Compose 项目目录         |
 
 ### Docker 业务配置
@@ -207,7 +209,7 @@ export STATIC_DIR="/path/to/static/files"
 static_dir: "/path/to/static/files"
 ```
 
-### 示例 4：开启容器 Shell 功能
+### 示例 4：开启本地 Shell 功能
 
 ```bash
 export IS_OPEN_DOCKER_SHELL=true
@@ -218,7 +220,31 @@ export IS_OPEN_DOCKER_SHELL=true
 ```yaml
 # app.yaml
 enable_docker_shell: true
+terminal_target: "local"
 ```
+
+`local` 在直接安装时进入当前机器；Watch Docker 运行在容器中时进入 Watch Docker 容器。
+
+### 示例 5：开启 Linux Docker 宿主机终端
+
+宿主机终端拥有等同宿主机 root 的能力，必须启用登录认证，且不得暴露到公网。
+
+```yaml
+services:
+  watch-docker:
+    image: jianxcao/watch-docker:latest
+    pid: host
+    privileged: true
+    environment:
+      - USER_NAME=admin
+      - USER_PASSWORD=请替换为强密码
+      - PUID=0
+      - PGID=0
+      - IS_OPEN_DOCKER_SHELL=true
+      - TERMINAL_TARGET=host
+```
+
+Docker Desktop 中的 `host` 是 Docker Linux VM，并不是 macOS 或 Windows 本机。
 
 ## 配置管理最佳实践
 

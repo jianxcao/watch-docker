@@ -1,6 +1,8 @@
 import { imageApi } from '@/common/api'
 import type { ImageInfo } from '@/common/types'
 import { formatBytes } from '@/common/utils'
+import { getToken } from '@/common/axiosConfig'
+import { buildImageDownloadUrl, triggerBrowserDownload } from '@/utils/download'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 export const useImageStore = defineStore('image', () => {
@@ -62,7 +64,7 @@ export const useImageStore = defineStore('image', () => {
     10000,
     {
       immediate: false,
-    }
+    },
   )
 
   // 方法：删除镜像
@@ -108,23 +110,9 @@ export const useImageStore = defineStore('image', () => {
   const downloadImage = async (id: string): Promise<boolean> => {
     downloading.value.add(id)
     try {
-      // 获取当前的token
-      const { getToken } = await import('@/common/axiosConfig')
       const token = getToken()
 
-      // 构建下载URL，将token作为查询参数
-      const baseUrl = '/api/v1'
-      const downloadUrl = `${baseUrl}/images/${id}/download?token=${encodeURIComponent(
-        token
-      )}&_t=${Date.now()}`
-
-      // 使用window.open直接下载，浏览器会处理大文件和进度
-      const downloadWindow = window.open(downloadUrl, '_blank')
-
-      // 检查是否成功打开了下载窗口
-      if (!downloadWindow) {
-        throw new Error('浏览器阻止了弹窗，请允许弹窗后重试')
-      }
+      triggerBrowserDownload(buildImageDownloadUrl(id, token))
 
       // 设置一个短暂的延迟来清除下载状态
       setTimeout(() => {

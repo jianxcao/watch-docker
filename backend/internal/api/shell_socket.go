@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/creack/pty"
@@ -35,21 +37,108 @@ type TerminalMessage struct {
 	Cols uint16 `json:"cols"` // 终端列数
 }
 
+type webSocketMessageWriter interface {
+	SetWriteDeadline(time.Time) error
+	WriteMessage(int, []byte) error
+}
+
+type synchronizedWebSocketWriter struct {
+	mu   sync.Mutex
+	conn webSocketMessageWriter
+}
+
+func (w *synchronizedWebSocketWriter) writeMessage(messageType int, data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
+	}
+	return w.conn.WriteMessage(messageType, data)
+}
+
+func (s *Server) handleShellOptions() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := validateShellAccess(); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
+			return
+		}
+		options, err := currentShellOptions()
+		if err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
+			return
+		}
+		c.JSON(http.StatusOK, NewSuccessRes(options))
+	}
+}
+
+func validateShellAccess() error {
+	if !auth.IsAuthEnabled() {
+		return fmt.Errorf("开启 Shell 必须设置登录，否则非常危险")
+	}
+	if !conf.EnvCfg.IS_OPEN_DOCKER_SHELL {
+		return fmt.Errorf("未开启 Shell 功能，请设置 IS_OPEN_DOCKER_SHELL=true")
+	}
+	return nil
+}
+
+func currentShellOptions() (ShellOptions, error) {
+	target, err := configuredTerminalTarget()
+	if err != nil {
+		return ShellOptions{}, err
+	}
+	root := "/"
+	if target == terminalTargetHost {
+		if err := validateHostRoot("/", hostTargetRoot); err != nil {
+			return ShellOptions{}, err
+		}
+		if _, err := exec.LookPath("nsenter"); err != nil {
+			return ShellOptions{}, fmt.Errorf("未找到 nsenter，请在镜像中安装 util-linux")
+		}
+		root = hostTargetRoot
+	}
+	options := discoverShells(root, os.Getenv("SHELL"))
+	options.Target = target
+	if len(options.Shells) == 0 {
+		return ShellOptions{}, fmt.Errorf("%s 目标中没有可用的 Shell", target)
+	}
+	return options, nil
+}
+
 // handleShellWebSocket 处理 Shell WebSocket 连接
 func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		logger.Logger.Info("Shell WebSocket connection request")
-		if !auth.IsAuthEnabled() {
-			logger.Logger.Warn("开启shell必须设置登录，否则非常危险")
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "开启shell必须设置登录，否则非常危险"})
+		if err := validateShellAccess(); err != nil {
+			logger.Logger.Warn(err.Error())
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 			return
 		}
-		if !conf.EnvCfg.IS_OPEN_DOCKER_SHELL {
-			logger.Logger.Warn("未开启shell功能，请在配置文件中开启,此操作非常危险")
-			c.JSON(http.StatusForbidden, gin.H{"error": "未开启shell功能，请在配置文件中开启,此操作非常危险"})
+		logger.Logger.Warn("开启 Shell 非常危险，请谨慎使用")
+
+		options, err := currentShellOptions()
+		if err != nil {
+			logger.Logger.Error("resolve shell options", zap.Error(err))
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
-		} else {
-			logger.Logger.Warn("开启shell非常危险，请谨慎使用")
+		}
+		selectedShell := strings.TrimSpace(c.Query("shell"))
+		if selectedShell == "" {
+			selectedShell = options.DefaultShell
+		}
+		nsenterPath := ""
+		if options.Target == terminalTargetHost {
+			nsenterPath, err = exec.LookPath("nsenter")
+			if err != nil {
+				logger.Logger.Error("find nsenter", zap.Error(err))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "未找到 nsenter，请在镜像中安装 util-linux"})
+				return
+			}
+		}
+		command, err := resolveShellCommand(options.Target, selectedShell, options, nsenterPath)
+		if err != nil {
+			logger.Logger.Warn("invalid shell selection", zap.String("shell", selectedShell), zap.Error(err))
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
 		}
 		// 升级为 WebSocket 连接
 		conn, err := shellUpgrader.Upgrade(c.Writer, c.Request, nil)
@@ -58,6 +147,7 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 			return
 		}
 		defer conn.Close()
+		writer := &synchronizedWebSocketWriter{conn: conn}
 
 		// 设置连接参数
 		conn.SetReadLimit(1024 * 1024)
@@ -71,14 +161,8 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 		ctx, cancel := context.WithCancel(c.Request.Context())
 		defer cancel()
 
-		// 启动 shell
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/sh"
-		}
-
 		// 创建命令
-		cmd := exec.CommandContext(ctx, shell)
+		cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 		// 设置环境变量，支持中文显示
 		cmd.Env = append(os.Environ(),
 			"TERM=xterm-256color",
@@ -91,12 +175,14 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 		if err != nil {
 			logger.Logger.Error("Failed to start PTY", zap.Error(err))
 			errMsg := fmt.Sprintf("启动终端失败: %v\r\n", err)
-			conn.WriteMessage(websocket.BinaryMessage, []byte(errMsg))
+			_ = writer.writeMessage(websocket.BinaryMessage, []byte(errMsg))
 			return
 		}
 		defer func() {
-			ptmx.Close()
-			cmd.Process.Kill()
+			cancel()
+			_ = ptmx.Close()
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 		}()
 
 		// 设置初始终端大小
@@ -115,10 +201,10 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-					if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					if err := writer.writeMessage(websocket.PingMessage, nil); err != nil {
 						logger.Logger.Warn("WebSocket Ping failed", zap.Error(err))
 						cancel()
+						_ = conn.Close()
 						return
 					}
 				}
@@ -127,7 +213,10 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 
 		// 读取 PTY 输出并发送到 WebSocket
 		go func() {
-			defer cancel()
+			defer func() {
+				cancel()
+				_ = conn.Close()
+			}()
 			buf := make([]byte, 1024)
 			for {
 				select {
@@ -143,8 +232,7 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 					}
 
 					if n > 0 {
-						conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-						if err := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+						if err := writer.writeMessage(websocket.BinaryMessage, buf[:n]); err != nil {
 							logger.Logger.Error("Failed to write message to WebSocket", zap.Error(err))
 							return
 						}

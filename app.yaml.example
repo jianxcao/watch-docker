@@ -50,6 +50,11 @@ static_dir: ""
 # 启用后可以直接在 Web 界面进入容器终端
 enable_docker_shell: false
 
+# 终端目标：local（Watch Docker 进程所在环境）或 host（Linux Docker 宿主机）
+# 环境变量：TERMINAL_TARGET
+# host 模式要求容器配置 pid: host、privileged: true 且 PUID=0
+terminal_target: "local"
+
 # =============================================================================
 # 应用配置
 # =============================================================================
@@ -79,6 +84,7 @@ app_path: ""
 #    twofa_allowed_domains -> TWOFA_ALLOWED_DOMAINS
 #    static_dir            -> STATIC_DIR
 #    enable_docker_shell   -> IS_OPEN_DOCKER_SHELL
+#    terminal_target       -> TERMINAL_TARGET
 #    app_path              -> APP_PATH
 #
 # 4. 修改配置后需要重启应用：

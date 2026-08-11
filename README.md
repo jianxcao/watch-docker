@@ -397,6 +397,7 @@ docker run -d \
 | `TZ`                        | `Asia/Shanghai` | 时区设置                                              |
 | `PORT`                      | `8088`          | 服务端口                                              |
 | `IS_OPEN_DOCKER_SHELL`      | `false`         | 是否开启 Shell 终端功能（⚠️ 高风险）                  |
+| `TERMINAL_TARGET`           | `local`         | 终端目标：`local`（当前环境）或 `host`（Linux 宿主机） |
 | `IS_SECONDARY_VERIFICATION` | `false`         | 是否开启二次验证（OTP/WebAuthn）                      |
 | `TWOFA_ALLOWED_DOMAINS`     | ` `             | WebAuthn 允许的域名白名单（逗号分隔，为空则允许所有） |
 | `APP_PATH`                  | ` `             | Docker Compose 项目所在目录                           |
@@ -577,7 +578,7 @@ Watch Docker 提供了通过 Web 界面访问容器主机 Shell 的功能，方�
 
 **Shell 功能具有极高的安全风险，请务必仔细阅读以下警告：**
 
-- ⚠️ Shell 访问提供了对宿主机的直接命令行访问权限
+- ⚠️ `TERMINAL_TARGET=host` 提供等同宿主机 root 的直接命令行访问权限
 - ⚠️ 可以执行任何系统命令，包括危险操作（如删除文件、修改配置等）
 - ⚠️ 可以访问所有挂载的 Docker Socket，具有完全的 Docker 控制权限
 - ⚠️ 如果被恶意利用，可能导致严重的安全事故
@@ -592,6 +593,7 @@ Shell 功能默认关闭，需要满足以下条件才能开启：
 
 1. **必须启用身份验证** - 必须设置 `USER_NAME` 和 `USER_PASSWORD`
 2. **显式开启功能** - 必须设置环境变量 `IS_OPEN_DOCKER_SHELL=true`
+3. **显式选择目标** - `local` 进入 Watch Docker 进程所在环境，`host` 进入 Linux Docker 宿主机
 
 通过环境变量启用：
 
@@ -616,7 +618,27 @@ services:
       - USER_NAME=admin
       - USER_PASSWORD=your_strong_password
       - IS_OPEN_DOCKER_SHELL=true # 开启 Shell 功能
+      - TERMINAL_TARGET=local # Watch Docker 在容器中运行时，这是容器内部终端
 ```
+
+要进入 Linux Docker 宿主机，必须显式授予高权限：
+
+```yaml
+services:
+  watch-docker:
+    image: jianxcao/watch-docker:latest
+    pid: host
+    privileged: true
+    environment:
+      - USER_NAME=admin
+      - USER_PASSWORD=your_strong_password
+      - PUID=0
+      - PGID=0
+      - IS_OPEN_DOCKER_SHELL=true
+      - TERMINAL_TARGET=host
+```
+
+> `host` 模式仅支持 Linux。Docker Desktop 下进入的是 Docker Linux VM，而不是 macOS 或 Windows 本机。
 
 ### 功能特性
 
@@ -632,7 +654,8 @@ services:
 
 终端使用以下配置：
 
-- **默认 Shell**: 使用系统环境变量 `$SHELL`，如未设置则使用 `/bin/sh`
+- **Shell 选择**: 页面列出目标环境中实际存在且可执行的 `sh`、`bash`、`zsh` 或 `ash`
+- **默认 Shell**: 优先使用可用的 `$SHELL`，否则使用探测结果中的第一个 Shell
 - **终端类型**: `xterm-256color`
 - **字符编码**: `UTF-8 (zh_CN.UTF-8)`
 - **心跳检测**: 30 秒

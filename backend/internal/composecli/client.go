@@ -177,10 +177,6 @@ type ListOutput struct {
 // ScanProjects 扫描发现 Compose 项目
 func (c *Client) ListProjects(ctx context.Context) ([]ComposeProject, error) {
 	projects := c.ScanProjects(ctx)
-	mapScanProjects := make(map[string]ComposeProject)
-	for _, project := range projects {
-		mapScanProjects[project.Name] = project
-	}
 	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
 		ExecPath:      ".",
 		Args:          []string{"ls", "-a", "--format", "json"},
@@ -194,24 +190,75 @@ func (c *Client) ListProjects(ctx context.Context) ([]ComposeProject, error) {
 		logger.Logger.Error("解析项目列表失败", zap.String("output", output), logger.ZapErr(err))
 		return nil, err
 	}
-	for _, item := range listOutput {
-		oStatus := item.Status
-		status, runningCount, exitedCount, createdCount := parseStatusInfo(oStatus)
-		mapScanProjects[item.Name] = ComposeProject{
-			Name:         item.Name,
-			ComposeFile:  item.ConfigFiles,
-			Status:       status,
-			RunningCount: runningCount,
-			ExitedCount:  exitedCount,
-			CreatedCount: createdCount,
-		}
-	}
-	result := make([]ComposeProject, 0, len(mapScanProjects))
-	for _, project := range mapScanProjects {
-		result = append(result, project)
-	}
+	result := mergeComposeProjects(projects, listOutput)
 	logger.Logger.Info("list projects", zap.String("output", output))
 	return result, nil
+}
+
+func mergeComposeProjects(scanned []ComposeProject, runtime []ListOutput) []ComposeProject {
+	result := append([]ComposeProject(nil), scanned...)
+	pathIndexes := make(map[string]int, len(scanned))
+	nameIndexes := make(map[string][]int, len(scanned))
+	for i, project := range scanned {
+		if normalizedPath := normalizeComposePath(project.ComposeFile); normalizedPath != "" {
+			pathIndexes[normalizedPath] = i
+		}
+		nameKey := strings.ToLower(project.Name)
+		nameIndexes[nameKey] = append(nameIndexes[nameKey], i)
+	}
+
+	for _, item := range runtime {
+		project := composeProjectFromListOutput(item)
+		matchIndex := -1
+		for _, configFile := range strings.Split(item.ConfigFiles, ",") {
+			if index, ok := pathIndexes[normalizeComposePath(configFile)]; ok {
+				matchIndex = index
+				break
+			}
+		}
+		if matchIndex == -1 {
+			indexes := nameIndexes[strings.ToLower(item.Name)]
+			if len(indexes) == 1 {
+				matchIndex = indexes[0]
+			}
+		}
+
+		if matchIndex == -1 {
+			result = append(result, project)
+			continue
+		}
+
+		result[matchIndex].Status = project.Status
+		result[matchIndex].RunningCount = project.RunningCount
+		result[matchIndex].ExitedCount = project.ExitedCount
+		result[matchIndex].CreatedCount = project.CreatedCount
+	}
+
+	return result
+}
+
+func normalizeComposePath(composeFile string) string {
+	composeFile = strings.TrimSpace(composeFile)
+	if composeFile == "" {
+		return ""
+	}
+	absPath, err := filepath.Abs(composeFile)
+	if err != nil {
+		return filepath.Clean(composeFile)
+	}
+	return filepath.Clean(absPath)
+}
+
+func composeProjectFromListOutput(item ListOutput) ComposeProject {
+	status, runningCount, exitedCount, createdCount := parseStatusInfo(item.Status)
+	return ComposeProject{
+		Name:         item.Name,
+		ComposeFile:  item.ConfigFiles,
+		Status:       status,
+		RunningCount: runningCount,
+		ExitedCount:  exitedCount,
+		CreatedCount: createdCount,
+	}
 }
 
 // StartProject 使用 Docker API 启动项目

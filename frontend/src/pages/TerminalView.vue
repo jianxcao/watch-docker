@@ -1,7 +1,7 @@
 <template>
   <div class="terminal-page">
     <div class="terminal-container">
-      <div v-if="connectionError" class="terminal-error">
+      <div v-show="connectionError" class="terminal-error">
         <n-icon size="48" :color="theme.errorColor">
           <CloseCircleOutline />
         </n-icon>
@@ -11,7 +11,7 @@
         </n-button>
       </div>
       <TermView
-        v-if="!connectionError"
+        v-show="!connectionError"
         ref="termRef"
         :config="termConfig"
         :height="termHeight"
@@ -39,6 +39,22 @@
           <span>终端</span>
         </div>
         <div class="terminal-actions">
+          <n-tag
+            v-if="terminalTarget"
+            size="small"
+            :type="terminalTarget === 'host' ? 'warning' : 'default'"
+          >
+            {{ terminalTarget === 'host' ? '宿主机' : '本地容器' }}
+          </n-tag>
+          <n-select
+            v-model:value="selectedShell"
+            class="shell-select"
+            size="tiny"
+            :options="shellOptions"
+            :loading="shellOptionsLoading"
+            :disabled="connecting || shellOptionsLoading"
+            @update:value="handleShellChange"
+          />
           <n-button circle size="tiny" @click="reconnect" :loading="connecting">
             <template #icon>
               <n-icon>
@@ -60,7 +76,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { shallowRef, computed, onMounted, onUnmounted } from 'vue'
 import { useWebSocket } from '@vueuse/core'
 import { useMessage, useThemeVars } from 'naive-ui'
 import { RefreshOutline, CloseCircleOutline, TerminalOutline } from '@vicons/ionicons5'
@@ -70,18 +86,27 @@ import MobileKeyboard from '@/components/Term/MobileKeyboard.vue'
 import type { Terminal } from '@xterm/xterm'
 import { useSettingStore } from '@/store/setting'
 import { isMobile, isTablet } from '@/common/utils'
+import { shellApi } from '@/common/api'
+import type { ShellOption } from '@/common/types'
+import { buildTerminalSocketUrl } from '@/utils/terminal'
 
 const theme = useThemeVars()
 const message = useMessage()
 const settingStore = useSettingStore()
-const termRef = ref<InstanceType<typeof TermView>>()
-const terminal = ref<Terminal>()
-const connectionError = ref<string>('')
-const connecting = ref(false)
-const isTerminalReady = ref(false)
-const isMobileDevice = ref(false)
-const keyboardExpanded = ref(false)
-const keyboardHeight = ref(0)
+const termRef = shallowRef<InstanceType<typeof TermView>>()
+const terminal = shallowRef<Terminal>()
+const connectionError = shallowRef('')
+const connecting = shallowRef(false)
+const isTerminalReady = shallowRef(false)
+const isMobileDevice = shallowRef(false)
+const keyboardExpanded = shallowRef(false)
+const keyboardHeight = shallowRef(0)
+const shellOptions = shallowRef<ShellOption[]>([])
+const selectedShell = shallowRef('')
+const terminalTarget = shallowRef<'local' | 'host' | ''>('')
+const shellOptionsLoading = shallowRef(false)
+let shellOptionsRequest: Promise<void> | undefined
+let intentionalDisconnects = 0
 
 // 终端配置
 const termConfig = {
@@ -108,10 +133,52 @@ const termHeight = computed(() => {
 
 const socketUrl = computed(() => {
   const token = settingStore.getToken()
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  return `${protocol}//${host}/api/v1/shell?token=${token}`
+  return buildTerminalSocketUrl(window.location, selectedShell.value, token)
 })
+
+const loadShellOptions = async () => {
+  shellOptionsLoading.value = true
+  try {
+    const response = await shellApi.getOptions()
+    if (response.code !== 0) {
+      throw new Error(response.msg || '无法读取 Shell 配置')
+    }
+    shellOptions.value = response.data.shells
+    selectedShell.value = response.data.defaultShell
+    terminalTarget.value = response.data.target
+    if (!selectedShell.value) {
+      throw new Error('当前终端目标没有可用的 Shell')
+    }
+  } finally {
+    shellOptionsLoading.value = false
+  }
+}
+
+const ensureShellOptions = async () => {
+  if (selectedShell.value) {
+    return
+  }
+  if (!shellOptionsRequest) {
+    shellOptionsRequest = loadShellOptions().catch((error) => {
+      shellOptionsRequest = undefined
+      throw error
+    })
+  }
+  await shellOptionsRequest
+}
+
+const openTerminalConnection = async () => {
+  connecting.value = true
+  connectionError.value = ''
+  try {
+    await ensureShellOptions()
+    openWs()
+  } catch (error: any) {
+    connecting.value = false
+    connectionError.value = error.message || '无法读取 Shell 配置'
+    message.error(connectionError.value)
+  }
+}
 
 // 使用 VueUse 的 useWebSocket
 const {
@@ -121,6 +188,7 @@ const {
   close: closeWs,
 } = useWebSocket(socketUrl, {
   autoReconnect: false,
+  autoConnect: false,
   immediate: false,
   // 直接处理消息事件，支持二进制数据
   onMessage: (_ws, event) => {
@@ -138,6 +206,10 @@ const {
   },
   onDisconnected: () => {
     connecting.value = false
+    if (intentionalDisconnects > 0) {
+      intentionalDisconnects -= 1
+      return
+    }
     if (isTerminalReady.value && !connectionError.value) {
       message.warning('终端连接已断开')
     }
@@ -159,9 +231,7 @@ const handleTermReady = (term: Terminal) => {
   term.writeln('\x1b[90m正在连接到远程 Shell...\x1b[0m')
   term.writeln('')
 
-  // 连接 WebSocket
-  connecting.value = true
-  openWs()
+  void openTerminalConnection()
 }
 
 // 处理用户输入
@@ -178,7 +248,7 @@ const handleTermResize = (size: { cols: number; rows: number }) => {
 }
 
 // 重新连接
-const reconnect = () => {
+const reconnect = async () => {
   if (connecting.value) {
     return
   }
@@ -186,6 +256,9 @@ const reconnect = () => {
   connectionError.value = ''
 
   // 关闭现有连接
+  if (status.value !== 'CLOSED') {
+    intentionalDisconnects += 1
+  }
   closeWs()
 
   // 清空终端
@@ -199,9 +272,14 @@ const reconnect = () => {
     terminal.value.writeln('')
   }
 
-  setTimeout(() => {
-    openWs()
-  }, 100)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  await openTerminalConnection()
+}
+
+const handleShellChange = () => {
+  if (isTerminalReady.value) {
+    void reconnect()
+  }
 }
 
 // 清空终端
@@ -227,10 +305,16 @@ const handleKeyboardHeightChange = (height: number) => {
 onMounted(() => {
   isMobileDevice.value = isMobile() || isTablet()
   keyboardExpanded.value = isMobileDevice.value
+  void ensureShellOptions().catch((error: any) => {
+    connectionError.value = error.message || '无法读取 Shell 配置'
+  })
 })
 
 // 组件卸载时清理
 onUnmounted(() => {
+  if (status.value !== 'CLOSED') {
+    intentionalDisconnects += 1
+  }
   closeWs()
 })
 </script>
@@ -274,7 +358,12 @@ onUnmounted(() => {
 
 .terminal-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+
+  .shell-select {
+    width: 130px;
+  }
 }
 
 .terminal-error {

@@ -9,6 +9,7 @@ export const API_ENDPOINTS = {
   LOGOUT: '/logout',
   AUTH_STATUS: '/auth/status',
   INFO: '/info',
+  SHELL_OPTIONS: '/shell/options',
 
   // 容器相关
   CONTAINERS: '/containers',

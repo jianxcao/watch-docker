@@ -9,6 +9,7 @@ import type {
   ContainerCreateResponse,
   ImageInfo,
   SystemInfo,
+  ShellOptions,
   VolumeListResponse,
   VolumeDetailResponse,
   VolumeCreateRequest,
@@ -63,6 +64,10 @@ export const authApi = {
 
   // 获取系统信息
   getInfo: () => axios.get<{ info: SystemInfo }>(API_ENDPOINTS.INFO),
+}
+
+export const shellApi = {
+  getOptions: () => axios.get<ShellOptions>(API_ENDPOINTS.SHELL_OPTIONS),
 }
 
 // 容器相关API

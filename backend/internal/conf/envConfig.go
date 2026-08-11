@@ -20,6 +20,7 @@ type EnvConfig struct {
 	USER_PASSWORD             string `default:"admin" mapstructure:"password"`
 	STATIC_DIR                string `default:"" mapstructure:"static_dir"` // 空字符串表示使用嵌入式资源
 	IS_OPEN_DOCKER_SHELL      bool   `default:"false" mapstructure:"enable_docker_shell"`
+	TERMINAL_TARGET           string `default:"local" mapstructure:"terminal_target"`
 	APP_PATH                  string `default:"" mapstructure:"app_path"`
 	IS_SECONDARY_VERIFICATION bool   `default:"false" mapstructure:"enable_2fa"`
 	TWOFA_ALLOWED_DOMAINS     string `default:"" mapstructure:"twofa_allowed_domains"` // 逗号分隔的域名白名单，空值表示允许所有域名
@@ -84,6 +85,9 @@ func NewEnvConfig() *EnvConfig {
 			}
 			if v.IsSet("enable_docker_shell") {
 				cfg.IS_OPEN_DOCKER_SHELL = v.GetBool("enable_docker_shell")
+			}
+			if v.IsSet("terminal_target") {
+				cfg.TERMINAL_TARGET = v.GetString("terminal_target")
 			}
 			if v.IsSet("app_path") {
 				cfg.APP_PATH = v.GetString("app_path")
@@ -170,6 +174,10 @@ static_dir: ""
 # 是否开启容器 Shell 功能
 # 启用后可以直接在 Web 界面进入容器终端
 enable_docker_shell: false
+
+# 终端目标：local（当前进程环境）或 host（Linux Docker 宿主机）
+# host 模式要求容器配置 pid: host、privileged: true 且 PUID=0
+terminal_target: "local"
 
 # =============================================================================
 # 应用配置

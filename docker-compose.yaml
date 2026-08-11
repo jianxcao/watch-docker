@@ -3,6 +3,9 @@ services:
     image: jianxcao/watch-docker:latest
     container_name: watch-docker
     hostname: watch-docker
+    # 宿主机终端具有等同 root 的权限。仅在可信的 Linux 主机上启用以下两项：
+    # pid: host
+    # privileged: true
     # 自己无法更新自己，会死求的
     labels:
       - "watchdocker.skip=true"
@@ -22,6 +25,9 @@ services:
       - UMASK=0000
       # 是否开启 shell 功能，危险操作
       - IS_OPEN_DOCKER_SHELL=false
+      # local = Watch Docker 容器终端；host = Linux Docker 宿主机终端
+      # host 模式还必须启用上面的 pid: host、privileged: true，并保持 PUID=0
+      - TERMINAL_TARGET=local
         # 放置 docker yaml文件的目录，注意是所有docker 的目录，不是 watch-docker 的目录
       - APP_PATH=/volume1/docker
       # 是否开启二次验证

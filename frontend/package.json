@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "vitest run",
     "check": "vue-tsc -b",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
@@ -84,6 +85,7 @@
     "vite": "npm:rolldown-vite@^7.1.19",
     "vite-plugin-pwa": "^1.1.0",
     "vite-svg-loader": "^5.1.0",
+    "vitest": "^3.2.7",
     "vue-tsc": "^2.2.12"
   },
   "pnpm": {

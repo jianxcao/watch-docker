@@ -130,6 +130,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		protected.GET("/logs", s.handleLogStream)
 
 		// Shell WebSocket
+		protected.GET("/shell/options", s.handleShellOptions())
 		protected.GET("/shell", s.handleShellWebSocket())
 	}
 	s.setupStaticRoutes(r)
