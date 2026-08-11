@@ -36,3 +36,5 @@ test.sh
 
 .env.local
 dist
+
+.worktrees/

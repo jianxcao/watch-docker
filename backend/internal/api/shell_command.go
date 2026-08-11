@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 )
 
 const (
@@ -41,7 +43,7 @@ type shellCommand struct {
 	Args []string
 }
 
-func discoverShells(root, defaultShell string) ShellOptions {
+func discoverShells(root string, uid int, envShell string) ShellOptions {
 	options := ShellOptions{Shells: make([]ShellOption, 0, len(knownShellPaths))}
 	for _, shellPath := range knownShellPaths {
 		fullPath := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(shellPath, "/")))
@@ -55,9 +57,10 @@ func discoverShells(root, defaultShell string) ShellOptions {
 		})
 	}
 
-	for _, option := range options.Shells {
-		if option.Value == defaultShell {
-			options.DefaultShell = defaultShell
+	loginShell := loginShellForUID(root, uid)
+	for _, candidate := range []string{loginShell, envShell} {
+		if containsShell(options.Shells, candidate) {
+			options.DefaultShell = candidate
 			return options
 		}
 	}
@@ -65,6 +68,31 @@ func discoverShells(root, defaultShell string) ShellOptions {
 		options.DefaultShell = options.Shells[0].Value
 	}
 	return options
+}
+
+func loginShellForUID(root string, uid int) string {
+	passwdPath := filepath.Join(root, "etc", "passwd")
+	contents, err := os.ReadFile(passwdPath)
+	if err != nil {
+		if logger.Logger != nil {
+			logger.Logger.Debug("读取登录 Shell 配置失败，回退到其他探测方式",
+				logger.ZapString("path", passwdPath),
+				logger.ZapErr(err))
+		}
+		return ""
+	}
+	wantedUID := strconv.Itoa(uid)
+	for _, line := range strings.Split(string(contents), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, ":")
+		if len(fields) >= 7 && fields[2] == wantedUID {
+			return strings.TrimSpace(fields[6])
+		}
+	}
+	return ""
 }
 
 func resolveShellCommand(target, selectedShell string, options ShellOptions, nsenterPath string) (shellCommand, error) {

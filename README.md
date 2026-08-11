@@ -655,7 +655,8 @@ services:
 终端使用以下配置：
 
 - **Shell 选择**: 页面列出目标环境中实际存在且可执行的 `sh`、`bash`、`zsh` 或 `ash`
-- **默认 Shell**: 优先使用可用的 `$SHELL`，否则使用探测结果中的第一个 Shell
+- **默认 Shell**: 优先使用当前运行用户在 `/etc/passwd` 中配置的登录 Shell，其次使用可用的 `$SHELL`，最后使用探测结果中的第一个 Shell
+- **选择记忆**: 当前浏览器会分别记住 `local` 和 `host` 上一次选择的有效 Shell
 - **终端类型**: `xterm-256color`
 - **字符编码**: `UTF-8 (zh_CN.UTF-8)`
 - **心跳检测**: 30 秒

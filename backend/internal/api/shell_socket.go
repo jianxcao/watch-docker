@@ -87,6 +87,7 @@ func currentShellOptions() (ShellOptions, error) {
 		return ShellOptions{}, err
 	}
 	root := "/"
+	targetUID := os.Geteuid()
 	if target == terminalTargetHost {
 		if err := validateHostRoot("/", hostTargetRoot); err != nil {
 			return ShellOptions{}, err
@@ -95,8 +96,9 @@ func currentShellOptions() (ShellOptions, error) {
 			return ShellOptions{}, fmt.Errorf("未找到 nsenter，请在镜像中安装 util-linux")
 		}
 		root = hostTargetRoot
+		targetUID = 0
 	}
-	options := discoverShells(root, os.Getenv("SHELL"))
+	options := discoverShells(root, targetUID, os.Getenv("SHELL"))
 	options.Target = target
 	if len(options.Shells) == 0 {
 		return ShellOptions{}, fmt.Errorf("%s 目标中没有可用的 Shell", target)

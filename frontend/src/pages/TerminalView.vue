@@ -44,7 +44,7 @@
             size="small"
             :type="terminalTarget === 'host' ? 'warning' : 'default'"
           >
-            {{ terminalTarget === 'host' ? '宿主机' : '本地容器' }}
+            {{ terminalTargetLabel }}
           </n-tag>
           <n-select
             v-model:value="selectedShell"
@@ -88,7 +88,11 @@ import { useSettingStore } from '@/store/setting'
 import { isMobile, isTablet } from '@/common/utils'
 import { shellApi } from '@/common/api'
 import type { ShellOption } from '@/common/types'
-import { buildTerminalSocketUrl } from '@/utils/terminal'
+import {
+  buildTerminalSocketUrl,
+  rememberShell,
+  selectInitialShell,
+} from '@/utils/terminal'
 
 const theme = useThemeVars()
 const message = useMessage()
@@ -131,6 +135,16 @@ const termHeight = computed(() => {
   return `calc(100vh - ${baseHeight + panelHeight}px)`
 })
 
+const terminalTargetLabel = computed(() => {
+  if (terminalTarget.value === 'host') {
+    return 'Docker 宿主机'
+  }
+  if (terminalTarget.value === 'local') {
+    return '当前运行环境'
+  }
+  return ''
+})
+
 const socketUrl = computed(() => {
   const token = settingStore.getToken()
   return buildTerminalSocketUrl(window.location, selectedShell.value, token)
@@ -143,9 +157,14 @@ const loadShellOptions = async () => {
     if (response.code !== 0) {
       throw new Error(response.msg || '无法读取 Shell 配置')
     }
-    shellOptions.value = response.data.shells
-    selectedShell.value = response.data.defaultShell
     terminalTarget.value = response.data.target
+    shellOptions.value = response.data.shells
+    selectedShell.value = selectInitialShell(
+      response.data.target,
+      response.data.shells,
+      response.data.defaultShell,
+      () => window.localStorage,
+    )
     if (!selectedShell.value) {
       throw new Error('当前终端目标没有可用的 Shell')
     }
@@ -276,7 +295,10 @@ const reconnect = async () => {
   await openTerminalConnection()
 }
 
-const handleShellChange = () => {
+const handleShellChange = (shell: string) => {
+  if (terminalTarget.value) {
+    rememberShell(terminalTarget.value, shell, shellOptions.value, () => window.localStorage)
+  }
   if (isTerminalReady.value) {
     void reconnect()
   }
