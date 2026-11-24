@@ -59,6 +59,40 @@ describe('transformNetworkForm', () => {
     expect(res.networksToCreate).toBeUndefined()
     expect(res.networkConfig).toBeUndefined()
   })
+
+  it('sets networkMode to primary sorted custom network in custom mode', () => {
+    const res = transformNetworkForm(
+      {
+        configMode: 'custom',
+        publishAllPorts: false,
+        dns: [],
+        dnsSearch: [],
+        dnsOptions: [],
+        extraHosts: [],
+        customNetworks: [
+          {
+            name: 'z-custom-net',
+            exists: false,
+            driver: 'bridge',
+            aliases: ['app-z'],
+          },
+          {
+            name: 'a-custom-net',
+            exists: true,
+            aliases: ['app-a'],
+            containerIPv4Address: '172.31.241.10',
+          },
+        ],
+      },
+      false,
+      'my-app',
+    )
+    expect(res.networkMode).toBe('a-custom-net')
+    expect(res.networksToCreate).toHaveLength(1)
+    expect(res.networksToCreate?.[0]?.name).toBe('z-custom-net')
+    expect(res.networkConfig?.endpointsConfig).toHaveProperty('a-custom-net')
+    expect(res.networkConfig?.endpointsConfig).toHaveProperty('z-custom-net')
+  })
 })
 
 describe('transformRuntimeResourceForm', () => {

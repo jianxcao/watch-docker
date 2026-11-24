@@ -156,6 +156,7 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				ID:            ct.ID,
 				Name:          ct.Name,
 				Image:         ct.Image,
+				ImageID:       ct.ImageID,
 				Running:       strings.EqualFold(ct.State, "running"),
 				Labels:        ct.Labels,
 				LastCheckedAt: now,

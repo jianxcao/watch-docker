@@ -442,6 +442,9 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 				c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
 				return
 			}
+			if !hostConfig.NetworkMode.IsHost() && !hostConfig.NetworkMode.IsNone() && !hostConfig.NetworkMode.IsContainer() {
+				hostConfig.NetworkMode = container.NetworkMode(primaryName)
+			}
 			networkConfig = &network.NetworkingConfig{
 				EndpointsConfig: map[string]*network.EndpointSettings{
 					primaryName: primaryEp,

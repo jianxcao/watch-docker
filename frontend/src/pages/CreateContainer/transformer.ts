@@ -276,6 +276,8 @@ export function transformNetworkForm(
 
       // 添加网络连接配置
       if (Object.keys(endpointsConfig).length > 0) {
+        const sortedNetworkNames = Object.keys(endpointsConfig).sort()
+        data.networkMode = sortedNetworkNames[0]
         data.networkConfig = {
           endpointsConfig,
         }

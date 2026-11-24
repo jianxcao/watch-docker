@@ -334,6 +334,7 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 		}
 
 		primaryName := netNames[0]
+		newHostCfg.NetworkMode = container.NetworkMode(primaryName)
 		netCfg = &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
 				primaryName: sanitizeEndpoint(uctx.oldInfo.NetworkSettings.Networks[primaryName]),
