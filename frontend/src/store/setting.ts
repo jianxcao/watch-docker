@@ -105,8 +105,7 @@ export const useSettingStore = defineStore('setting', () => {
     lastFetchedToken = reqToken
     systemInfoLoading.value = true
 
-    let reqPromise!: Promise<SystemInfo | null>
-    reqPromise = (async (): Promise<SystemInfo | null> => {
+    const reqPromise: Promise<SystemInfo | null> = (async (): Promise<SystemInfo | null> => {
       try {
         const res = await authApi.getInfo()
         if (res.code === 0 && res.data?.info && (getToken() || '') === reqToken) {
@@ -117,13 +116,13 @@ export const useSettingStore = defineStore('setting', () => {
       } catch (error) {
         console.log('Failed to fetch system info:', error)
         return null
-      } finally {
-        if (systemInfoInFlight === reqPromise) {
-          systemInfoInFlight = null
-          systemInfoLoading.value = false
-        }
       }
-    })()
+    })().finally(() => {
+      if (systemInfoInFlight === reqPromise) {
+        systemInfoInFlight = null
+        systemInfoLoading.value = false
+      }
+    })
 
     systemInfoInFlight = reqPromise
     return reqPromise

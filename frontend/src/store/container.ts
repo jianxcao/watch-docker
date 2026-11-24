@@ -121,8 +121,7 @@ export const useContainerStore = defineStore('container', () => {
     }
     activeFetchCount++
     loading.value = true
-    let reqPromise!: Promise<void>
-    reqPromise = (async () => {
+    const reqPromise: Promise<void> = (async () => {
       try {
         const data = await containerApi.getContainers(isUserCache, isHaveUpdate)
         if (data.code === 0) {
@@ -155,17 +154,17 @@ export const useContainerStore = defineStore('container', () => {
       } catch (error) {
         console.error('获取容器列表失败:', error)
         throw error
-      } finally {
-        if (isScan) {
-          activeScanCount = Math.max(0, activeScanCount - 1)
-        }
-        activeFetchCount = Math.max(0, activeFetchCount - 1)
-        loading.value = activeFetchCount > 0
-        if (isUserCache && !isHaveUpdate && inFlightCacheFetch === reqPromise) {
-          inFlightCacheFetch = null
-        }
       }
-    })()
+    })().finally(() => {
+      if (isScan) {
+        activeScanCount = Math.max(0, activeScanCount - 1)
+      }
+      activeFetchCount = Math.max(0, activeFetchCount - 1)
+      loading.value = activeFetchCount > 0
+      if (isUserCache && !isHaveUpdate && inFlightCacheFetch === reqPromise) {
+        inFlightCacheFetch = null
+      }
+    })
 
     if (isUserCache && !isHaveUpdate) {
       inFlightCacheFetch = reqPromise

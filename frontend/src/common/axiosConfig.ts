@@ -47,7 +47,10 @@ const detailLockKey = (config: IAxiosRequestConfig, promise: Promise<any>) => {
     config.source?.cancel()
     return p
   }
-  let entry: { promise: Promise<any>; config: IAxiosRequestConfig }
+  const entry: { promise: Promise<any>; config: IAxiosRequestConfig } = {
+    promise,
+    config,
+  }
   const trackedPromise = promise.finally(() => {
     const entries = lockUrl[lockKey]
     if (!Array.isArray(entries)) {
@@ -61,10 +64,7 @@ const detailLockKey = (config: IAxiosRequestConfig, promise: Promise<any>) => {
       delete lockUrl[lockKey]
     }
   })
-  entry = {
-    promise: trackedPromise,
-    config,
-  }
+  entry.promise = trackedPromise
   lockUrl[lockKey].push(entry)
   return trackedPromise
 }

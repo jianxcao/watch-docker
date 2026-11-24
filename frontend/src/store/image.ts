@@ -76,8 +76,7 @@ export const useImageStore = defineStore('image', () => {
     }
     const seq = ++latestFetchSeq
     loading.value = true
-    let reqPromise!: Promise<void>
-    reqPromise = (async () => {
+    const reqPromise: Promise<void> = (async () => {
       try {
         const data = await imageApi.getImages()
         if (data.code === 0) {
@@ -91,15 +90,15 @@ export const useImageStore = defineStore('image', () => {
       } catch (error) {
         console.error('获取镜像列表失败:', error)
         throw error
-      } finally {
-        if (seq === latestFetchSeq) {
-          loading.value = false
-        }
-        if (inFlightFetch === reqPromise) {
-          inFlightFetch = null
-        }
       }
-    })()
+    })().finally(() => {
+      if (seq === latestFetchSeq) {
+        loading.value = false
+      }
+      if (inFlightFetch === reqPromise) {
+        inFlightFetch = null
+      }
+    })
     inFlightFetch = reqPromise
     return reqPromise
   }
