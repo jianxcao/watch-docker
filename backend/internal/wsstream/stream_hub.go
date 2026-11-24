@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
@@ -58,18 +57,20 @@ func isNormalCloseError(err error) bool {
 
 // StreamHub 管理单个数据源的多个客户端连接（泛型版本）
 type StreamHub[T MessageType] struct {
-	source        StreamSource[T]
-	clients       map[*Client[T]]bool
-	register      chan *Client[T]
-	unregister    chan *Client[T]
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	sourceStarted bool
-	done          chan struct{}
-	closing       atomic.Bool
-	key           string
-	manager       *StreamManager[T]
+	source         StreamSource[T]
+	clients        map[*Client[T]]bool
+	register       chan *Client[T]
+	unregister     chan *Client[T]
+	mu             sync.RWMutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	sourceStarted  bool
+	done           chan struct{}
+	sourceDone     chan struct{}
+	sourceDoneOnce sync.Once
+	closing        atomic.Bool
+	key            string
+	manager        *StreamManager[T]
 }
 
 // NewStreamHub 创建新的 StreamHub
@@ -84,6 +85,7 @@ func NewStreamHub[T MessageType](source StreamSource[T], manager *StreamManager[
 		cancel:        cancel,
 		sourceStarted: false,
 		done:          make(chan struct{}),
+		sourceDone:    make(chan struct{}),
 		key:           source.GetKey(),
 		manager:       manager,
 	}
@@ -138,6 +140,17 @@ func (h *StreamHub[T]) Run() {
 				h.stopStreamSource()
 				return
 			}
+
+		case <-h.sourceDone:
+			logger.Logger.Debug("数据源读取结束，关闭所有客户端发送通道以刷出尾部帧", zap.String("key", h.key))
+			h.mu.Lock()
+			for client := range h.clients {
+				close(client.send)
+			}
+			h.clients = make(map[*Client[T]]bool)
+			h.mu.Unlock()
+			h.stopStreamSource()
+			return
 
 		case <-h.ctx.Done():
 			logger.Logger.Debug("StreamHub 被取消", zap.String("key", h.key))
@@ -272,29 +285,10 @@ func (h *StreamHub[T]) closeAllClients() {
 	if h.manager != nil {
 		h.manager.RemoveHubIfMatch(h.key, h)
 	}
-
-	h.mu.RLock()
-	clientCount := len(h.clients)
-	clients := make([]*Client[T], 0, clientCount)
-	for client := range h.clients {
-		clients = append(clients, client)
-	}
-	h.mu.RUnlock()
-
-	logger.Logger.Debug("关闭所有客户端连接",
-		zap.String("key", h.key),
-		zap.Int("clientCount", clientCount))
-
-	go func() {
-		select {
-		case <-time.After(100 * time.Millisecond):
-		case <-h.done:
-		}
-		for _, client := range clients {
-			client.conn.Close()
-		}
-		h.cancel()
-	}()
+	logger.Logger.Debug("通知 StreamHub 刷出尾部帧并停止所有客户端", zap.String("key", h.key))
+	h.sourceDoneOnce.Do(func() {
+		close(h.sourceDone)
+	})
 }
 
 // RegisterClient 安全注册客户端（若 Hub 已退出则返回 false，避免永久阻塞）

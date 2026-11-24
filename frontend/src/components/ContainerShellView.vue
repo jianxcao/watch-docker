@@ -118,6 +118,16 @@ const getWebSocketUrl = () => {
   return token ? `${fullBase}&token=${encodeURIComponent(token)}` : fullBase
 }
 
+const pendingChunks: Array<string | Uint8Array> = []
+
+const appendShellChunk = (chunk: string | Uint8Array) => {
+  if (!terminal.value) {
+    pendingChunks.push(chunk)
+    return
+  }
+  terminal.value.write(chunk)
+}
+
 // 使用 VueUse 的 useWebSocket
 const { status, send, open, close } = useWebSocket(wsUrl, {
   immediate: false, // 不自动连接，等用户点击
@@ -126,18 +136,18 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
   autoConnect: false,
   onMessage: (_ws, event) => {
     const newData = event.data
-    if (!newData || !terminal.value) {
+    if (!newData) {
       return
     }
-    // 处理接收到的数据
+    // 处理接收到的数据（TermView 尚未 @ready 时先缓冲，避免丢失初始提示符）
     if (newData instanceof ArrayBuffer) {
-      terminal.value.write(new Uint8Array(newData))
+      appendShellChunk(new Uint8Array(newData))
     } else if (newData instanceof Blob) {
-      newData.arrayBuffer().then((buffer) => {
-        terminal.value?.write(new Uint8Array(buffer))
+      void newData.arrayBuffer().then((buffer) => {
+        appendShellChunk(new Uint8Array(buffer))
       })
     } else if (typeof newData === 'string') {
-      terminal.value.write(newData)
+      appendShellChunk(newData)
     }
   },
   onConnected: (_ws) => {
@@ -162,6 +172,7 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
   },
   onDisconnected: () => {
     terminal.value = undefined
+    pendingChunks.length = 0
     if (!isUnmounting && !errorMessage.value) {
       message.info('Shell 连接已关闭')
     }
@@ -201,6 +212,7 @@ const connect = () => {
 
   try {
     errorMessage.value = ''
+    pendingChunks.length = 0
     wsUrl.value = getWebSocketUrl()
     console.debug('wsUrl', wsUrl.value)
     open()
@@ -213,12 +225,20 @@ const connect = () => {
 
 // 断开连接
 const disconnect = () => {
+  pendingChunks.length = 0
   close()
 }
 
 // 终端就绪
 const handleTerminalReady = (term: Terminal) => {
   terminal.value = term
+
+  while (pendingChunks.length > 0) {
+    const chunk = pendingChunks.shift()
+    if (chunk !== undefined) {
+      term.write(chunk)
+    }
+  }
 
   // 如果已经连接，发送终端大小
   if (isConnected.value) {
@@ -265,6 +285,7 @@ watch(
   () => {
     errorMessage.value = ''
     terminal.value = undefined
+    pendingChunks.length = 0
     if (status.value !== 'CLOSED') {
       close()
     }
@@ -274,6 +295,7 @@ watch(
 onBeforeUnmount(() => {
   isUnmounting = true
   terminal.value = undefined
+  pendingChunks.length = 0
   close()
 })
 </script>

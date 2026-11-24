@@ -14,6 +14,7 @@ import (
 	"github.com/moby/moby/api/types/image"
 	registrytypes "github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 )
 
@@ -47,12 +48,17 @@ type PullErrorDetail struct {
 
 // ImagePull 拉取镜像（支持私有仓库认证与 Docker Hub Mirror 自动回退）。
 func (c *Client) ImagePull(ctx context.Context, ref string) error {
-	return c.pullWithMirrorFallback(ctx, ref, nil)
+	return c.pullWithMirrorFallback(ctx, ref, nil, nil)
 }
 
 // ImagePullWithProgress 拉取镜像并通过回调报告进度。
 func (c *Client) ImagePullWithProgress(ctx context.Context, ref string, onProgress func(PullProgress)) error {
-	return c.pullWithMirrorFallback(ctx, ref, onProgress)
+	return c.pullWithMirrorFallback(ctx, ref, nil, onProgress)
+}
+
+// ImagePullWithPlatform 按目标平台拉取镜像（支持非宿主机原生架构容器更新与进度回调）。
+func (c *Client) ImagePullWithPlatform(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
+	return c.pullWithMirrorFallback(ctx, ref, platform, onProgress)
 }
 
 func canonicalRegistryHost(host string) string {
@@ -109,12 +115,12 @@ func registryAuthForRef(ref string) string {
 }
 
 // pullWithMirrorFallback 核心拉取逻辑：mirror 顺序尝试 + 官方 fallback + 自动 retag。
-func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, onProgress func(PullProgress)) error {
+func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
 	mirrors := EnabledMirrorHosts()
 	canUseMirror := IsDockerHubImage(ref) && len(mirrors) > 0
 
 	if !canUseMirror {
-		return c.pullSingleAttempt(ctx, ref, onProgress)
+		return c.pullSingleAttempt(ctx, ref, platform, onProgress)
 	}
 
 	var lastErr error
@@ -128,7 +134,7 @@ func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, onProgr
 			zap.String("mirror", host),
 			zap.String("mirrorRef", mirrorRef))
 
-		if err := c.pullSingleAttempt(ctx, mirrorRef, onProgress); err != nil {
+		if err := c.pullSingleAttempt(ctx, mirrorRef, platform, onProgress); err != nil {
 			lastErr = err
 			logger.Logger.Warn("mirror 拉取失败，尝试下一个",
 				zap.String("mirror", host),
@@ -175,13 +181,16 @@ func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, onProgr
 	logger.Logger.Warn("所有 mirror 拉取失败，回退到官方 registry",
 		zap.String("ref", ref),
 		zap.NamedError("lastMirrorError", lastErr))
-	return c.pullSingleAttempt(ctx, ref, onProgress)
+	return c.pullSingleAttempt(ctx, ref, platform, onProgress)
 }
 
 // pullSingleAttempt 执行单次 pull，并解析流中的 errorDetail。
-func (c *Client) pullSingleAttempt(ctx context.Context, ref string, onProgress func(PullProgress)) error {
+func (c *Client) pullSingleAttempt(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
 	opts := client.ImagePullOptions{
 		RegistryAuth: registryAuthForRef(ref),
+	}
+	if platform != nil && platform.OS != "" && platform.Architecture != "" {
+		opts.Platforms = []ocispec.Platform{*platform}
 	}
 	rc, err := c.docker.ImagePull(ctx, ref, opts)
 	if err != nil {

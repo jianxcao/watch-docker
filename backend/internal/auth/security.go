@@ -102,7 +102,10 @@ func (l *LoginRateLimiter) RecordFailure(key string) (blocked bool, remaining in
 		return false, l.maxAttempts - 1
 	}
 
-	if !attempt.lockedAt.IsZero() && now.Sub(attempt.lockedAt) >= l.lockout {
+	if !attempt.lockedAt.IsZero() {
+		if now.Sub(attempt.lockedAt) < l.lockout {
+			return true, 0
+		}
 		attempt.count = 1
 		attempt.firstTime = now
 		attempt.lockedAt = time.Time{}

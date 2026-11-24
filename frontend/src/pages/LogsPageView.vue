@@ -82,9 +82,6 @@ function getExtraFields(log: LogEntry): Record<string, any> | null {
 
 const scrollToBottom = async () => {
   await nextTick()
-  if (!isNearBottom()) {
-    return
-  }
   if (virtualListRef.value && logs.value.length > 0) {
     virtualListRef.value.scrollTo({ index: logs.value.length - 1, behavior: 'auto' })
   }
@@ -132,9 +129,15 @@ const connectEventSource = () => {
   eventSource = es
 
   es.onopen = () => {
+    if (es !== eventSource) {
+      return
+    }
     connectionError.value = ''
   }
   es.onmessage = (e) => {
+    if (es !== eventSource) {
+      return
+    }
     try {
       const logArray = JSON.parse(e.data)
       if (!Array.isArray(logArray)) {
@@ -159,6 +162,9 @@ const connectEventSource = () => {
     }
   }
   es.onerror = () => {
+    if (es !== eventSource) {
+      return
+    }
     if (es.readyState === EventSource.CLOSED) {
       connectionError.value = '日志流连接已关闭'
       if (authStore.authEnabled) {
@@ -167,7 +173,7 @@ const connectEventSource = () => {
           : {}
         void fetch('/api/v1/config', { headers })
           .then((res) => {
-            if (res.status === 401 || res.status === 403) {
+            if (res.status === 401) {
               authStore.forceLogout()
             }
           })

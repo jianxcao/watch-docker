@@ -183,8 +183,11 @@ export interface ContainerStatus {
   running: boolean
   status: 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error' | ''
   skipped: boolean
+  skippedUpdate?: boolean
   skipReason: string
   errorType?: ContainerErrorType
+  currentDigest?: string[]
+  remoteDigest?: string
   labels: Record<string, string>
   lastCheckedAt: string
   startedAt: string // 容器启动时间

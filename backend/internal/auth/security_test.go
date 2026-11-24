@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 )
@@ -63,5 +64,32 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 	}
 	if CheckWebSocketOrigin(makeReq("localhost:8080", "https://evil.example.com")) {
 		t.Fatal("untrusted origin should be rejected")
+	}
+}
+
+func TestLoginRateLimiterKeepsActiveLockoutAcrossWindowBoundary(t *testing.T) {
+	limiter := &LoginRateLimiter{
+		attempts:    make(map[string]*loginAttempt),
+		maxAttempts: 2,
+		window:      50 * time.Millisecond,
+		lockout:     300 * time.Millisecond,
+	}
+	key := "127.0.0.1|alice"
+
+	if blocked, _ := limiter.RecordFailure(key); blocked {
+		t.Fatal("first failure should not block")
+	}
+	if blocked, _ := limiter.RecordFailure(key); !blocked {
+		t.Fatal("second failure should trigger lockout")
+	}
+
+	// 推进超过 window (50ms) 但仍在 lockout (300ms) 期内
+	limiter.mu.Lock()
+	limiter.attempts[key].firstTime = time.Now().Add(-100 * time.Millisecond)
+	limiter.attempts[key].lockedAt = time.Now().Add(-100 * time.Millisecond)
+	limiter.mu.Unlock()
+
+	if blocked, remaining := limiter.RecordFailure(key); !blocked || remaining != 0 {
+		t.Fatalf("expected active lockout preserved across window boundary, got blocked=%v remaining=%d", blocked, remaining)
 	}
 }

@@ -191,7 +191,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDialog, useMessage, useThemeVars, type DropdownOption } from 'naive-ui'
 import {
@@ -415,6 +415,9 @@ const getStatusText = (status: string) => {
 
 // 加载项目数据
 const loadProjectData = async () => {
+  if (settingStore.systemInfo?.isComposeEnabled === false) {
+    return
+  }
   try {
     // 加载项目列表
     await composeStore.fetchProjects(true)
@@ -484,7 +487,14 @@ const handleDeploy = () => {
     content,
     positiveText: '确认',
     negativeText: '取消',
-    onPositiveClick: () => {
+    onPositiveClick: async () => {
+      if (!yamlContent.value) {
+        await loadYamlContent()
+        if (!yamlContent.value) {
+          return
+        }
+        await nextTick()
+      }
       deployLoading.value = true
       showProgress.value = true
       createProgressRef.value?.start()

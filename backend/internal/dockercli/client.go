@@ -175,13 +175,20 @@ func shortID(id string) string {
 	return id
 }
 
-// InvalidateContainerCache 清除单个容器缓存（例如重启/更新后）
+// InvalidateContainerCache 清除单个容器缓存（例如重启/更新后），兼容短 ID 前缀匹配。
 func (c *Client) InvalidateContainerCache(id string) {
 	if id == "" {
 		return
 	}
 	c.cacheMu.Lock()
 	delete(c.startedCache, id)
+	if len(id) < 64 {
+		for k := range c.startedCache {
+			if strings.HasPrefix(k, id) {
+				delete(c.startedCache, k)
+			}
+		}
+	}
 	c.cacheMu.Unlock()
 }
 

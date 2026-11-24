@@ -157,7 +157,7 @@ const initTerminal = () => {
   }
 
   watchEffect(() => {
-    if (config.disableStdin) {
+    if (props.config?.disableStdin) {
       terminal.value?.textarea?.setAttribute('disabled', 'disabled')
     } else {
       terminal.value?.textarea?.removeAttribute('disabled')

@@ -155,10 +155,11 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 	})
 
 	if result.Error != nil {
-		errMsg := fmt.Sprintf("启动项目命令执行失败: %s\r\n", result.Error.Error())
-		if err := writeError(errMsg); err != nil {
+		errMsg := fmt.Sprintf("启动项目命令执行失败: %s", result.Error.Error())
+		if err := writeError(errMsg + "\r\n"); err != nil {
 			logger.Logger.Error("写入错误消息失败", zap.Error(err))
 		}
+		_ = writeStatus("error", errMsg)
 		logger.Logger.Error("启动命令失败", zap.Error(result.Error))
 		return
 	}
@@ -189,7 +190,9 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 					goto afterUpCommand
 				}
 				logger.Logger.Error("读取 compose up 输出失败", zap.Error(err))
-				writeError(fmt.Sprintf("读取输出失败: %s\r\n", err.Error()))
+				errMsg := fmt.Sprintf("读取输出失败: %s", err.Error())
+				_ = writeError(errMsg + "\r\n")
+				_ = writeStatus("error", errMsg)
 				return
 			}
 		}

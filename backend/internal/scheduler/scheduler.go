@@ -23,6 +23,8 @@ type Scheduler struct {
 	notificationManager *notificationmanager.Manager
 
 	mu      sync.Mutex
+	runMu   sync.Mutex
+	stopped bool
 	cancel  context.CancelFunc
 	cron    *cron.Cron
 	entryID cron.EntryID
@@ -41,6 +43,10 @@ func New(logger *zap.Logger, sc *scanner.Scanner, up *updater.Updater, nm *notif
 func (s *Scheduler) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.stopped {
+		return
+	}
 
 	cfg := config.Get()
 	if cfg.Scan.Cron == "" {
@@ -122,6 +128,7 @@ func (s *Scheduler) RemoveTask() {
 // StopCron 停止并等待 cron 调度器彻底退出
 func (s *Scheduler) StopCron() {
 	s.mu.Lock()
+	s.stopped = true
 	c := s.cron
 	cancel := s.cancel
 	s.cron = nil
@@ -167,6 +174,12 @@ func (s *Scheduler) GetTaskInfo() (bool, int, string) {
 }
 
 func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
+	if !s.runMu.TryLock() {
+		s.logger.Info("上一次扫描更新任务仍在运行，跳过本次触发")
+		return
+	}
+	defer s.runMu.Unlock()
+
 	s.logger.Info("开始执行扫描更新任务")
 	cfg := config.Get()
 	includeStopped := cfg.Docker.IncludeStopped

@@ -351,9 +351,40 @@ func (c *Client) FindRuntimeProject(ctx context.Context, projectName string) (st
 
 // ResolveComposeTarget 解析 Compose 生命周期执行目标：
 // 1. 优先校验 composeFile 位于 APP_PATH 内且非符号链接，直接返回 (projectDir, nil)；
-// 2. 若因符号链接、目录穿越或非法文件名失败，直接拒绝，不回退到 -p 模式；
-// 3. 若 APP_PATH 未设置或 composeFile 为空/位于 APP_PATH 之外，验证 projectName 存在于 docker compose 运行时列表后，
+// 2. 若路径包含 .. 穿越直接拒绝；若路径位于 APP_PATH 内但为符号链接或非法文件名也直接拒绝，不回退到 -p 模式；
+// 3. 若 APP_PATH 未设置或 composeFile 为空/位于 APP_PATH 之外（包括使用自定义 -f 文件名的外部运行时栈），验证 projectName 存在于 docker compose 运行时列表后，
 //    返回 ("", []string{"-p", runtimeName}) 以支持外部/运行时 Compose 栈的启停、日志与下线。
+func isPathWithinAppRoot(rawPath string) bool {
+	appPath := strings.TrimSpace(conf.EnvCfg.APP_PATH)
+	if appPath == "" || strings.TrimSpace(rawPath) == "" {
+		return false
+	}
+	absTarget, err := filepath.Abs(strings.TrimSpace(rawPath))
+	if err != nil {
+		return false
+	}
+	absApp, err := filepath.Abs(appPath)
+	if err != nil {
+		return false
+	}
+	isSub := func(base, target string) bool {
+		rel, rerr := filepath.Rel(filepath.Clean(base), filepath.Clean(target))
+		return rerr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+	}
+	if isSub(absApp, absTarget) {
+		return true
+	}
+	if resolvedApp, rerr := resolveAppRoot(); rerr == nil {
+		if resolvedTarget, terr := resolvePathCheckingSymlinks(absTarget); terr == nil && isSub(resolvedApp, resolvedTarget) {
+			return true
+		}
+		if isSub(resolvedApp, absTarget) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) ResolveComposeTarget(ctx context.Context, projectName, composeFile string) (string, []string, error) {
 	trimmedFile := strings.TrimSpace(composeFile)
 	if trimmedFile != "" {
@@ -365,7 +396,8 @@ func (c *Client) ResolveComposeTarget(ctx context.Context, projectName, composeF
 				return "", nil, fmt.Errorf("检查 composeFile 失败: %w", lerr)
 			}
 		} else {
-			if errors.Is(err, ErrSymlinkPath) || errors.Is(err, ErrTraversalPath) || strings.HasPrefix(err.Error(), "非法 compose 文件名") {
+			if errors.Is(err, ErrTraversalPath) ||
+				(isPathWithinAppRoot(trimmedFile) && (errors.Is(err, ErrSymlinkPath) || strings.HasPrefix(err.Error(), "非法 compose 文件名"))) {
 				return "", nil, err
 			}
 		}

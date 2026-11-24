@@ -26,7 +26,9 @@ export const useContainerStore = defineStore('container', () => {
   const stoppedContainers = computed(() => containers.value.filter((c) => !c.running))
 
   const updateableContainers = computed(() =>
-    containers.value.filter((c) => c.status === 'UpdateAvailable' && !c.skipped),
+    containers.value.filter(
+      (c) => c.status === 'UpdateAvailable' && !c.skipped && !c.skippedUpdate,
+    ),
   )
 
   const upToDateContainers = computed(() => containers.value.filter((c) => c.status === 'UpToDate'))
@@ -65,29 +67,58 @@ export const useContainerStore = defineStore('container', () => {
 
   let inFlightCacheFetch: Promise<void> | null = null
   let activeFetchCount = 0
-  let latestFetchSeq = 0
+  let activeScanCount = 0
+  let latestScanSeq = 0
+  let latestAppliedScanSeq = 0
+  let latestCacheSeq = 0
+  let latestAppliedCacheSeq = 0
 
   const mergeContainerItem = (
     existing: ContainerStatus | undefined,
     incoming: ContainerStatus,
+    isAuthoritativeScan = false,
   ): ContainerStatus => {
     if (!existing) {
       return incoming
     }
-    return {
+    const merged: ContainerStatus = {
       ...existing,
       ...incoming,
       errorType: incoming.errorType ?? '',
       stats: incoming.running ? (incoming.stats ?? existing.stats) : undefined,
     }
+    const sameImage =
+      existing.image === incoming.image &&
+      (existing.imageID || '') === (incoming.imageID || '')
+    if (
+      !isAuthoritativeScan &&
+      sameImage &&
+      !incoming.remoteDigest &&
+      !incoming.skipped &&
+      incoming.status === 'UpToDate' &&
+      (existing.status === 'Error' || existing.status === 'UpdateAvailable')
+    ) {
+      merged.status = existing.status
+      merged.errorType = existing.errorType ?? ''
+      merged.skipReason = existing.skipReason
+      merged.lastCheckedAt = existing.lastCheckedAt
+      merged.remoteDigest = existing.remoteDigest
+    }
+    return merged
   }
 
-  // 方法：获取容器列表（缓存读取并发去重，避免页面初始化重复请求）
+  // 方法：获取容器列表（缓存读取并发去重；权威扫描与缓存读取分离序号，防止互相覆盖）
   const fetchContainers = async (isUserCache = true, isHaveUpdate = true) => {
     if (isUserCache && !isHaveUpdate && inFlightCacheFetch) {
       return inFlightCacheFetch
     }
-    const seq = ++latestFetchSeq
+    const isScan = Boolean(isHaveUpdate)
+    const scanSeq = isScan ? ++latestScanSeq : 0
+    const startedAtAppliedScanSeq = latestAppliedScanSeq
+    const cacheSeq = isScan ? 0 : ++latestCacheSeq
+    if (isScan) {
+      activeScanCount++
+    }
     activeFetchCount++
     loading.value = true
     let reqPromise!: Promise<void>
@@ -95,15 +126,27 @@ export const useContainerStore = defineStore('container', () => {
       try {
         const data = await containerApi.getContainers(isUserCache, isHaveUpdate)
         if (data.code === 0) {
-          if (seq !== latestFetchSeq) {
-            return
+          if (isScan) {
+            if (scanSeq < latestAppliedScanSeq) {
+              return
+            }
+            latestAppliedScanSeq = scanSeq
+          } else {
+            if (
+              (activeScanCount > 0 && containers.value.length > 0) ||
+              latestAppliedScanSeq > startedAtAppliedScanSeq ||
+              cacheSeq < latestAppliedCacheSeq
+            ) {
+              return
+            }
+            latestAppliedCacheSeq = cacheSeq
           }
           // 按照 ID 进行合并，新数据覆盖旧数据
           const newContainers = data.data.containers
           const existingContainersMap = new Map(containers.value.map((c) => [c.id, c]))
 
           containers.value = newContainers.map((newContainer) =>
-            mergeContainerItem(existingContainersMap.get(newContainer.id), newContainer),
+            mergeContainerItem(existingContainersMap.get(newContainer.id), newContainer, isScan),
           )
         } else {
           console.error('获取容器列表失败:', data.msg)
@@ -113,6 +156,9 @@ export const useContainerStore = defineStore('container', () => {
         console.error('获取容器列表失败:', error)
         throw error
       } finally {
+        if (isScan) {
+          activeScanCount = Math.max(0, activeScanCount - 1)
+        }
         activeFetchCount = Math.max(0, activeFetchCount - 1)
         loading.value = activeFetchCount > 0
         if (isUserCache && !isHaveUpdate && inFlightCacheFetch === reqPromise) {
@@ -271,7 +317,7 @@ export const useContainerStore = defineStore('container', () => {
   const handleContainersUpdate = (newContainers: ContainerStatus[]) => {
     const existingMap = new Map<string, ContainerStatus>(containers.value.map((c) => [c.id, c]))
     containers.value = newContainers.map((container) =>
-      mergeContainerItem(existingMap.get(container.id), container),
+      mergeContainerItem(existingMap.get(container.id), container, false),
     )
   }
 

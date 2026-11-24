@@ -104,7 +104,7 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
 			return
 		}
-		projectPath, _, err := s.composeClient.ResolveComposeTarget(c.Request.Context(), projectName, composeFile)
+		projectPath, argsPrefix, err := s.composeClient.ResolveComposeTarget(c.Request.Context(), projectName, composeFile)
 		if err != nil {
 			s.sendComposeWSError(c, "无法读取项目日志: "+err.Error())
 			return
@@ -112,10 +112,11 @@ func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 
 		logger.Logger.Info("Compose logs WebSocket connection request",
 			zap.String("projectName", projectName),
-			zap.String("projectPath", projectPath))
+			zap.String("projectPath", projectPath),
+			zap.Strings("argsPrefix", argsPrefix))
 
 		s.streamManagerBytes.HandleWebSocket(c, projectName, func() wsstream.StreamSource[[]byte] {
-			return wsstream.NewComposeLogsSource(projectPath, projectName)
+			return wsstream.NewComposeLogsSource(projectPath, projectName, argsPrefix...)
 		})
 	}
 }

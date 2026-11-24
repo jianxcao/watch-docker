@@ -94,13 +94,13 @@ export function useXhrUpload() {
             onError?.(err)
             reject(new Error(errorMsg))
           }
-        } else if (xhr.status === 401 || xhr.status === 403) {
+        } else if (xhr.status === 401) {
           void import('@/store/auth').then(({ useAuthStore }) => {
             const authStore = useAuthStore()
             authStore.setAuthStatus(true)
             authStore.forceLogout()
           })
-          const errorMsg = `登录已过期或无权限 (${xhr.status})`
+          const errorMsg = `登录已过期 (${xhr.status})`
           message.error(errorMsg)
           onError?.(new Error(errorMsg))
           reject(new Error(errorMsg))

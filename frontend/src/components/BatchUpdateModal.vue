@@ -159,6 +159,7 @@ const wsUrl = computed(() => {
 
 const { open, close: wsClose } = useWebSocket(wsUrl, {
   immediate: false,
+  autoConnect: false,
   autoReconnect: false,
   onConnected() {
     isConnecting.value = false

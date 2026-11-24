@@ -287,8 +287,8 @@ const handleKeyClick = (key: KeyConfig) => {
     activeModifiers.value = activeModifiers.value.filter((m) => m !== 'ctrl')
   }
   if (isAltActive.value && key.id !== 'alt') {
-    // Alt 前缀：\x1b + key
-    sequence = '\x1b' + key.sequence
+    // Alt 前缀：\x1b + sequence（保留 Ctrl 组合键处理结果）
+    sequence = '\x1b' + sequence
     activeModifiers.value = activeModifiers.value.filter((m) => m !== 'alt')
   }
 

@@ -9,11 +9,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
@@ -45,6 +48,58 @@ func (d DurationMinutes) Duration() time.Duration {
 
 func (d DurationMinutes) String() string {
 	return time.Duration(d).String()
+}
+
+// MarshalYAML 将 DurationMinutes 序列化为分钟数，与 YAML/JSON 配置格式保持一致。
+func (d DurationMinutes) MarshalYAML() (any, error) {
+	dur := time.Duration(d)
+	if dur%time.Minute == 0 {
+		return int64(dur / time.Minute), nil
+	}
+	return dur.Minutes(), nil
+}
+
+func durationMinutesDecodeHook(_, t reflect.Type, data any) (any, error) {
+	if t != reflect.TypeOf(DurationMinutes(0)) {
+		return data, nil
+	}
+	parseNumeric := func(val float64) DurationMinutes {
+		// 兼容历史已落盘的纳秒整数（>= 1s 即 >= 1e9 纳秒）
+		if val >= float64(time.Second) {
+			return DurationMinutes(time.Duration(int64(val)))
+		}
+		return DurationMinutes(time.Duration(val * float64(time.Minute)))
+	}
+	switch v := data.(type) {
+	case DurationMinutes:
+		return v, nil
+	case time.Duration:
+		return DurationMinutes(v), nil
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return DurationMinutes(0), nil
+		}
+		if dur, err := time.ParseDuration(s); err == nil {
+			return DurationMinutes(dur), nil
+		}
+		val, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid duration minutes %q: %w", v, err)
+		}
+		return parseNumeric(val), nil
+	default:
+		rv := reflect.ValueOf(data)
+		switch rv.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return parseNumeric(float64(rv.Int())), nil
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return parseNumeric(float64(rv.Uint())), nil
+		case reflect.Float32, reflect.Float64:
+			return parseNumeric(rv.Float()), nil
+		}
+		return data, nil
+	}
 }
 
 type ServerConfig struct {
@@ -401,7 +456,11 @@ func Load(cfgPath string) (*Config, error) {
 		}
 	}
 
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(&cfg, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+		durationMinutesDecodeHook,
+	))); err != nil {
 		return nil, fmt.Errorf("unmarshal yaml: %w", err)
 	}
 
@@ -466,6 +525,21 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.Scan.Concurrency <= 0 {
 		return fmt.Errorf("scan.concurrency must be > 0")
+	}
+	if cfg.Scan.CacheTTL == 0 {
+		cfg.Scan.CacheTTL = DurationMinutes(10 * time.Minute)
+	} else if cfg.Scan.CacheTTL < 0 {
+		return fmt.Errorf("scan.cacheTTL must be > 0")
+	}
+	lvl := strings.ToLower(strings.TrimSpace(cfg.Logging.Level))
+	if lvl == "" {
+		lvl = "info"
+	}
+	switch lvl {
+	case "debug", "info", "warn", "warning", "error":
+		cfg.Logging.Level = lvl
+	default:
+		return fmt.Errorf("invalid logging.level %q: must be debug, info, warn, or error", cfg.Logging.Level)
 	}
 	if cronExpr := strings.TrimSpace(cfg.Scan.Cron); cronExpr != "" {
 		if _, err := cronParser.Parse(cronExpr); err != nil {

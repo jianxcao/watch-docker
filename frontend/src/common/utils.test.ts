@@ -52,6 +52,19 @@ services:
 `
     expect(validateComposeYaml(yaml)).toEqual({ isValid: true, errorMessage: '' })
   })
+
+  it('accepts unquoted apostrophes in plain scalars and |2- / colon-key block scalars', () => {
+    const yaml = `services:
+  web:
+    image: nginx:latest
+    command: echo it's fine
+    labels:
+      org.opencontainers.image.description: Bob's server
+      "a:b": |2-
+        unmatched 'inside
+`
+    expect(validateComposeYaml(yaml)).toEqual({ isValid: true, errorMessage: '' })
+  })
 })
 
 describe('imageRef (:port-aware matching)', () => {

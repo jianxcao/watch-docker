@@ -84,11 +84,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Logger.Info("shutting down http server")
-	// stop scheduler and wait for running cron jobs
-	sch.StopCron()
-	// close notification manager (flush pending notifications)
-	notificationManager.Close()
-	// actively close long-lived SSE and WebSocket streams so srv.Shutdown completes immediately
+	// 1. 先主动关闭长连接 SSE 与 WebSocket 流，随后关闭 HTTP 服务，阻止新请求触发调度/通知
 	if closeStreams != nil {
 		closeStreams()
 	}
@@ -97,6 +93,10 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Logger.Error("server shutdown error", logger.ZapErr(err))
 	}
+	// 2. HTTP 不再接新请求后停止调度器并等待进行中的扫描更新退出
+	sch.StopCron()
+	// 3. 调度器彻底停止后再关闭通知管理器并刷新待发送通知
+	notificationManager.Close()
 	if err := dockerClient.Close(); err != nil {
 		logger.Logger.Warn("close docker client error", logger.ZapErr(err))
 	}

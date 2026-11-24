@@ -78,8 +78,8 @@ export function parseShellArgs(input: string): string[] {
  */
 export function transformBasicForm(form: BasicFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {
-    name: form.name || '',
-    image: form.image,
+    name: (form.name || '').trim(),
+    image: (form.image || '').trim(),
     tty: form.tty || false,
     openStdin: form.openStdin || false,
     stdinOnce: form.stdinOnce || false,

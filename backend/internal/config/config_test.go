@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 )
@@ -230,5 +231,75 @@ func TestMergeMaskedSecretsStrictMatchingAndValidate(t *testing.T) {
 	goodSocksProxy.Proxy.URL = "socks5://127.0.0.1:1080"
 	if err := Validate(goodSocksProxy); err != nil {
 		t.Fatalf("expected socks5 proxy to validate, got %v", err)
+	}
+
+	// Logging.Level 校验与默认规范化
+	emptyLevel := defaults()
+	emptyLevel.Logging.Level = "  "
+	if err := Validate(emptyLevel); err != nil {
+		t.Fatalf("expected empty logging.level to default cleanly, got %v", err)
+	}
+	if emptyLevel.Logging.Level != "info" {
+		t.Fatalf("expected normalized logging.level 'info', got %q", emptyLevel.Logging.Level)
+	}
+	badLevel := defaults()
+	badLevel.Logging.Level = "trace"
+	if err := Validate(badLevel); err == nil {
+		t.Fatalf("expected Validate to reject unsupported logging.level")
+	}
+}
+
+func TestDurationMinutesYAMLAndEnvDecode(t *testing.T) {
+	cfgPath := setupTempConfigEnv(t)
+	if err := os.WriteFile(cfgPath, []byte("scan:\n  cacheTTL: 60\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load cacheTTL=60 failed: %v", err)
+	}
+	if loaded.Scan.CacheTTL.Duration() != 60*time.Minute {
+		t.Fatalf("expected cacheTTL 60m, got %v", loaded.Scan.CacheTTL.Duration())
+	}
+
+	// 验证 env WATCH_SCAN_CACHETTL 覆盖（分钟）与重新落盘后仍为分钟整数
+	t.Setenv("WATCH_SCAN_CACHETTL", "45")
+	loadedEnv, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load env WATCH_SCAN_CACHETTL=45 failed: %v", err)
+	}
+	if loadedEnv.Scan.CacheTTL.Duration() != 45*time.Minute {
+		t.Fatalf("expected cacheTTL 45m, got %v", loadedEnv.Scan.CacheTTL.Duration())
+	}
+
+	SetGlobal(loadedEnv)
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "cachettl: 45") {
+		t.Fatalf("expected persisted cachettl: 45, got:\n%s", string(raw))
+	}
+	t.Setenv("WATCH_SCAN_CACHETTL", "")
+	reloaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload persisted cachettl=45 failed: %v", err)
+	}
+	if reloaded.Scan.CacheTTL.Duration() != 45*time.Minute {
+		t.Fatalf("expected reloaded cacheTTL 45m, got %v", reloaded.Scan.CacheTTL.Duration())
+	}
+
+	// 验证历史纳秒数值配置平滑升级
+	if err := os.WriteFile(cfgPath, []byte("scan:\n  cacheTTL: 1800000000000\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WATCH_SCAN_CACHETTL", "")
+	loadedLegacy, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load legacy ns cacheTTL failed: %v", err)
+	}
+	if loadedLegacy.Scan.CacheTTL.Duration() != 30*time.Minute {
+		t.Fatalf("expected legacy 1800000000000ns -> 30m, got %v", loadedLegacy.Scan.CacheTTL.Duration())
 	}
 }

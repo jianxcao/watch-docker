@@ -17,7 +17,7 @@
     :closable="true"
     @after-leave="handleClose"
   >
-    <logs-stream-view ref="logsStreamViewRef" :project="project" :socket-url="socketUrl" />
+    <logs-stream-view ref="logsStreamViewRef" :socket-url="socketUrl" />
     <template #action>
       <n-space justify="end">
         <n-button @click="handleClearLogs">

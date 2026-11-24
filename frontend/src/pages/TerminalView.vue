@@ -111,6 +111,8 @@ const terminalTarget = shallowRef<'local' | 'host' | ''>('')
 const shellOptionsLoading = shallowRef(false)
 let shellOptionsRequest: Promise<void> | undefined
 let intentionalDisconnects = 0
+let isUnmounted = false
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 // 终端配置
 const termConfig = {
@@ -187,15 +189,25 @@ const ensureShellOptions = async () => {
 }
 
 const openTerminalConnection = async () => {
+  if (settingStore.systemInfo?.isOpenDockerShell === false) {
+    connecting.value = false
+    connectionError.value = '系统未开启终端功能'
+    return
+  }
   connecting.value = true
   connectionError.value = ''
   try {
     await ensureShellOptions()
+    if (isUnmounted) {
+      return
+    }
     openWs()
   } catch (error: any) {
     connecting.value = false
-    connectionError.value = error.message || '无法读取 Shell 配置'
-    message.error(connectionError.value)
+    if (!isUnmounted) {
+      connectionError.value = error.message || '无法读取 Shell 配置'
+      message.error(connectionError.value)
+    }
   }
 }
 
@@ -309,7 +321,19 @@ const reconnect = async (force = false) => {
     terminal.value.writeln('')
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  await new Promise<void>((resolve) => {
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      resolve()
+    }, 100)
+  })
+  if (isUnmounted) {
+    return
+  }
   await openTerminalConnection()
 }
 
@@ -345,13 +369,24 @@ const handleKeyboardHeightChange = (height: number) => {
 onMounted(() => {
   isMobileDevice.value = isMobile() || isTablet()
   keyboardExpanded.value = isMobileDevice.value
-  void ensureShellOptions().catch((error: any) => {
-    connectionError.value = error.message || '无法读取 Shell 配置'
-  })
+  if (settingStore.systemInfo?.isOpenDockerShell !== false) {
+    void ensureShellOptions().catch((error: any) => {
+      if (!isUnmounted) {
+        connectionError.value = error.message || '无法读取 Shell 配置'
+      }
+    })
+  } else {
+    connectionError.value = '系统未开启终端功能'
+  }
 })
 
 // 组件卸载时清理
 onUnmounted(() => {
+  isUnmounted = true
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
   if (status.value !== 'CLOSED') {
     intentionalDisconnects += 1
   }

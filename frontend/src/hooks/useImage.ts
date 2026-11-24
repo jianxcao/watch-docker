@@ -118,7 +118,7 @@ export function useImage() {
   // 刷新镜像列表
   const handleRefresh = async () => {
     try {
-      await store.fetchImages()
+      await store.fetchImages(true)
       message.success('镜像列表刷新成功')
     } catch (error: any) {
       message.error(`刷新失败: ${error.message}`)

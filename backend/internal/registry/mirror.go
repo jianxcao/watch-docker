@@ -173,33 +173,38 @@ func (c *Client) acquireMirrorToken(ctx context.Context, wwwAuth, repoPath strin
 	if err != nil {
 		return "", err
 	}
+	realmURL, err := url.Parse(realm)
+	if err != nil || realmURL == nil || realmURL.Host == "" ||
+		(!strings.EqualFold(realmURL.Scheme, "https") && !strings.EqualFold(realmURL.Scheme, "http")) {
+		return "", fmt.Errorf("非法的认证 realm: %s", realm)
+	}
 	if scope == "" {
 		scope = fmt.Sprintf("repository:%s:pull", repoPath)
 	}
 
-	authURL := realm
-	q := url.Values{}
+	q := realmURL.Query()
 	if service != "" {
 		q.Set("service", service)
 	}
 	if scope != "" {
 		q.Set("scope", scope)
 	}
-	if len(q) > 0 {
-		if strings.Contains(authURL, "?") {
-			authURL += "&" + q.Encode()
-		} else {
-			authURL += "?" + q.Encode()
-		}
-	}
+	realmURL.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, realmURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("创建认证请求失败: %w", err)
 	}
 
-	if cred, ok := c.getCredentialForHost("index.docker.io"); ok && cred.Username != "" && cred.Password != "" {
-		req.SetBasicAuth(cred.Username, cred.Password)
+	// 仅向官方 auth.docker.io HTTPS 端点发送 Docker Hub 凭据；其余仅在显式匹配该 host 且安全传输时发送
+	if strings.EqualFold(realmURL.Scheme, "https") && strings.EqualFold(realmURL.Hostname(), "auth.docker.io") {
+		if cred, ok := c.getCredentialForHost("index.docker.io"); ok && cred.Username != "" && cred.Password != "" {
+			req.SetBasicAuth(cred.Username, cred.Password)
+		}
+	} else if cred, ok := c.getCredentialForHost(realmURL.Host); ok && cred.Username != "" && cred.Password != "" {
+		if strings.EqualFold(realmURL.Scheme, "https") || c.isHostExplicitHTTP(realmURL.Host) {
+			req.SetBasicAuth(cred.Username, cred.Password)
+		}
 	}
 
 	resp, err := c.mirrorHTTPClient().Do(req)

@@ -305,7 +305,7 @@ const handleBatchUpdate = async () => {
 const handleRefreshAll = async () => {
   appStore.setGlobalLoading(true)
   try {
-    await Promise.all([containerStore.fetchContainers(), imageStore.fetchImages()])
+    await Promise.all([containerStore.fetchContainers(), imageStore.fetchImages(true)])
     appStore.updateRefreshTime()
   } finally {
     appStore.setGlobalLoading(false)
@@ -326,7 +326,7 @@ const handlePruneSystem = () => {
         if (data.code === 0) {
           message.success(data.data.message || '系统清理完成')
           // 清理完成后刷新数据
-          await Promise.all([containerStore.fetchContainers(), imageStore.fetchImages()])
+          await Promise.all([containerStore.fetchContainers(), imageStore.fetchImages(true)])
         } else {
           message.error(data.msg || '系统清理失败')
         }

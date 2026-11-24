@@ -199,3 +199,44 @@ func TestExtractRPIDAndOriginBareIPv6(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractValidatedRPIDAndOriginSecurityAndProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	origEnv := conf.EnvCfg
+	t.Cleanup(func() {
+		conf.EnvCfg = origEnv
+	})
+
+	makeCtx := func(host, origin string) *gin.Context {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		req.Host = host
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		c.Request = req
+		return c
+	}
+
+	// 1. 子域 Origin 不可绕过 RPOrigins 校验
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = "example.com"
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("example.com", "https://sub.example.com")); ok {
+		t.Fatalf("expected untrusted subdomain Origin to be rejected")
+	}
+
+	// 2. 非 http/https 或含 userinfo 的 Origin 必须拒绝
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("example.com", "https://user@example.com")); ok {
+		t.Fatalf("expected userinfo Origin to be rejected")
+	}
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("example.com", "javascript://example.com")); ok {
+		t.Fatalf("expected non-http(s) Origin to be rejected")
+	}
+
+	// 3. 反向代理场景下 TWOFA_ALLOWED_DOMAINS 允许的外部 Origin 应保留真实域名作为 RPID 与 Origin
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = "docker.example.com"
+	rpid, origin, ok := extractValidatedRPIDAndOrigin(makeCtx("127.0.0.1:8080", "https://docker.example.com"))
+	if !ok || rpid != "docker.example.com" || origin != "https://docker.example.com" {
+		t.Fatalf("expected whitelisted proxy origin preserved, got (%q, %q, ok=%v)", rpid, origin, ok)
+	}
+}

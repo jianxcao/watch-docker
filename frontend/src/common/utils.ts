@@ -294,7 +294,7 @@ export const validateComposeYaml = (yamlContent: string): YamlValidationResult =
             commentStartIndex = j
             break
           }
-          if (ch === '"' || ch === "'") {
+          if ((ch === '"' || ch === "'") && (j === 0 || !/[A-Za-z0-9_]/.test(line[j - 1]))) {
             quoteChar = ch
           }
         }
@@ -309,7 +309,7 @@ export const validateComposeYaml = (yamlContent: string): YamlValidationResult =
 
       const contentWithoutComment =
         commentStartIndex >= 0 ? line.slice(0, commentStartIndex).trim() : trimmed
-      if (/^(?:[^#\s][^:]*:\s*|-\s*)[|>][+-]?\d*$/.test(contentWithoutComment)) {
+      if (/(?:^-\s*|:\s*)[|>](?:[+-]?\d+|\d+[+-])?$/.test(contentWithoutComment)) {
         blockBaseIndent = indent
       }
     }

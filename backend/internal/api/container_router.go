@@ -693,7 +693,7 @@ func (s *Server) handleBatchUpdate() gin.HandlerFunc {
 		failed := make(map[string]string)
 		failedCodes := make(map[string]int)
 		for _, st := range statuses {
-			if st.Skipped || st.Status != "UpdateAvailable" {
+			if st.Skipped || st.SkippedUpdate || st.Status != "UpdateAvailable" {
 				continue
 			}
 			if !st.Running && !cfg.Docker.IncludeStopped {

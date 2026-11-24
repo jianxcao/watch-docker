@@ -13,16 +13,18 @@ import (
 type ComposeLogsSource struct {
 	projectPath string
 	projectName string
+	argsPrefix  []string
 	key         string
 	mu          sync.Mutex
 	reader      *ByteStreamReader
 }
 
 // NewComposeLogsSource 创建新的 Compose 日志数据源
-func NewComposeLogsSource(projectPath, projectName string) *ComposeLogsSource {
+func NewComposeLogsSource(projectPath, projectName string, argsPrefix ...string) *ComposeLogsSource {
 	return &ComposeLogsSource{
 		projectPath: projectPath,
 		projectName: projectName,
+		argsPrefix:  append([]string(nil), argsPrefix...),
 		key:         projectName, // 使用 projectName 作为唯一标识
 	}
 }
@@ -35,7 +37,11 @@ func (s *ComposeLogsSource) Start(ctx context.Context) (StreamReader[[]byte], er
 
 	args := []string{"--ansi", "always", "logs", "--follow", "--timestamps", "--tail=500"}
 	if s.projectPath == "" {
-		args = []string{"-p", s.projectName, "--ansi", "always", "logs", "--follow", "--timestamps", "--tail=500"}
+		prefix := s.argsPrefix
+		if len(prefix) == 0 {
+			prefix = []string{"-p", s.projectName}
+		}
+		args = append(append([]string(nil), prefix...), args...)
 	}
 
 	// 执行 docker compose logs 命令

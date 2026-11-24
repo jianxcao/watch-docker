@@ -317,8 +317,9 @@ const loadContainerDetail = async () => {
   loading.value = true
   try {
     const detail = await containerStore.getContainerDetail(containerId.value)
-    containerDetail.value = detail
+    containerDetail.value = detail ?? null
   } catch (error: any) {
+    containerDetail.value = null
     console.error('加载容器详情失败:', error)
     message.error('加载容器详情失败: ' + (error.message || '未知错误'))
   } finally {

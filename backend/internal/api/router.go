@@ -496,6 +496,21 @@ func (s *Server) setupStaticRoutes(r *gin.Engine) {
 		logger.Logger.Warn(fmt.Sprintf("外部静态文件目录不存在，使用嵌入式资源: %s", staticDir))
 	}
 
+	// 检查嵌入式资源是否实际包含 index.html（Docker 构建下 staticFS 为空）
+	if fsys, err := fs.Sub(staticFS, "static"); err == nil {
+		if _, statErr := fs.Stat(fsys, "index.html"); statErr == nil {
+			logger.Logger.Info("使用嵌入式前端资源")
+			s.setupEmbeddedStaticRoutes(r)
+			return
+		}
+	}
+
+	if _, err := os.Stat("/app/static/index.html"); err == nil {
+		logger.Logger.Info("检测到容器静态文件目录，使用外部资源: /app/static")
+		s.setupExternalStaticRoutes(r, "/app/static")
+		return
+	}
+
 	// 使用嵌入式文件系统
 	logger.Logger.Info("使用嵌入式前端资源")
 	s.setupEmbeddedStaticRoutes(r)

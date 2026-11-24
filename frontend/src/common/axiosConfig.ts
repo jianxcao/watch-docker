@@ -132,7 +132,7 @@ axios.interceptors.response.use(
   async function (err) {
     const res = err?.response
     const status = res?.status
-    if (status === 401 || status === 403) {
+    if (status === 401) {
       const { useAuthStore } = await import('@/store/auth')
       const authStore = useAuthStore()
       authStore.setAuthStatus(true)

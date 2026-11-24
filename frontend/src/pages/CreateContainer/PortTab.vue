@@ -151,7 +151,6 @@ const updatePorts = () => {
   })
 
   formValue.value.portBindings = portBindings
-  formValue.value.exposedPorts = exposedPorts
 }
 
 const validate = () => formRef.value?.validate()

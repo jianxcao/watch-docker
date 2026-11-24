@@ -64,26 +64,42 @@ func (u *Updater) UpdateContainerWithProgress(ctx context.Context, containerID, 
 		return "", fmt.Errorf("inspect: %w", err)
 	}
 
+	var targetPlatform *ocispec.Platform
+	if lockedInfo.ImageManifestDescriptor != nil && lockedInfo.ImageManifestDescriptor.Platform != nil &&
+		lockedInfo.ImageManifestDescriptor.Platform.OS != "" && lockedInfo.ImageManifestDescriptor.Platform.Architecture != "" {
+		p := *lockedInfo.ImageManifestDescriptor.Platform
+		targetPlatform = &p
+	} else if lockedInfo.Image != "" {
+		if imgInfo, ierr := u.docker.ImageInspect(ctx, lockedInfo.Image); ierr == nil && imgInfo.Os != "" && imgInfo.Architecture != "" {
+			targetPlatform = &ocispec.Platform{
+				OS:           imgInfo.Os,
+				Architecture: imgInfo.Architecture,
+				Variant:      imgInfo.Variant,
+			}
+		}
+	}
+
 	uctx := &updateContext{
-		containerID: lockedInfo.ID,
-		imageRef:    imageRef,
+		containerID:    lockedInfo.ID,
+		imageRef:       imageRef,
+		targetPlatform: targetPlatform,
 	}
 	if uctx.imageRef == "" && lockedInfo.Config != nil {
 		uctx.imageRef = lockedInfo.Config.Image
 	}
 
-	// 1. 拉取镜像
+	// 1. 拉取镜像（保留原容器平台架构）
 	if cb != nil && cb.OnStep != nil {
 		cb.OnStep("pulling", "正在拉取镜像 "+uctx.imageRef)
 	}
 	if cb != nil && cb.OnPullProgress != nil {
-		err := u.docker.ImagePullWithProgress(ctx, uctx.imageRef, cb.OnPullProgress)
+		err := u.docker.ImagePullWithPlatform(ctx, uctx.imageRef, uctx.targetPlatform, cb.OnPullProgress)
 		if err != nil {
 			logger.Logger.Error("拉取镜像失败", zap.String("imageRef", uctx.imageRef), zap.Error(err))
 			return "", fmt.Errorf("pull: %w", err)
 		}
 	} else {
-		if err := u.pullImage(ctx, uctx.imageRef); err != nil {
+		if err := u.pullImageWithPlatform(ctx, uctx.imageRef, uctx.targetPlatform); err != nil {
 			return "", err
 		}
 	}
@@ -152,17 +168,18 @@ type updateContext struct {
 	oldInfo       container.InspectResponse
 	oldImage      *image.InspectResponse
 	oldName       string
-	backupName    string
-	newID         string
-	wasRunning    bool
-	extraNetworks map[string]*network.EndpointSettings
+	backupName     string
+	newID          string
+	wasRunning     bool
+	extraNetworks  map[string]*network.EndpointSettings
+	targetPlatform *ocispec.Platform
 }
 
 const maxRetries = 3
 
-func (u *Updater) pullImage(ctx context.Context, imageRef string) error {
+func (u *Updater) pullImageWithPlatform(ctx context.Context, imageRef string, platform *ocispec.Platform) error {
 	logger.Logger.Info("开始拉取镜像", zap.String("imageRef", imageRef))
-	if err := u.docker.ImagePull(ctx, imageRef); err != nil {
+	if err := u.docker.ImagePullWithPlatform(ctx, imageRef, platform, nil); err != nil {
 		logger.Logger.Error("拉取镜像失败", zap.String("imageRef", imageRef), zap.Error(err))
 		return fmt.Errorf("pull: %w", err)
 	}
@@ -447,6 +464,14 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 			primaryName := netNames[0]
 			if _, ok := uctx.oldInfo.NetworkSettings.Networks[origPrimary]; ok {
 				primaryName = origPrimary
+			} else if origPrimary != "" {
+				for _, name := range netNames {
+					ep := uctx.oldInfo.NetworkSettings.Networks[name]
+					if ep != nil && ep.NetworkID != "" && (ep.NetworkID == origPrimary || (len(origPrimary) >= 12 && strings.HasPrefix(ep.NetworkID, origPrimary))) {
+						primaryName = name
+						break
+					}
+				}
 			}
 			newHostCfg.NetworkMode = container.NetworkMode(primaryName)
 
@@ -494,7 +519,10 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 	}
 
 	var platform *ocispec.Platform
-	if uctx.oldImage != nil && uctx.oldImage.Os != "" && uctx.oldImage.Architecture != "" {
+	if uctx.targetPlatform != nil && uctx.targetPlatform.OS != "" && uctx.targetPlatform.Architecture != "" {
+		p := *uctx.targetPlatform
+		platform = &p
+	} else if uctx.oldImage != nil && uctx.oldImage.Os != "" && uctx.oldImage.Architecture != "" {
 		platform = &ocispec.Platform{
 			OS:           uctx.oldImage.Os,
 			Architecture: uctx.oldImage.Architecture,

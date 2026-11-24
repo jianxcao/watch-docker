@@ -135,26 +135,10 @@ func extractHostNameOnly(host string) string {
 	return host
 }
 
-// extractRPIDAndOrigin 从请求提取 RPID 和 Origin；仅当未设置 Origin 时根据 Host 推导，不盲信外部伪造头。
-func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
-	origin = strings.TrimSpace(c.GetHeader("Origin"))
+// extractValidatedRPIDAndOrigin 从请求提取并校验 RPID 和 Origin，防止子域 Origin 绕过或反代 Host 误覆盖。
+func extractValidatedRPIDAndOrigin(c *gin.Context) (rpid string, origin string, ok bool) {
+	originHdr := strings.TrimSpace(c.GetHeader("Origin"))
 	host := strings.TrimSpace(c.Request.Host)
-
-	if origin != "" {
-		if u, err := url.Parse(origin); err == nil && u.Hostname() != "" {
-			rpid = u.Hostname()
-			if host == "" {
-				host = u.Host
-			}
-			// 若请求 Host 存在，要求 Origin 主机与请求 Host 主机一致
-			reqHostOnly := extractHostNameOnly(host)
-			if reqHostOnly != "" && !strings.EqualFold(reqHostOnly, rpid) {
-				rpid = reqHostOnly
-			}
-			return rpid, origin
-		}
-	}
-
 	if host == "" {
 		host = strings.TrimSpace(c.GetHeader("Host"))
 	}
@@ -163,18 +147,43 @@ func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
 	if idx := strings.Index(host, "/"); idx >= 0 {
 		host = host[:idx]
 	}
+	reqHostOnly := extractHostNameOnly(host)
 
+	if originHdr != "" {
+		u, err := url.Parse(originHdr)
+		if err != nil || u == nil || u.User != nil || u.Hostname() == "" || u.Host == "" {
+			return reqHostOnly, "", false
+		}
+		scheme := strings.ToLower(u.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return reqHostOnly, "", false
+		}
+		originHostOnly := u.Hostname()
+		normalizedOrigin := scheme + "://" + u.Host
+		if reqHostOnly == "" || strings.EqualFold(originHostOnly, reqHostOnly) ||
+			(strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS) != "" && isAllowedDomain(originHostOnly)) {
+			return originHostOnly, normalizedOrigin, true
+		}
+		return reqHostOnly, "", false
+	}
+
+	if reqHostOnly == "" {
+		return "", "", false
+	}
 	scheme := "http"
-	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
+	if c.Request.TLS != nil || (strings.TrimSpace(conf.EnvCfg.TRUSTED_PROXIES) != "" && strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")) {
 		scheme = "https"
 	}
 	originHost := host
 	if _, _, err := net.SplitHostPort(host); err != nil && strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		originHost = "[" + host + "]"
 	}
-	origin = scheme + "://" + originHost
+	return reqHostOnly, scheme + "://" + originHost, true
+}
 
-	rpid = extractHostNameOnly(host)
+// extractRPIDAndOrigin 从请求提取 RPID 和 Origin；校验失败时仍返回安全的请求 Host 推导值供状态检查使用。
+func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
+	rpid, origin, _ = extractValidatedRPIDAndOrigin(c)
 	return rpid, origin
 }
 
@@ -461,7 +470,12 @@ func (s *Server) handleWebAuthnRegisterBegin() gin.HandlerFunc {
 			return
 		}
 
-		rpid, origin := extractRPIDAndOrigin(c)
+		rpid, origin, originOK := extractValidatedRPIDAndOrigin(c)
+		if !originOK {
+			s.logger.Warn("invalid webauthn origin or host", zap.String("host", c.Request.Host), zap.String("origin", c.GetHeader("Origin")))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "非法请求来源"))
+			return
+		}
 		if !isAllowedDomain(rpid) {
 			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
@@ -527,7 +541,12 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 			return
 		}
 
-		rpid, origin := extractRPIDAndOrigin(c)
+		rpid, origin, originOK := extractValidatedRPIDAndOrigin(c)
+		if !originOK {
+			s.logger.Warn("invalid webauthn origin or host", zap.String("host", c.Request.Host), zap.String("origin", c.GetHeader("Origin")))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "非法请求来源"))
+			return
+		}
 		if !isAllowedDomain(rpid) {
 			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
@@ -621,7 +640,12 @@ func (s *Server) handleWebAuthnLoginBegin() gin.HandlerFunc {
 		}
 		usernameStr := username.(string)
 
-		rpid, origin := extractRPIDAndOrigin(c)
+		rpid, origin, originOK := extractValidatedRPIDAndOrigin(c)
+		if !originOK {
+			s.logger.Warn("invalid webauthn origin or host", zap.String("host", c.Request.Host), zap.String("origin", c.GetHeader("Origin")))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "非法请求来源"))
+			return
+		}
 		if !isAllowedDomain(rpid) {
 			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
@@ -695,7 +719,12 @@ func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 			return
 		}
 
-		rpid, origin := extractRPIDAndOrigin(c)
+		rpid, origin, originOK := extractValidatedRPIDAndOrigin(c)
+		if !originOK {
+			s.logger.Warn("invalid webauthn origin or host", zap.String("host", c.Request.Host), zap.String("origin", c.GetHeader("Origin")))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "非法请求来源"))
+			return
+		}
 		if !isAllowedDomain(rpid) {
 			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))

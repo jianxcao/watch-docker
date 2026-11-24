@@ -15,7 +15,8 @@ function decodeJwtUsername(token: string): string {
     }
     const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
     const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
-    const payload = JSON.parse(atob(padded))
+    const bytes = Uint8Array.from(atob(padded), (c) => c.charCodeAt(0))
+    const payload = JSON.parse(new TextDecoder().decode(bytes))
     return typeof payload?.username === 'string' ? payload.username : ''
   } catch {
     return ''

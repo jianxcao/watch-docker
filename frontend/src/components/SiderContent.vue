@@ -279,7 +279,7 @@ const handleRefresh = async () => {
     if (activeKey.value === 'containers') {
       await containerStore.fetchContainers(false, true)
     } else if (activeKey.value === 'images') {
-      await imageStore.fetchImages()
+      await imageStore.fetchImages(true)
     } else if (activeKey.value === 'compose') {
       await composeStore.fetchProjects(true)
     } else if (activeKey.value === 'volumes') {
@@ -290,7 +290,7 @@ const handleRefresh = async () => {
       await settingStore.fetchSystemInfo(true)
     } else {
       // 首页等页面刷新核心数据
-      await Promise.all([containerStore.fetchContainers(false, true), imageStore.fetchImages()])
+      await Promise.all([containerStore.fetchContainers(false, true), imageStore.fetchImages(true)])
     }
     appStore.updateRefreshTime()
   } catch (error) {

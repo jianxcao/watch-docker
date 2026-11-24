@@ -123,3 +123,35 @@ func TestBuildNewContainerConfigsEntrypointLabelsVolumesAndNetworks(t *testing.T
 		t.Fatalf("expected bridge endpoint stripped of Aliases/Links/IPAMConfig, got %#v", bridgeEp)
 	}
 }
+
+func TestBuildNewContainerConfigsResolvesPrimaryNetworkByID(t *testing.T) {
+	u := &Updater{}
+	netID := "feedface1234567890abcdef1234567890abcdef1234567890abcdef12345678"
+	uctx := &updateContext{
+		containerID: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		imageRef:    "nginx:latest",
+		oldInfo: container.InspectResponse{
+			Config: &container.Config{Image: "nginx:latest"},
+			HostConfig: &container.HostConfig{
+				NetworkMode: container.NetworkMode(netID[:12]),
+			},
+			NetworkSettings: &container.NetworkSettings{
+				Networks: map[string]*network.EndpointSettings{
+					"aaa_secondary": {NetworkID: "1111111111111111111111111111111111111111111111111111111111111111"},
+					"zzz_primary":   {NetworkID: netID},
+				},
+			},
+		},
+	}
+
+	_, newHostCfg, netCfg, _, extra := u.buildNewContainerConfigs(uctx)
+	if string(newHostCfg.NetworkMode) != "zzz_primary" {
+		t.Fatalf("expected primary NetworkMode resolved to zzz_primary by NetworkID, got %q", newHostCfg.NetworkMode)
+	}
+	if _, ok := netCfg.EndpointsConfig["zzz_primary"]; !ok {
+		t.Fatalf("expected zzz_primary in EndpointsConfig, got %#v", netCfg.EndpointsConfig)
+	}
+	if _, ok := extra["aaa_secondary"]; !ok {
+		t.Fatalf("expected aaa_secondary in extraNetworks, got %#v", extra)
+	}
+}

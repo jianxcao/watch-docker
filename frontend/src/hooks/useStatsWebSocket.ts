@@ -123,7 +123,10 @@ export default function useStatsWebSocket() {
 
   // 启动连接
   const connect = () => {
-    if (status.value === 'OPEN' || status.value === 'CONNECTING') {
+    if (
+      ws.value &&
+      (ws.value.readyState === WebSocket.OPEN || ws.value.readyState === WebSocket.CONNECTING)
+    ) {
       return
     }
     console.debug('connect')
@@ -143,20 +146,16 @@ export default function useStatsWebSocket() {
     close()
   }
 
-  // 重新连接
+  // 重新连接（open 内部会原子关闭旧 socket 并重置状态，避免异步 close() 竞态导致重连被跳过）
   const reconnect = () => {
     console.debug('reconnect')
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
-    if (status.value === 'OPEN' || status.value === 'CONNECTING') {
-      close()
+    if (wsUrl.value) {
+      open()
     }
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null
-      connect()
-    }, 100)
   }
 
   return {

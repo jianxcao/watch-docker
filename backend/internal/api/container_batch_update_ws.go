@@ -114,7 +114,7 @@ func (s *Server) handleBatchUpdateWebSocket() gin.HandlerFunc {
 
 		var targets []updateTarget
 		for _, st := range statuses {
-			if st.Skipped || st.Status != "UpdateAvailable" {
+			if st.Skipped || st.SkippedUpdate || st.Status != "UpdateAvailable" {
 				continue
 			}
 			if !st.Running && !cfg.Docker.IncludeStopped {

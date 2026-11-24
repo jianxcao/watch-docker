@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -300,6 +301,50 @@ func (c *Client) getCredentialForHost(host string) (authn.AuthConfig, bool) {
 	return cred, ok
 }
 
+func (c *Client) isHostExplicitHTTP(host string) bool {
+	target := canonicalHost(host)
+	cfg := config.Get()
+	if cfg == nil || target == "" {
+		return false
+	}
+	for _, item := range cfg.Registry.Auth {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.Host)), "http://") && canonicalHost(item.Host) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func extractHostWithoutPort(hostport string) string {
+	h := strings.TrimSpace(hostport)
+	if h == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		return strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+}
+
+func (c *Client) allowInsecureFallback(host string) bool {
+	if c.isHostExplicitHTTP(host) {
+		return true
+	}
+	h := strings.ToLower(extractHostWithoutPort(host))
+	if h == "" {
+		return false
+	}
+	if h == "localhost" || !strings.Contains(h, ".") ||
+		strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".lan") ||
+		strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".home") {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	return false
+}
+
 // detectErrorType 基于标准 *transport.Error HTTP 状态码和诊断码分类错误
 func detectErrorType(err error) ErrorType {
 	if err == nil {
@@ -562,8 +607,8 @@ func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, 
 
 	desc, err := remote.Get(ref, opts...)
 	if err != nil {
-		// 兼容未配置 TLS 的局域网私有仓库（带端口号且非公网域名时尝试 Insecure 回退）
-		if strings.Contains(host, ":") && strings.Contains(strings.ToLower(err.Error()), "http: server gave http response to https client") {
+		// 兼容未配置 TLS 的局域网私有仓库或显式 http:// 配置的仓库（禁止对公网域名静默降级明文传输凭据）
+		if strings.Contains(host, ":") && c.allowInsecureFallback(host) && strings.Contains(strings.ToLower(err.Error()), "http: server gave http response to https client") {
 			if insecRef, rerr := name.ParseReference(normalizedRef, name.Insecure); rerr == nil {
 				desc, err = remote.Get(insecRef, opts...)
 			}
@@ -593,14 +638,26 @@ func extractDigestFromDescriptor(desc *remote.Descriptor, targetOS, targetArch, 
 		if childDesc != nil {
 			childDigest = childDesc.Digest.String()
 			if needConfig {
-				if img, ierr := idx.Image(childDesc.Digest); ierr == nil {
-					if cfgHash, cerr := img.ConfigName(); cerr == nil {
-						configDigest = cfgHash.String()
-					}
+				img, ierr := idx.Image(childDesc.Digest)
+				if ierr != nil {
+					return DigestResult{Error: fmt.Errorf("获取平台镜像失败: %w", ierr), ErrType: detectErrorType(ierr)}
+				}
+				cfgHash, cerr := img.ConfigName()
+				if cerr != nil {
+					return DigestResult{Error: fmt.Errorf("获取平台镜像 config digest 失败: %w", cerr), ErrType: detectErrorType(cerr)}
+				}
+				configDigest = cfgHash.String()
+			}
+		} else {
+			if needConfig {
+				return DigestResult{
+					Error:   fmt.Errorf("未找到匹配平台 %s/%s 的子 manifest", targetOS, targetArch),
+					ErrType: ErrorTypeGeneral,
 				}
 			}
-		} else if childDig, derr := parseManifest(desc.Manifest, targetOS, targetArch, targetVariant); derr == nil {
-			childDigest = childDig
+			if childDig, derr := parseManifest(desc.Manifest, targetOS, targetArch, targetVariant); derr == nil {
+				childDigest = childDig
+			}
 		}
 		return DigestResult{
 			IndexDigest:  indexDigest,
@@ -611,11 +668,15 @@ func extractDigestFromDescriptor(desc *remote.Descriptor, targetOS, targetArch, 
 
 	var configDigest string
 	if needConfig {
-		if img, err := desc.Image(); err == nil {
-			if cfgHash, cerr := img.ConfigName(); cerr == nil {
-				configDigest = cfgHash.String()
-			}
+		img, err := desc.Image()
+		if err != nil {
+			return DigestResult{Error: fmt.Errorf("解析远程镜像失败: %w", err), ErrType: detectErrorType(err)}
 		}
+		cfgHash, cerr := img.ConfigName()
+		if cerr != nil {
+			return DigestResult{Error: fmt.Errorf("获取镜像 config digest 失败: %w", cerr), ErrType: detectErrorType(cerr)}
+		}
+		configDigest = cfgHash.String()
 	}
 	return DigestResult{
 		IndexDigest:  indexDigest,

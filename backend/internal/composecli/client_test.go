@@ -194,4 +194,14 @@ func TestComposePathTraversalBlocked(t *testing.T) {
 	if _, err := ValidateProjectDir(symProjDir); err == nil {
 		t.Fatalf("expected symlink project directory to be rejected")
 	}
+
+	// 6. Custom filename inside APP_PATH fails immediately while outside path checks runtime
+	insideCustom := filepath.Join(appDir, "valid-app", "docker-compose.prod.yml")
+	if !isPathWithinAppRoot(insideCustom) {
+		t.Fatalf("expected inside custom compose filename to be treated as inside APP_PATH")
+	}
+	outsideCustom := filepath.Join(outsideDir, "docker-compose.prod.yml")
+	if isPathWithinAppRoot(outsideCustom) {
+		t.Fatalf("expected outside custom compose filename not to be treated as inside APP_PATH")
+	}
 }

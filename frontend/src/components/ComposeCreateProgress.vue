@@ -4,7 +4,7 @@
     title="创建日志"
     size="huge"
     display-directive="if"
-    preset="dialog"
+    preset="card"
     class="compose-create-progress-modal"
     :mask-closable="false"
     :closable="canClose"
@@ -177,14 +177,12 @@ const handleBinaryFrame = (data: Uint8Array) => {
   }
 }
 
-// 使用 VueUse 的 useWebSocket（保持响应式 wsUrl）
+// 使用 VueUse 的 useWebSocket（保持响应式 wsUrl，禁用自动连接与无响应应用层心跳）
 const { send, open, close } = useWebSocket(wsUrl, {
   immediate: false,
+  autoConnect: false,
   autoReconnect: false,
-  heartbeat: {
-    message: 'ping',
-    interval: 30000,
-  },
+  heartbeat: false,
   onMessage: (_ws, event) => {
     if (!event.data) {
       return
@@ -200,6 +198,9 @@ const { send, open, close } = useWebSocket(wsUrl, {
     }
   },
   onConnected: (_ws) => {
+    if (status.value !== 'connecting') {
+      return
+    }
     status.value = 'creating'
     writeLine('\x1b[32m=== 连接成功，开始创建项目 ===\x1b[0m\r\n')
     if (_ws) {
@@ -270,6 +271,7 @@ const handleClose = () => {
 
 // 弹窗关闭后的回调
 const handleModalClose = () => {
+  isTermReady.value = false
   // 弹窗关闭后清理
   if (status.value === 'success' || status.value === 'error') {
     reset()

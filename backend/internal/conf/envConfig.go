@@ -82,7 +82,9 @@ func NewEnvConfig() *EnvConfig {
 				cfg.TWOFA_ALLOWED_DOMAINS = v.GetString("twofa_allowed_domains")
 			}
 			if v.IsSet("static_dir") {
-				cfg.STATIC_DIR = v.GetString("static_dir")
+				if staticDir := strings.TrimSpace(v.GetString("static_dir")); staticDir != "" {
+					cfg.STATIC_DIR = staticDir
+				}
 			}
 			if v.IsSet("enable_docker_shell") {
 				cfg.IS_OPEN_DOCKER_SHELL = v.GetBool("enable_docker_shell")
@@ -167,9 +169,8 @@ twofa_allowed_domains: ""
 # =============================================================================
 
 # 静态资源目录
-# 空字符串表示使用嵌入在二进制中的资源（推荐）
-# 如需自定义前端，设置为前端构建产物目录
-static_dir: ""
+# 默认不设置；如需自定义前端，取消注释并设置为前端构建产物目录
+# static_dir: ""
 
 # =============================================================================
 # 功能开关

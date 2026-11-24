@@ -633,13 +633,14 @@ func (c *Client) PutSingleFileStream(ctx context.Context, containerID, targetDir
 			ModTime: time.Now(),
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
-			_ = tw.Close()
 			_ = pw.CloseWithError(err)
 			errCh <- err
 			return
 		}
-		if _, err := io.CopyN(tw, src, size); err != nil && err != io.EOF {
-			_ = tw.Close()
+		if _, err := io.CopyN(tw, src, size); err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
 			_ = pw.CloseWithError(err)
 			errCh <- err
 			return

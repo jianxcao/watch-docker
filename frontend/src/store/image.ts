@@ -16,6 +16,7 @@ export const useImageStore = defineStore('image', () => {
   const downloading = ref(new Set<string>())
   const importing = ref(false)
   let inFlightFetch: Promise<void> | null = null
+  let latestFetchSeq = 0
 
   // 方法：检查镜像是否为悬空镜像（dangling image）
   const isDanglingImage = (image: ImageInfo): boolean => {
@@ -68,17 +69,21 @@ export const useImageStore = defineStore('image', () => {
     return map
   })
 
-  // 方法：获取镜像列表（并发去重，避免重复请求）
-  const fetchImages = async () => {
-    if (inFlightFetch) {
+  // 方法：获取镜像列表（非强制时并发去重；force=true 强制发起新请求且避免旧响应覆盖新结果）
+  const fetchImages = async (force = false) => {
+    if (!force && inFlightFetch) {
       return inFlightFetch
     }
+    const seq = ++latestFetchSeq
     loading.value = true
-    inFlightFetch = (async () => {
+    let reqPromise!: Promise<void>
+    reqPromise = (async () => {
       try {
         const data = await imageApi.getImages()
         if (data.code === 0) {
-          images.value = data.data.images
+          if (seq === latestFetchSeq) {
+            images.value = data.data.images
+          }
         } else {
           console.error('获取镜像列表失败:', data.msg)
           throw new Error(data.msg)
@@ -87,11 +92,16 @@ export const useImageStore = defineStore('image', () => {
         console.error('获取镜像列表失败:', error)
         throw error
       } finally {
-        loading.value = false
-        inFlightFetch = null
+        if (seq === latestFetchSeq) {
+          loading.value = false
+        }
+        if (inFlightFetch === reqPromise) {
+          inFlightFetch = null
+        }
       }
     })()
-    return inFlightFetch
+    inFlightFetch = reqPromise
+    return reqPromise
   }
 
   // 方法：删除镜像
@@ -100,7 +110,7 @@ export const useImageStore = defineStore('image', () => {
     try {
       const data = await imageApi.deleteImage(ref, force)
       if (data.code === 0) {
-        await fetchImages() // 重新获取列表
+        await fetchImages(true) // 重新获取列表
         return true
       } else {
         throw new Error(data.msg)
@@ -160,7 +170,7 @@ export const useImageStore = defineStore('image', () => {
     try {
       const response = await imageApi.importImage(file)
       if (response.code === 0) {
-        await fetchImages() // 重新获取镜像列表
+        await fetchImages(true) // 重新获取镜像列表
         return true
       } else {
         throw new Error(response.msg || '导入失败')
