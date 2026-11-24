@@ -334,13 +334,13 @@ func (c *Client) allowInsecureFallback(host string) bool {
 	if h == "" {
 		return false
 	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
 	if h == "localhost" || !strings.Contains(h, ".") ||
 		strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".lan") ||
 		strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".home") {
 		return true
-	}
-	if ip := net.ParseIP(h); ip != nil {
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 	}
 	return false
 }

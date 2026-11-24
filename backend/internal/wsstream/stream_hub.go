@@ -244,13 +244,9 @@ func (h *StreamHub[T]) stopStreamSource() {
 
 func (h *StreamHub[T]) broadcast(message T) {
 	h.mu.RLock()
-	clients := make([]*Client[T], 0, len(h.clients))
-	for client := range h.clients {
-		clients = append(clients, client)
-	}
-	h.mu.RUnlock()
+	defer h.mu.RUnlock()
 
-	for _, client := range clients {
+	for client := range h.clients {
 		select {
 		case client.send <- message:
 		default:

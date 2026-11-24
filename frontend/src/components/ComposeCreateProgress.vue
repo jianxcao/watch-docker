@@ -2,14 +2,14 @@
   <n-modal
     v-model:show="modalVisible"
     title="创建日志"
-    size="huge"
+    size="small"
     display-directive="if"
     preset="card"
-    class="compose-create-progress-modal"
     :mask-closable="false"
     :closable="canClose"
     :close-on-esc="canClose"
-    style="width: 90vw; max-width: 1000px; padding: 12px"
+    :content-style="{ padding: 0, overflow: 'hidden' }"
+    style="width: 90vw; max-width: 1000px"
     :on-after-leave="handleModalClose"
   >
     <template #header-extra>
@@ -291,12 +291,5 @@ defineExpose({
   padding: 0;
   overflow: hidden;
   border-radius: 4px;
-}
-
-.compose-create-progress-modal {
-  :deep(.n-card__content) {
-    padding: 0;
-    overflow: hidden;
-  }
 }
 </style>

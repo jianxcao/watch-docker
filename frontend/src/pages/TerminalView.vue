@@ -6,7 +6,7 @@
           <CloseCircleOutline />
         </n-icon>
         <n-text>{{ connectionError }}</n-text>
-        <n-button type="primary" size="small" @click="reconnect" :loading="connecting">
+        <n-button type="primary" size="small" @click="() => reconnect()" :loading="connecting">
           重新连接
         </n-button>
       </div>
@@ -55,7 +55,7 @@
             :disabled="shellOptionsLoading"
             @update:value="handleShellChange"
           />
-          <n-button circle size="tiny" @click="reconnect" :loading="connecting">
+          <n-button circle size="tiny" @click="() => reconnect()" :loading="connecting">
             <template #icon>
               <n-icon>
                 <RefreshOutline />
@@ -110,7 +110,6 @@ const selectedShell = shallowRef('')
 const terminalTarget = shallowRef<'local' | 'host' | ''>('')
 const shellOptionsLoading = shallowRef(false)
 let shellOptionsRequest: Promise<void> | undefined
-let intentionalDisconnects = 0
 let isUnmounted = false
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -213,8 +212,7 @@ const openTerminalConnection = async () => {
 
 // 使用 VueUse 的 useWebSocket
 const {
-  status,
-  send,
+  ws,
   open: openWs,
   close: closeWs,
 } = useWebSocket(socketUrl, {
@@ -223,27 +221,34 @@ const {
   immediate: false,
   // 直接处理消息事件，同时兼容 ArrayBuffer、Blob 与文本帧
   onMessage: (_ws, event) => {
-    if (!terminal.value || !event.data) {
+    if (isUnmounted || _ws !== ws.value || !terminal.value || !event.data) {
       return
     }
     if (event.data instanceof ArrayBuffer) {
       terminal.value.write(new Uint8Array(event.data))
     } else if (event.data instanceof Blob) {
       event.data.arrayBuffer().then((buffer) => {
-        terminal.value?.write(new Uint8Array(buffer))
+        if (isUnmounted || _ws !== ws.value || !terminal.value) {
+          return
+        }
+        terminal.value.write(new Uint8Array(buffer))
       })
     } else if (typeof event.data === 'string') {
       terminal.value.write(event.data)
     }
   },
   onConnected: async (_ws) => {
+    if (isUnmounted || _ws !== ws.value) {
+      return
+    }
     connecting.value = false
     connectionError.value = ''
     // 设置二进制类型为 arraybuffer
-    if (_ws) {
-      _ws.binaryType = 'arraybuffer'
-    }
+    _ws.binaryType = 'arraybuffer'
     await nextTick()
+    if (isUnmounted || _ws !== ws.value) {
+      return
+    }
     termRef.value?.fit()
     if (terminal.value) {
       handleTermResize({
@@ -252,17 +257,19 @@ const {
       })
     }
   },
-  onDisconnected: () => {
-    connecting.value = false
-    if (intentionalDisconnects > 0) {
-      intentionalDisconnects -= 1
+  onDisconnected: (_ws) => {
+    if (isUnmounted || _ws !== ws.value) {
       return
     }
+    connecting.value = false
     if (isTerminalReady.value && !connectionError.value) {
       message.warning('终端连接已断开')
     }
   },
-  onError: () => {
+  onError: (_ws) => {
+    if (isUnmounted || _ws !== ws.value) {
+      return
+    }
     connecting.value = false
     connectionError.value = 'WebSocket 连接失败'
     message.error('无法连接到终端')
@@ -284,30 +291,28 @@ const handleTermReady = (term: Terminal) => {
 
 // 处理用户输入
 const handleTermData = (data: string) => {
-  if (status.value === 'OPEN') {
-    send(data)
+  if (ws.value?.readyState === WebSocket.OPEN) {
+    ws.value.send(data)
   }
 }
 
 // 处理终端大小变化
 const handleTermResize = (size: { cols: number; rows: number }) => {
-  if (status.value === 'OPEN') {
-    send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }))
+  if (ws.value?.readyState === WebSocket.OPEN) {
+    ws.value.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }))
   }
 }
 
 // 重新连接
-const reconnect = async (force = false) => {
-  if (connecting.value && !force) {
+const reconnect = async (force: boolean | Event = false) => {
+  const isForce = force === true
+  if (connecting.value && !isForce) {
     return
   }
   connecting.value = true
   connectionError.value = ''
 
   // 关闭现有连接
-  if (status.value !== 'CLOSED') {
-    intentionalDisconnects += 1
-  }
   closeWs()
 
   // 清空终端
@@ -355,8 +360,8 @@ const clearTerminal = () => {
 
 // 处理移动端键盘按键
 const handleMobileKey = (sequence: string) => {
-  if (status.value === 'OPEN') {
-    send(sequence)
+  if (ws.value?.readyState === WebSocket.OPEN) {
+    ws.value.send(sequence)
   }
   terminal.value?.focus()
 }
@@ -386,9 +391,6 @@ onUnmounted(() => {
   if (reconnectTimer !== null) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
-  }
-  if (status.value !== 'CLOSED') {
-    intentionalDisconnects += 1
   }
   closeWs()
 })

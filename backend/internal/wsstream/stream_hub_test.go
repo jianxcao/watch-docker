@@ -2,10 +2,12 @@ package wsstream
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,6 +91,113 @@ func TestFiniteStreamHubClosesPromptlyWithoutZombieState(t *testing.T) {
 
 	if !hub.IsClosed() {
 		t.Fatal("expected terminated hub to report IsClosed=true")
+	}
+	if mgr.GetHubCount() != 0 {
+		t.Fatalf("expected StreamManager hub count 0, got %d", mgr.GetHubCount())
+	}
+}
+
+type blockingReader struct{}
+
+func (r *blockingReader) Read(ctx context.Context) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (r *blockingReader) Close() error { return nil }
+
+type blockingSource struct {
+	key string
+}
+
+func (s *blockingSource) Start(ctx context.Context) (StreamReader[string], error) {
+	return &blockingReader{}, nil
+}
+
+func (s *blockingSource) Stop() error { return nil }
+
+func (s *blockingSource) GetKey() string { return s.key }
+
+func TestStreamHubBroadcastConcurrentUnregisterAndClose(t *testing.T) {
+	mgr := NewStreamManager[string]()
+	hub := mgr.GetOrCreateHub("stress-test", func() StreamSource[string] {
+		return &blockingSource{key: "stress-test"}
+	})
+
+	anchor := &Client[string]{
+		send: make(chan string, 64),
+		hub:  hub,
+		id:   "anchor",
+	}
+	if !hub.RegisterClient(anchor) {
+		t.Fatal("expected anchor RegisterClient to succeed")
+	}
+	var anchorWG sync.WaitGroup
+	anchorWG.Add(1)
+	go func() {
+		defer anchorWG.Done()
+		for range anchor.send {
+		}
+	}()
+
+	var workerWG sync.WaitGroup
+	stopWorkers := make(chan struct{})
+
+	// 并发注册和注销临时客户端，同时触发 unregister 关闭 client.send
+	for w := 0; w < 6; w++ {
+		workerWG.Add(1)
+		go func(workerID int) {
+			defer workerWG.Done()
+			i := 0
+			for {
+				select {
+				case <-stopWorkers:
+					return
+				default:
+				}
+				client := &Client[string]{
+					send: make(chan string, 8),
+					hub:  hub,
+					id:   fmt.Sprintf("worker-%d-%d", workerID, i),
+				}
+				i++
+				if !hub.RegisterClient(client) {
+					return
+				}
+				hub.UnregisterClient(client)
+			}
+		}(w)
+	}
+
+	// 并发广播消息，覆盖与 unregister 和 sourceDone 并发关闭通道的场景
+	var broadcastWG sync.WaitGroup
+	for b := 0; b < 4; b++ {
+		broadcastWG.Add(1)
+		go func() {
+			defer broadcastWG.Done()
+			for i := 0; i < 400; i++ {
+				hub.broadcast("msg")
+			}
+		}()
+	}
+
+	time.Sleep(15 * time.Millisecond)
+	close(stopWorkers)
+	workerWG.Wait()
+
+	// 在广播仍在继续时触发 sourceDone 关闭剩余客户端
+	hub.closeAllClients()
+	broadcastWG.Wait()
+
+	select {
+	case <-hub.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected StreamHub to exit after closeAllClients")
+	}
+	anchorWG.Wait()
+
+	if !hub.IsClosed() {
+		t.Fatal("expected hub to be closed")
 	}
 	if mgr.GetHubCount() != 0 {
 		t.Fatalf("expected StreamManager hub count 0, got %d", mgr.GetHubCount())

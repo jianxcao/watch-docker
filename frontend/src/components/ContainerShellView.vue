@@ -8,7 +8,7 @@
           :options="shellOptions"
           size="small"
           style="width: 120px"
-          :disabled="isConnected"
+          :disabled="isConnected || isConnecting"
         />
         <n-button
           v-if="!isConnected"
@@ -20,7 +20,7 @@
         >
           连接
         </n-button>
-        <n-button v-else type="error" size="small" @click="disconnect"> 断开 </n-button>
+        <n-button v-else type="error" size="small" @click="() => disconnect()"> 断开 </n-button>
         <n-tag :type="connectionStatusType" size="small">
           {{ connectionStatusText }}
         </n-tag>
@@ -81,6 +81,7 @@ const terminal = ref<Terminal>()
 const errorMessage = ref('')
 const selectedShell = ref('sh')
 const wsUrl = ref('')
+const shellState = ref<'CLOSED' | 'CONNECTING' | 'OPEN'>('CLOSED')
 let isUnmounting = false
 
 // Shell 选项
@@ -129,12 +130,15 @@ const appendShellChunk = (chunk: string | Uint8Array) => {
 }
 
 // 使用 VueUse 的 useWebSocket
-const { status, send, open, close } = useWebSocket(wsUrl, {
+const { ws, open, close } = useWebSocket(wsUrl, {
   immediate: false, // 不自动连接，等用户点击
   autoReconnect: false, // 禁用自动重连
   heartbeat: false, // 终端不需要心跳
   autoConnect: false,
   onMessage: (_ws, event) => {
+    if (isUnmounting || _ws !== ws.value) {
+      return
+    }
     const newData = event.data
     if (!newData) {
       return
@@ -144,6 +148,9 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
       appendShellChunk(new Uint8Array(newData))
     } else if (newData instanceof Blob) {
       void newData.arrayBuffer().then((buffer) => {
+        if (isUnmounting || _ws !== ws.value) {
+          return
+        }
         appendShellChunk(new Uint8Array(buffer))
       })
     } else if (typeof newData === 'string') {
@@ -151,9 +158,11 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
     }
   },
   onConnected: (_ws) => {
-    if (_ws) {
-      _ws.binaryType = 'arraybuffer'
+    if (isUnmounting || _ws !== ws.value) {
+      return
     }
+    shellState.value = 'OPEN'
+    _ws.binaryType = 'arraybuffer'
     errorMessage.value = ''
     message.success('Shell 连接成功')
 
@@ -166,22 +175,30 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
     }
   },
   onError: (_ws, event) => {
+    if (isUnmounting || _ws !== ws.value) {
+      return
+    }
+    shellState.value = 'CLOSED'
     console.error('WebSocket error:', event)
     errorMessage.value = 'WebSocket 连接错误'
     message.error('Shell 连接失败')
   },
-  onDisconnected: () => {
+  onDisconnected: (_ws) => {
+    if (isUnmounting || _ws !== ws.value) {
+      return
+    }
+    shellState.value = 'CLOSED'
     terminal.value = undefined
     pendingChunks.length = 0
-    if (!isUnmounting && !errorMessage.value) {
+    if (!errorMessage.value) {
       message.info('Shell 连接已关闭')
     }
   },
 })
 
 // 连接状态
-const isConnected = computed(() => status.value === 'OPEN')
-const isConnecting = computed(() => status.value === 'CONNECTING')
+const isConnected = computed(() => shellState.value === 'OPEN')
+const isConnecting = computed(() => shellState.value === 'CONNECTING')
 
 const connectionStatusType = computed(() => {
   if (isConnected.value) {
@@ -209,14 +226,19 @@ const connect = () => {
     message.warning('容器未运行，无法连接 Shell')
     return
   }
+  if (isConnecting.value) {
+    return
+  }
 
   try {
     errorMessage.value = ''
     pendingChunks.length = 0
     wsUrl.value = getWebSocketUrl()
     console.debug('wsUrl', wsUrl.value)
+    shellState.value = 'CONNECTING'
     open()
   } catch (error: any) {
+    shellState.value = 'CLOSED'
     console.error('Failed to connect WebSocket:', error)
     errorMessage.value = error.message || '连接失败'
     message.error('Shell 连接失败: ' + error.message)
@@ -224,9 +246,15 @@ const connect = () => {
 }
 
 // 断开连接
-const disconnect = () => {
+const disconnect = (silent = false) => {
+  const wasConnected = shellState.value === 'OPEN'
+  shellState.value = 'CLOSED'
+  terminal.value = undefined
   pendingChunks.length = 0
   close()
+  if (wasConnected && !silent && !isUnmounting) {
+    message.info('Shell 连接已关闭')
+  }
 }
 
 // 终端就绪
@@ -251,21 +279,21 @@ const handleTerminalReady = (term: Terminal) => {
 
 // 终端数据输入
 const handleTerminalData = (data: string) => {
-  if (isConnected.value) {
-    send(data)
+  if (ws.value?.readyState === WebSocket.OPEN) {
+    ws.value.send(data)
   }
 }
 
 // 终端大小变化
 const handleTerminalResize = (size: { cols: number; rows: number }) => {
-  if (isConnected.value) {
+  if (ws.value?.readyState === WebSocket.OPEN) {
     // 发送 resize 消息
     const resizeMsg = JSON.stringify({
       type: 'resize',
       rows: size.rows,
       cols: size.cols,
     })
-    send(resizeMsg)
+    ws.value.send(resizeMsg)
   }
 }
 
@@ -273,9 +301,12 @@ const handleTerminalResize = (size: { cols: number; rows: number }) => {
 watch(
   () => props.isRunning,
   (newValue) => {
-    if (!newValue && isConnected.value) {
-      disconnect()
-      message.warning('容器已停止，Shell 连接已断开')
+    if (!newValue && (isConnected.value || isConnecting.value)) {
+      const wasConnected = isConnected.value
+      disconnect(true)
+      if (wasConnected) {
+        message.warning('容器已停止，Shell 连接已断开')
+      }
     }
   },
 )
@@ -284,19 +315,13 @@ watch(
   () => props.containerId,
   () => {
     errorMessage.value = ''
-    terminal.value = undefined
-    pendingChunks.length = 0
-    if (status.value !== 'CLOSED') {
-      close()
-    }
+    disconnect(true)
   },
 )
 
 onBeforeUnmount(() => {
   isUnmounting = true
-  terminal.value = undefined
-  pendingChunks.length = 0
-  close()
+  disconnect(true)
 })
 </script>
 

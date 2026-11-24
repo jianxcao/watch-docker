@@ -278,10 +278,11 @@ func (s *Server) handleSaveConfig() gin.HandlerFunc {
 			return
 		}
 
-		if oldLogLevel != incoming.Logging.Level {
-			s.logger.Info("log level changed", zap.String("old_level", oldLogLevel), zap.String("new_level", incoming.Logging.Level))
-			if err := logger.SetLogLevel(incoming.Logging.Level); err != nil {
-				s.logger.Error("设置日志出错， 请重启容器", zap.String("level", incoming.Logging.Level), zap.Error(err))
+		newLogLevel := config.Get().Logging.Level
+		if oldLogLevel != newLogLevel {
+			s.logger.Info("log level changed", zap.String("old_level", oldLogLevel), zap.String("new_level", newLogLevel))
+			if err := logger.SetLogLevel(newLogLevel); err != nil {
+				s.logger.Error("设置日志出错， 请重启容器", zap.String("level", newLogLevel), zap.Error(err))
 			}
 		}
 
