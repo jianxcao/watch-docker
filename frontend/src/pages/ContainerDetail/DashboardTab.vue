@@ -31,7 +31,10 @@
           <div class="card-content">
             <div class="overview-value">{{ cpuPercent.toFixed(2) }}%</div>
             <div class="overview-progress">
-              <div class="progress-fill" :style="{ width: cpuPercent + '%' }"></div>
+              <div
+                class="progress-fill"
+                :style="{ width: Math.min(100, cpuPercent) + '%' }"
+              ></div>
             </div>
           </div>
         </div>
@@ -55,7 +58,7 @@
             <div class="overview-progress">
               <div
                 class="progress-fill progress-fill-memory"
-                :style="{ width: memoryPercent + '%' }"
+                :style="{ width: Math.min(100, memoryPercent) + '%' }"
               ></div>
             </div>
           </div>
@@ -71,7 +74,7 @@
           </div>
           <div class="detail-section">
             <div class="detail-item">
-              <span class="detail-label">CPU 型号</span>
+              <span class="detail-label">CPU 核心数</span>
               <span class="detail-value">{{ detailStats.cpu_stats.online_cpus }} CPU</span>
             </div>
             <div class="detail-item">
@@ -161,15 +164,15 @@
           </div>
         </div>
 
-        <!-- 连接数量 -->
+        <!-- 进程数量 -->
         <div class="stat-card process-card">
           <div class="card-header">
             <HeartLineIcon class="card-icon" />
-            <div class="card-title">连接数量</div>
+            <div class="card-title">进程数 (PIDs)</div>
           </div>
           <div class="large-stat">
             <div class="large-stat-value">{{ detailStats.pids_stats.current }}</div>
-            <div class="large-stat-label">当前连接</div>
+            <div class="large-stat-label">当前进程数</div>
           </div>
         </div>
 
@@ -196,7 +199,7 @@
               >
             </div>
             <div class="detail-item">
-              <span class="detail-label">已接收</span>
+              <span class="detail-label">累计接收</span>
               <span class="detail-value">{{ formatBytes(totalNetworkRx) }}</span>
             </div>
             <div class="detail-item">
@@ -204,7 +207,7 @@
               <span class="detail-value">{{ formatNumber(totalNetworkRxPackets) }} </span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">已传输</span>
+              <span class="detail-label">累计发送</span>
               <span class="detail-value">{{ formatBytes(totalNetworkTx) }}</span>
             </div>
             <div class="detail-item">
@@ -304,6 +307,7 @@
 import type { ContainerDetailStats } from '@/common/types'
 import { API_ENDPOINTS } from '@/constants/api'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 import { useWebSocket } from '@vueuse/core'
 import { useMessage } from 'naive-ui'
 import { computed, onBeforeMount, onUnmounted, ref, watch } from 'vue'
@@ -325,6 +329,7 @@ interface Props {
 const props = defineProps<Props>()
 const message = useMessage()
 const settingStore = useSettingStore()
+const authStore = useAuthStore()
 
 const loading = ref(true)
 const error = ref('')
@@ -343,20 +348,21 @@ const networkInterfaceRates = ref<Record<string, { rxRate: number; txRate: numbe
 const diskReadRate = ref(0)
 const diskWriteRate = ref(0)
 
-// 计算 WebSocket URL
+// 计算 WebSocket URL（未开启认证时也允许无 token 建立连接）
 const wsUrl = computed(() => {
   if (!props.isRunning) {
     return undefined
   }
 
   const token = settingStore.getToken()
-  if (!token) {
+  if (authStore.authEnabled && !token) {
     return undefined
   }
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1${API_ENDPOINTS.CONTAINER_STATS_WS(props.containerId)}?token=${token}`
+  const base = `${protocol}//${host}/api/v1${API_ENDPOINTS.CONTAINER_STATS_WS(props.containerId)}`
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base
 })
 
 // 使用 VueUse 的 useWebSocket
@@ -407,10 +413,20 @@ const { status, open, close } = useWebSocket(wsUrl, {
     message.error('容器统计连接失败')
   },
 
-  // 消息回调
-  onMessage(_, event) {
+  // 消息回调（兼容 ArrayBuffer、Blob 与文本 JSON）
+  async onMessage(_, event) {
     try {
-      const data = JSON.parse(event.data)
+      let rawText: string
+      if (event.data instanceof ArrayBuffer) {
+        rawText = new TextDecoder('utf-8').decode(event.data)
+      } else if (event.data instanceof Blob) {
+        rawText = await event.data.text()
+      } else if (typeof event.data === 'string') {
+        rawText = event.data
+      } else {
+        return
+      }
+      const data = JSON.parse(rawText)
       const newStats = data as ContainerDetailStats
       const currentTime = new Date(newStats.read).getTime()
 
@@ -548,7 +564,11 @@ const cpuPercent = computed(() => {
     detailStats.value.cpu_stats.system_cpu_usage - detailStats.value.precpu_stats.system_cpu_usage
 
   if (systemDelta > 0 && cpuDelta >= 0) {
-    return (cpuDelta / systemDelta) * 100.0
+    const cpuCount =
+      detailStats.value.cpu_stats.online_cpus ||
+      detailStats.value.cpu_stats.cpu_usage?.percpu_usage?.length ||
+      1
+    return (cpuDelta / systemDelta) * cpuCount * 100.0
   }
 
   return 0

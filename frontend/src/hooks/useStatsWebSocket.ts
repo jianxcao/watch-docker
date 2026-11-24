@@ -1,4 +1,5 @@
 import type { ContainerStats, ContainerStatus } from '@/common/types'
+import { useAuthStore } from '@/store/auth'
 import { useSettingStore } from '@/store/setting'
 import { useWebSocket } from '@vueuse/core'
 import { computed } from 'vue'
@@ -18,17 +19,19 @@ export interface StatsMessage {
  */
 export default function useStatsWebSocket() {
   const settingStore = useSettingStore()
+  const authStore = useAuthStore()
 
-  // 计算 WebSocket URL
+  // 计算 WebSocket URL（未开启认证时也允许无 token 建立连接）
   const wsUrl = computed(() => {
     const token = settingStore.getToken()
-    if (!token) {
+    if (authStore.authEnabled && !token) {
       return undefined
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    return `${protocol}//${host}/api/v1/containers/stats/ws?token=${token}`
+    const base = `${protocol}//${host}/api/v1/containers/stats/ws`
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base
   })
 
   // 使用 VueUse 的 useWebSocket

@@ -1,3 +1,4 @@
+import { toRaw } from 'vue'
 import type { ContainerCreateRequest } from '@/common/types'
 import type {
   BasicFormValue,
@@ -11,6 +12,68 @@ import type {
 } from './types'
 
 /**
+ * 解析带单引号/双引号和反斜杠转义的命令行字符串为参数数组
+ */
+export function parseShellArgs(input: string): string[] {
+  const args: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  let escaped = false
+  let hasToken = false
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (escaped) {
+      current += ch
+      escaped = false
+      hasToken = true
+      continue
+    }
+    if (quote === "'") {
+      if (ch === "'") {
+        quote = null
+      } else {
+        current += ch
+      }
+      hasToken = true
+      continue
+    }
+    if (quote === '"') {
+      if (ch === '\\') {
+        escaped = true
+      } else if (ch === '"') {
+        quote = null
+      } else {
+        current += ch
+      }
+      hasToken = true
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      hasToken = true
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+      hasToken = true
+    } else if (/\s/.test(ch)) {
+      if (hasToken) {
+        args.push(current)
+        current = ''
+        hasToken = false
+      }
+    } else {
+      current += ch
+      hasToken = true
+    }
+  }
+
+  if (hasToken) {
+    args.push(current)
+  }
+  return args
+}
+
+/**
  * 转换基础配置表单数据
  */
 export function transformBasicForm(form: BasicFormValue): Partial<ContainerCreateRequest> {
@@ -22,14 +85,14 @@ export function transformBasicForm(form: BasicFormValue): Partial<ContainerCreat
     stdinOnce: form.stdinOnce || false,
   }
 
-  // 转换 entrypointString 为数组
+  // 转换 entrypointString 为数组（支持引号与转义）
   if (form.entrypointString && form.entrypointString.trim()) {
-    data.entrypoint = form.entrypointString.trim().split(/\s+/)
+    data.entrypoint = parseShellArgs(form.entrypointString.trim())
   }
 
-  // 转换 cmdString 为数组
+  // 转换 cmdString 为数组（支持引号与转义）
   if (form.cmdString && form.cmdString.trim()) {
-    data.cmd = form.cmdString.trim().split(/\s+/)
+    data.cmd = parseShellArgs(form.cmdString.trim())
   }
 
   if (form.workingDir) {
@@ -65,13 +128,23 @@ export function transformEnvForm(form: EnvFormValue): Partial<ContainerCreateReq
 }
 
 /**
- * 转换端口配置表单数据
+ * 转换端口配置表单数据（同时填充 portBindings 与 exposedPorts）
  */
 export function transformPortForm(form: PortFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {}
+  const exposedPorts: Record<string, Record<string, never>> = { ...(form.exposedPorts || {}) }
 
   if (form.portBindings && Object.keys(form.portBindings).length > 0) {
     data.portBindings = toRaw(form.portBindings)
+    for (const portKey of Object.keys(form.portBindings)) {
+      if (!exposedPorts[portKey]) {
+        exposedPorts[portKey] = {}
+      }
+    }
+  }
+
+  if (Object.keys(exposedPorts).length > 0) {
+    data.exposedPorts = exposedPorts
   }
 
   return data
@@ -96,42 +169,15 @@ export function transformVolumeForm(form: VolumeFormValue): Partial<ContainerCre
 export function transformNetworkForm(
   form: NetworkFormValue,
   portPublishAllPorts: boolean,
-  containerName: string,
+  _containerName: string,
 ): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {
     publishAllPorts: form.publishAllPorts || portPublishAllPorts || false,
   }
 
-  // 根据配置模式处理网络配置
+  // 默认模式：直接复用 Docker 默认 bridge 网络，避免每次创建容器产生孤儿网络
   if (form.configMode === 'default') {
-    // 默认模式：创建一个 容器名_default 的网络
     data.networkMode = 'bridge'
-
-    // 如果提供了容器名，创建一个默认网络
-    if (containerName && containerName.trim()) {
-      const networkName = `${containerName}_default`
-
-      // 创建网络配置
-      data.networksToCreate = [
-        {
-          name: networkName,
-          driver: 'bridge',
-          enableIPv6: false,
-          internal: false,
-          attachable: true,
-        },
-      ]
-
-      // 配置容器连接到该网络
-      const endpointsConfig: Record<string, any> = {}
-      endpointsConfig[networkName] = {
-        aliases: [],
-      }
-
-      data.networkConfig = {
-        endpointsConfig,
-      }
-    }
   } else if (form.configMode === 'custom') {
     // 自定义网络配置模式
     data.networkMode = 'bridge'
@@ -263,14 +309,20 @@ export function transformNetworkForm(
 export function transformRuntimeResourceForm(
   form: RuntimeResourceFormValue,
 ): Partial<ContainerCreateRequest> {
+  const autoRemove = form.autoRemove || false
   const data: Partial<ContainerCreateRequest> = {
     privileged: form.privileged || false,
     readonlyRootfs: form.readonlyRootfs || false,
-    autoRemove: form.autoRemove || false,
-    restartPolicy: {
-      name: form.restartPolicyName as any,
-      maximumRetryCount: form.restartPolicyMaxRetry || 0,
-    },
+    autoRemove,
+    restartPolicy: autoRemove
+      ? {
+          name: '' as any,
+          maximumRetryCount: 0,
+        }
+      : {
+          name: form.restartPolicyName as any,
+          maximumRetryCount: form.restartPolicyMaxRetry || 0,
+        },
   }
 
   // 资源限制

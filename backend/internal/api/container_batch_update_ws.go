@@ -161,7 +161,7 @@ func (s *Server) handleBatchUpdateWebSocket() gin.HandlerFunc {
 			})
 
 			updateCtx, updateCancel := context.WithTimeout(ctx, 5*time.Minute)
-			updateErr := s.updater.UpdateContainerWithProgress(updateCtx, target.ID, target.Image, &updater.UpdateProgressCallback{
+			_, updateErr := s.updater.UpdateContainerWithProgress(updateCtx, target.ID, target.Image, &updater.UpdateProgressCallback{
 				OnStep: func(step, message string) {
 					sendMsg(batchUpdateMessage{
 						Type:          "step",

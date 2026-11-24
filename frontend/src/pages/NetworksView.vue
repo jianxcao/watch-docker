@@ -296,8 +296,8 @@ const filteredNetworks = computed(() => {
     })
   }
 
-  // 3. 排序
-  return networks.sort((a, b) => {
+  // 3. 排序（使用副本避免修改 store 原数组）
+  return [...networks].sort((a, b) => {
     let result = 0
 
     switch (sortBy.value) {
@@ -355,7 +355,7 @@ const handleDelete = async (network: NetworkInfo) => {
 
 // 处理查看详情
 const handleDetail = (network: NetworkInfo) => {
-  router.push(`/networks/${network.id}`)
+  router.push(`/networks/${encodeURIComponent(network.id)}`)
 }
 
 // 处理刷新
@@ -447,19 +447,19 @@ onMounted(async () => {
     gap: 16px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

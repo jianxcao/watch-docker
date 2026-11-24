@@ -22,7 +22,7 @@
     </div>
 
     <MobileKeyboard
-      v-if="!connectionError"
+      v-if="isMobileDevice && !connectionError"
       v-model:expanded="keyboardExpanded"
       @key="handleMobileKey"
       @clear="clearTerminal"
@@ -209,10 +209,19 @@ const {
   autoReconnect: false,
   autoConnect: false,
   immediate: false,
-  // 直接处理消息事件，支持二进制数据
+  // 直接处理消息事件，同时兼容 ArrayBuffer、Blob 与文本帧
   onMessage: (_ws, event) => {
-    if (terminal.value && event.data) {
+    if (!terminal.value || !event.data) {
+      return
+    }
+    if (event.data instanceof ArrayBuffer) {
       terminal.value.write(new Uint8Array(event.data))
+    } else if (event.data instanceof Blob) {
+      event.data.arrayBuffer().then((buffer) => {
+        terminal.value?.write(new Uint8Array(buffer))
+      })
+    } else if (typeof event.data === 'string') {
+      terminal.value.write(event.data)
     }
   },
   onConnected: (_ws) => {
@@ -221,6 +230,12 @@ const {
     // 设置二进制类型为 arraybuffer
     if (_ws) {
       _ws.binaryType = 'arraybuffer'
+    }
+    if (terminal.value) {
+      handleTermResize({
+        cols: terminal.value.cols,
+        rows: terminal.value.rows,
+      })
     }
   },
   onDisconnected: () => {
@@ -262,8 +277,9 @@ const handleTermData = (data: string) => {
 
 // 处理终端大小变化
 const handleTermResize = (size: { cols: number; rows: number }) => {
-  // 如果需要通知后端终端大小变化，可以在这里发送消息
-  console.log('Terminal resized:', size)
+  if (status.value === 'OPEN') {
+    send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }))
+  }
 }
 
 // 重新连接

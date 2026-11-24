@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SecurityHeadersMiddleware 添加安全响应头，防御 XSS、点击劫持等攻击
+// SecurityHeadersMiddleware 添加安全响应头
 func SecurityHeadersMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
@@ -26,44 +26,50 @@ func SecurityHeadersMiddleware() gin.HandlerFunc {
 	}
 }
 
-// loginAttempt 记录一次登录尝试
 type loginAttempt struct {
 	count     int
 	firstTime time.Time
 	lockedAt  time.Time
 }
 
-// LoginRateLimiter 登录速率限制器
+// LoginRateLimiter 速率限制器（用于登录与 OTP 校验防暴力破解）
 type LoginRateLimiter struct {
-	mu       sync.RWMutex
-	attempts map[string]*loginAttempt
+	mu          sync.RWMutex
+	attempts    map[string]*loginAttempt
 	maxAttempts int
 	window      time.Duration
 	lockout     time.Duration
 }
 
-var loginLimiter = &LoginRateLimiter{
-	attempts:    make(map[string]*loginAttempt),
-	maxAttempts: 5,
-	window:      5 * time.Minute,
-	lockout:     15 * time.Minute,
+var (
+	loginLimiter = newRateLimiter(5, 5*time.Minute, 15*time.Minute)
+	otpLimiter   = newRateLimiter(8, 5*time.Minute, 15*time.Minute)
+)
+
+func newRateLimiter(maxAttempts int, window, lockout time.Duration) *LoginRateLimiter {
+	rl := &LoginRateLimiter{
+		attempts:    make(map[string]*loginAttempt),
+		maxAttempts: maxAttempts,
+		window:      window,
+		lockout:     lockout,
+	}
+	go rl.cleanup()
+	return rl
 }
 
-func init() {
-	go loginLimiter.cleanup()
-}
-
-// GetLoginRateLimiter 获取登录速率限制器
 func GetLoginRateLimiter() *LoginRateLimiter {
 	return loginLimiter
 }
 
-// IsBlocked 检查 IP 是否被暂时锁定
-func (l *LoginRateLimiter) IsBlocked(ip string) bool {
+func GetOTPRateLimiter() *LoginRateLimiter {
+	return otpLimiter
+}
+
+func (l *LoginRateLimiter) IsBlocked(key string) bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	attempt, exists := l.attempts[ip]
+	attempt, exists := l.attempts[key]
 	if !exists {
 		return false
 	}
@@ -77,15 +83,21 @@ func (l *LoginRateLimiter) IsBlocked(ip string) bool {
 	return false
 }
 
-// RecordFailure 记录一次失败的登录尝试，返回是否应锁定
-func (l *LoginRateLimiter) RecordFailure(ip string) (blocked bool, remaining int) {
+func (l *LoginRateLimiter) RecordFailure(key string) (blocked bool, remaining int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := time.Now()
-	attempt, exists := l.attempts[ip]
+	attempt, exists := l.attempts[key]
 	if !exists {
-		l.attempts[ip] = &loginAttempt{count: 1, firstTime: now}
+		l.attempts[key] = &loginAttempt{count: 1, firstTime: now}
+		return false, l.maxAttempts - 1
+	}
+
+	if !attempt.lockedAt.IsZero() && now.Sub(attempt.lockedAt) >= l.lockout {
+		attempt.count = 1
+		attempt.firstTime = now
+		attempt.lockedAt = time.Time{}
 		return false, l.maxAttempts - 1
 	}
 
@@ -105,14 +117,12 @@ func (l *LoginRateLimiter) RecordFailure(ip string) (blocked bool, remaining int
 	return false, l.maxAttempts - attempt.count
 }
 
-// RecordSuccess 登录成功后清除记录
-func (l *LoginRateLimiter) RecordSuccess(ip string) {
+func (l *LoginRateLimiter) RecordSuccess(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.attempts, ip)
+	delete(l.attempts, key)
 }
 
-// cleanup 定时清理过期记录
 func (l *LoginRateLimiter) cleanup() {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
@@ -120,18 +130,16 @@ func (l *LoginRateLimiter) cleanup() {
 	for range ticker.C {
 		l.mu.Lock()
 		now := time.Now()
-		for ip, attempt := range l.attempts {
+		for k, attempt := range l.attempts {
 			if now.Sub(attempt.firstTime) > l.window+l.lockout {
-				delete(l.attempts, ip)
+				delete(l.attempts, k)
 			}
 		}
 		l.mu.Unlock()
 	}
 }
 
-// CheckWebSocketOrigin 验证 WebSocket 请求的 Origin 头
-// 防止 Cross-Site WebSocket Hijacking (CSWSH) 攻击
-// 只比较主机名（不含端口），以兼容反向代理场景（如 Vite dev proxy）
+// CheckWebSocketOrigin 验证 WebSocket 请求的 Origin 头，防御 CSWSH 攻击
 func CheckWebSocketOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -155,7 +163,6 @@ func CheckWebSocketOrigin(r *http.Request) bool {
 	return strings.EqualFold(originHost, requestHost)
 }
 
-// extractHost 从 Origin URL 中提取主机部分（含端口）
 func extractHost(origin string) string {
 	origin = strings.TrimSpace(origin)
 	if idx := strings.Index(origin, "://"); idx >= 0 {
@@ -167,7 +174,6 @@ func extractHost(origin string) string {
 	return origin
 }
 
-// extractHostname 从 host:port 中提取纯主机名（去掉端口）
 func extractHostname(hostPort string) string {
 	if strings.HasPrefix(hostPort, "[") {
 		if idx := strings.Index(hostPort, "]"); idx >= 0 {

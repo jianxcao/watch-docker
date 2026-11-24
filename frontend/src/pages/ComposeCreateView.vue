@@ -98,7 +98,7 @@
     <!-- 创建进度组件 -->
     <ComposeCreateProgress
       ref="createProgressRef"
-      :show="showProgress"
+      v-model:show="showProgress"
       :project-name="formData.name"
       :yaml-content="formData.yaml"
       :force="true"
@@ -308,7 +308,7 @@ const handleCancel = () => {
 // 初始化
 onMounted(() => {
   // 加载系统信息
-  if (!settingStore.systemInfo) {
+  if (!settingStore.systemInfo?.appPath) {
     settingStore.fetchSystemInfo()
   }
 })

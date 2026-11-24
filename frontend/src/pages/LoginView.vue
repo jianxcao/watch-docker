@@ -69,14 +69,20 @@
 
         <!-- 验证二次验证 -->
         <TwoFAVerify v-else :method="authStore.twoFAMethod" @success="handleTwoFASuccess" />
+
+        <div class="mt-3 text-center">
+          <n-button text type="primary" @click="authStore.cancelTwoFA()">返回重新登录</n-button>
+        </div>
       </div>
 
       <!-- 系统信息 -->
       <div class="system-info" v-if="settingStore.systemInfo">
         <n-card size="small" embedded>
           <n-space justify="space-between" align="center">
-            <n-text depth="3">Docker: {{ settingStore.systemInfo.dockerVersion }}</n-text>
-            <n-text depth="3">{{ settingStore.systemInfo.version.version }}</n-text>
+            <n-text v-if="settingStore.systemInfo.dockerVersion" depth="3">
+              Docker: {{ settingStore.systemInfo.dockerVersion }}
+            </n-text>
+            <n-text depth="3">{{ settingStore.systemInfo.version?.version }}</n-text>
           </n-space>
         </n-card>
       </div>

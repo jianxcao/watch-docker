@@ -1,5 +1,5 @@
 import { useImageStore } from '@/store/image'
-import { useContainerStore } from '@/store/container'
+import { parseImageRef } from '@/common/imageRef'
 import { useMessage, useDialog } from 'naive-ui'
 import { h, ref } from 'vue'
 import { NCheckbox, NSpace, NText } from 'naive-ui'
@@ -7,7 +7,6 @@ import type { ImageInfo, ContainerStatus } from '@/common/types'
 
 export function useImage() {
   const store = useImageStore()
-  const containerStore = useContainerStore()
   const message = useMessage()
   const dialog = useDialog()
 
@@ -191,7 +190,7 @@ export function useImage() {
     return '刚刚'
   }
 
-  // 获取镜像版本的显示文本
+  // 获取镜像版本的显示文本（兼容 registry:port/repo:tag）
   const getVersionDisplayText = (image: ImageInfo): string => {
     if (!image.repoTags || image.repoTags.length === 0) {
       return '<none>'
@@ -202,23 +201,9 @@ export function useImage() {
       return '<none>'
     }
 
-    // 从第一个有效标签中提取版本
-    const firstTag = validTags[0]
-    const colonIndex = firstTag.lastIndexOf(':')
+    const parsed = parseImageRef(validTags[0])
+    const version = !parsed.tag || parsed.tag === 'latest' ? 'latest' : parsed.tag
 
-    if (colonIndex === -1) {
-      // 如果没有冒号，返回 latest
-      return 'latest'
-    }
-
-    const version = firstTag.substring(colonIndex + 1)
-
-    // 如果版本为空或者是 latest，返回 latest
-    if (!version || version === 'latest') {
-      return 'latest'
-    }
-
-    // 如果有多个标签，显示版本数量
     if (validTags.length > 1) {
       return `${version} +${validTags.length - 1}`
     }
@@ -226,7 +211,7 @@ export function useImage() {
     return version
   }
 
-  // 获取镜像名称（不包含版本）
+  // 获取镜像名称（不包含版本，正确保留 host:port）
   const getImageNameOnly = (image: ImageInfo): string => {
     if (!image.repoTags || image.repoTags.length === 0) {
       // 如果没有标签，返回短ID
@@ -239,16 +224,7 @@ export function useImage() {
       return image.id.startsWith('sha256:') ? image.id.slice(7, 19) : image.id.slice(0, 12)
     }
 
-    // 从第一个有效标签中提取镜像名称（冒号前面的部分）
-    const firstTag = validTags[0]
-    const colonIndex = firstTag.lastIndexOf(':')
-
-    if (colonIndex === -1) {
-      // 如果没有冒号，整个标签就是镜像名称
-      return firstTag
-    }
-
-    return firstTag.substring(0, colonIndex)
+    return parseImageRef(validTags[0]).repository || validTags[0]
   }
 
   // 获取镜像摘要的显示文本
@@ -266,47 +242,14 @@ export function useImage() {
     return image.id.slice(0, 12)
   }
 
-  // 检查镜像是否被容器使用
+  // 检查镜像是否被容器使用（从全局预计算 Map O(1) 读取）
   const isImageInUse = (image: ImageInfo): boolean => {
     return getContainersUsingImage(image).length > 0
   }
 
-  // 获取使用指定镜像的容器列表
+  // 获取使用指定镜像的容器列表（从全局预计算 Map O(1) 读取）
   const getContainersUsingImage = (image: ImageInfo): ContainerStatus[] => {
-    const containers = containerStore.containers
-    const imageTags = image.repoTags || []
-
-    return containers.filter((container) => {
-      // 检查容器的 image 字段是否匹配镜像的标签
-      const containerImage = container.image
-
-      // 如果容器镜像与镜像标签完全匹配
-      if (imageTags.includes(containerImage)) {
-        return true
-      }
-
-      // 检查容器镜像是否与镜像ID相关（通过标签部分匹配）
-      if (
-        imageTags.some((tag) => {
-          // 处理带有digest的情况（例如: nginx@sha256:xxx）
-          const tagWithoutDigest = tag.split('@')[0]
-          const containerImageWithoutDigest = containerImage.split('@')[0]
-
-          // 处理带有tag的情况（例如: nginx:latest）
-          const tagWithoutTag = tagWithoutDigest.split(':')[0]
-          const containerImageWithoutTag = containerImageWithoutDigest.split(':')[0]
-
-          return (
-            tagWithoutDigest === containerImageWithoutDigest ||
-            tagWithoutTag === containerImageWithoutTag
-          )
-        })
-      ) {
-        return true
-      }
-
-      return false
-    })
+    return store.imageUsageMap.get(image.id) || []
   }
 
   // 获取镜像使用情况的显示文本

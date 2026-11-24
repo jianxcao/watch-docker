@@ -178,7 +178,7 @@
     <!-- 重新部署进度组件 -->
     <ComposeCreateProgress
       ref="createProgressRef"
-      :show="showProgress"
+      v-model:show="showProgress"
       :project-name="projectName"
       :yaml-content="yamlContent"
       :force="true"
@@ -699,19 +699,19 @@ onMounted(async () => {
     gap: 12px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { useThemeVars, type CustomThemeCommonVars, type ThemeCommonVars } from 'naive-ui'
 import { authApi } from '@/common/api'
@@ -33,9 +33,9 @@ export const useSettingStore = defineStore('setting', () => {
   const docStyle = window.getComputedStyle(doc)
   safeArea.top = parseInt(docStyle.getPropertyValue('--top-inset')) || 0
   safeArea.bottom = parseInt(docStyle.getPropertyValue('--bottom-inset')) || 0
-  const layoutPadding = parseInt(docStyle.getPropertyValue('--layout-padding')) || 0
-  const contentSafeTop = ref(safeArea.top + headerHeight.value + layoutPadding)
-  const contentSafeBottom = ref(safeArea.bottom + layoutPadding)
+  const layoutPadding = ref(parseInt(docStyle.getPropertyValue('--layout-padding')) || 0)
+  const contentSafeTop = computed(() => safeArea.top + headerHeight.value + layoutPadding.value)
+  const contentSafeBottom = computed(() => safeArea.bottom + layoutPadding.value)
 
   watchEffect(() => {
     document.body.style.setProperty('--content-safe-top', `${contentSafeTop.value}px`)
@@ -107,7 +107,7 @@ export const useSettingStore = defineStore('setting', () => {
     return setting.value.rememberUsername ? setting.value.rememberedUsername : ''
   }
 
-  // Token 管理
+  // Token 管理（严格区分完整访问令牌与 2FA 临时令牌）
   function setToken(token: string) {
     setting.value.token = token
   }
@@ -117,11 +117,16 @@ export const useSettingStore = defineStore('setting', () => {
   }
 
   function getToken() {
-    return setting.value.token || tmpToken.value
+    return setting.value.token
+  }
+
+  function getTmpToken() {
+    return tmpToken.value
   }
 
   function clearToken() {
     setting.value.token = ''
+    tmpToken.value = ''
   }
 
   return {
@@ -143,6 +148,7 @@ export const useSettingStore = defineStore('setting', () => {
     setToken,
     setTmpToken,
     getToken,
+    getTmpToken,
     clearToken,
     contentSafeTop,
     contentSafeBottom,

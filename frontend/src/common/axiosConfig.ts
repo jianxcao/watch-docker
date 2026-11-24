@@ -12,12 +12,12 @@ export interface IResData<T = any> {
 }
 axios.defaults.baseURL = '/api/v1'
 type IAxiosRequestConfig = AxiosRequestConfig & {
-  lockUrl: Record<string, any>
-  lockKey: string
-  source: CancelTokenSource
+  lockUrl?: Record<string, any>
+  lockKey?: string
+  source?: CancelTokenSource
 }
 const CancelToken = axios.CancelToken
-axios.defaults.timeout = 60 * 60 * 1000
+axios.defaults.timeout = 30 * 1000
 window.axios = axios
 
 const lockUrl: Record<string, any> = {}
@@ -38,52 +38,47 @@ const detailLockKey = (config: IAxiosRequestConfig, promise: Promise<any>) => {
   // 取消前面的请求
   if (cur.length && s1.test(lockKey)) {
     cur.forEach((one: { config: IAxiosRequestConfig; promise: Promise<any> }) => {
-      one.config.source.cancel()
+      one.config.source?.cancel()
     })
     lockUrl[lockKey] = []
   }
   if (cur.length && s2.test(lockKey)) {
     const p = cur[0].promise
-    p.then(
-      () => {
-        lockUrl[lockKey] = []
-      },
-      () => {
-        lockUrl[lockKey] = []
-      },
-    )
-    config.source.cancel()
-    return cur[0].promise
+    config.source?.cancel()
+    return p
   }
+  const trackedPromise = promise.finally(() => {
+    delete lockUrl[lockKey]
+  })
   lockUrl[lockKey].push({
-    promise,
+    promise: trackedPromise,
     config,
   })
-  return promise
+  return trackedPromise
 }
 
 // 动态获取 token 的函数，避免循环依赖
-let getTokenFromStore: (() => string) | null = null
+let getTokenFromStore: ((url?: string) => string) | null = null
 
-export const initTokenStore = (getTokenFn: () => string) => {
+export const initTokenStore = (getTokenFn: (url?: string) => string) => {
   getTokenFromStore = getTokenFn
 }
 
-export const getToken = () => {
+export const getToken = (url?: string) => {
   // 优先从 store 获取，如果没有初始化则返回空字符串
-  return getTokenFromStore ? getTokenFromStore() : ''
+  return getTokenFromStore ? getTokenFromStore(url) : ''
 }
 
 // 添加时间戳
 axios.interceptors.request.use(
   async function (config) {
-    const params = config.params || {}
-    const headers = Object.assign(config.headers || {})
-    const currentToken = getToken()
+    const params = { ...(config.params || {}), _t: Date.now() }
+    const headers = Object.assign({}, config.headers || {})
+    const currentToken = getToken(config.url)
     if (currentToken) {
       headers.Authorization = `Bearer ${currentToken}`
     }
-    params._t = +new Date()
+    config.params = params
     config.headers = headers
     return config
   },
@@ -93,64 +88,89 @@ axios.interceptors.request.use(
   },
 )
 
+let isRedirectingToLogin = false
+
 axios.interceptors.response.use(
   async function (res) {
-    return res
+    const data = res.data
+    const status = res.status
+    if (status >= 200 && status < 300) {
+      if (!data || (typeof data === 'string' && data.indexOf('<!DOCTYPE') >= 0)) {
+        return {
+          code: systemErrCode,
+          msg: systemErrInfo,
+          message: systemErrInfo,
+          data: null,
+          response: res,
+        }
+      }
+      return data
+    } else if (data?.code !== undefined) {
+      return data
+    }
+
+    return {
+      code: systemErrCode,
+      msg: systemErrInfo,
+      message: systemErrInfo,
+      data: null,
+      response: res,
+    }
   },
   async function (err) {
-    const res = err.response
-    // const config = err?.config || res?.config
+    const res = err?.response
     const status = res?.status
     if (status === 401 || status === 403) {
-      // 导入并调用强制登出
       const { useAuthStore } = await import('@/store/auth')
-      if (router.currentRoute.value.path !== '/login') {
-        const authStore = useAuthStore()
-        authStore.forceLogout()
-        router.push('/login')
-        return
+      const authStore = useAuthStore()
+      authStore.setAuthStatus(true)
+      if (!isRedirectingToLogin) {
+        isRedirectingToLogin = true
+        try {
+          if (router.currentRoute.value.path !== '/login') {
+            authStore.forceLogout()
+          }
+        } finally {
+          setTimeout(() => {
+            isRedirectingToLogin = false
+          }, 500)
+        }
       }
+      const unauthorizedMsg = res?.data?.msg || res?.data?.message || '登录已过期，请重新登录'
+      return Promise.reject({
+        code: status,
+        msg: unauthorizedMsg,
+        message: unauthorizedMsg,
+        response: res,
+      })
     }
-    return Promise.reject(err)
+    const errMsg = res?.data?.msg || res?.data?.message || err?.message || systemErrInfo
+    return Promise.reject({
+      ...err,
+      code: res?.data?.code ?? status ?? systemErrCode,
+      msg: errMsg,
+      message: errMsg,
+      response: res,
+    })
   },
 )
-
-axios.interceptors.response.use(async function (res) {
-  const data = res.data
-  const status = res.status
-  if (status >= 200 && status < 300) {
-    if (!data || (typeof data === 'string' && data.indexOf('<!DOCTYPE') >= 0)) {
-      return {
-        bizCode: systemErrCode,
-        message: systemErrInfo,
-        response: res,
-      }
-    }
-    return data
-  } else if (data?.code !== undefined) {
-    return data
-  }
-
-  return {
-    bizCode: systemErrCode,
-    message: systemErrInfo,
-    response: res,
-  }
-})
 
 const req = axios.Axios.prototype.request
 /**
  * 覆盖全局request的方法，方便处理异常出现的情况
  */
-axios.Axios.prototype.request = function (config: IAxiosRequestConfig) {
+axios.Axios.prototype.request = function <R = any>(
+  this: unknown,
+  config: IAxiosRequestConfig,
+): Promise<R> {
   if (config.lockKey) {
     const source = CancelToken.source()
     config.source = source
     config.cancelToken = source.token
   }
   const promise = req.call(this, config)
-  return detailLockKey(config, promise)
-}
+  return detailLockKey(config, promise) as Promise<R>
+} as typeof req
 
 const http = {
   request<P = any, T = any>(config: AxiosRequestConfig<T>) {

@@ -7,15 +7,15 @@ export interface BaseResponse<T = any> {
 
 // 系统信息类型
 export interface SystemInfo {
-  dockerVersion: string
-  dockerAPIVersion: string
-  dockerPlatform: string
-  dockerGitCommit: string
-  dockerGoVersion: string
-  dockerBuildTime: string
+  dockerVersion?: string
+  dockerAPIVersion?: string
+  dockerPlatform?: string
+  dockerGitCommit?: string
+  dockerGoVersion?: string
+  dockerBuildTime?: string
   version: Record<string, any>
-  appPath: string
-  isOpenDockerShell: boolean
+  appPath?: string
+  isOpenDockerShell?: boolean
   isSecondaryVerificationEnabled?: boolean
   isComposeEnabled?: boolean
 }
@@ -179,6 +179,7 @@ export interface ContainerStatus {
   id: string
   name: string
   image: string
+  imageID?: string
   running: boolean
   status: 'UpToDate' | 'UpdateAvailable' | 'Skipped' | 'Error' | ''
   skipped: boolean
@@ -772,21 +773,6 @@ export interface EndpointSettings {
 // 网络配置
 export interface NetworkConfigCreate {
   endpointsConfig: Record<string, EndpointSettings>
-}
-
-// 待创建的网络 IPAM 配置项
-export interface NetworkIPAMConfigCreate {
-  subnet?: string
-  ipRange?: string
-  gateway?: string
-  auxAddress?: Record<string, string>
-}
-
-// 待创建的网络 IPAM 配置
-export interface NetworkIPAMCreateRequest {
-  driver?: string
-  config?: NetworkIPAMConfigCreate[]
-  options?: Record<string, string>
 }
 
 // 待创建的网络配置

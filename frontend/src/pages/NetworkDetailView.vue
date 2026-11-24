@@ -292,7 +292,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { networkApi } from '@/common/api'
 import type { NetworkDetailResponse, NetworkContainer } from '@/common/types'
@@ -345,10 +345,11 @@ const hasIPAMConfig = computed(() => {
 
 // 格式化创建时间
 const formatCreatedTime = (created: string): string => {
-  if (!created) {
+  if (!created || created.startsWith('0001-01-01')) {
     return '-'
   }
-  return dayjs(created).format('YYYY-MM-DD HH:mm:ss')
+  const d = dayjs(created)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
 // 获取驱动类型标签类型
@@ -443,6 +444,13 @@ const handleContainerClick = (container: NetworkContainer) => {
   router.push(`/containers/${container.id}`)
 }
 
+// 监听路由参数变化
+watch(networkName, (newName, oldName) => {
+  if (newName && newName !== oldName) {
+    void fetchNetworkDetail()
+  }
+})
+
 // 页面初始化
 onMounted(async () => {
   await fetchNetworkDetail()
@@ -472,7 +480,7 @@ onMounted(async () => {
 
     .info-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 24px 32px;
       .info-item {
         display: flex;

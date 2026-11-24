@@ -4,7 +4,7 @@
       <n-virtual-list
         ref="virtualListRef"
         class="virtual-log-list"
-        :items="reversedLogs"
+        :items="logs"
         :item-size="estimatedItemSize"
         key-field="_k"
         item-resizable
@@ -19,9 +19,7 @@
             </div>
             <span class="message">
               <span>{{ log.msg }}</span>
-              <span v-if="Object.keys(_.omit(log, ['level', 'time', 'msg', '_k'])).length > 0">{{
-                _.omit(log, ['level', 'time', 'msg', '_k'])
-              }}</span>
+              <span v-if="getExtraFields(log)">{{ getExtraFields(log) }}</span>
             </span>
           </div>
         </template>
@@ -29,18 +27,20 @@
     </div>
 
     <Teleport to="#header" defer>
-      <div class="h-full flex items-center">
+      <div class="h-full flex items-center justify-between w-full pr-2">
         <n-h2 class="m-0 text-lg">日志</n-h2>
+        <n-tag v-if="connectionError" type="error" size="small">{{ connectionError }}</n-tag>
       </div>
     </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import * as _ from 'lodash-es'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { useMessage } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
 
+const message = useMessage()
 const settingStore = useSettingStore()
 const token = computed(() => settingStore.getToken())
 
@@ -53,6 +53,7 @@ interface LogEntry {
 }
 
 const logs = ref<LogEntry[]>([])
+const connectionError = ref('')
 const virtualListRef = ref()
 const containerRef = ref<HTMLDivElement | null>(null)
 const containerHeight = computed(
@@ -62,61 +63,80 @@ const containerHeight = computed(
 // 估算的每个日志项高度（像素）
 const estimatedItemSize = 85
 
-// 反转日志顺序，使新日志显示在底部
-const reversedLogs = computed(() => [...logs.value].reverse())
-
 let eventSource: EventSource | null = null
 let nextId = 1
 
-// // 自动滚动到底部的函数
-// const scrollToBottom = async () => {
-//   await nextTick()
-//   if (virtualListRef.value && logs.value.length > 0) {
-//     // 滚动到最后一项（reversedLogs中的最后一项对应原logs的第一项）
-//     virtualListRef.value.scrollTo({ index: reversedLogs.value.length - 1, behavior: 'smooth' })
-//   }
-// }
+function getExtraFields(log: LogEntry): Record<string, any> | null {
+  const extra: Record<string, any> = {}
+  let hasExtra = false
+  for (const [k, v] of Object.entries(log)) {
+    if (k !== 'level' && k !== 'time' && k !== 'msg' && k !== '_k') {
+      extra[k] = v
+      hasExtra = true
+    }
+  }
+  return hasExtra ? extra : null
+}
 
-// // 监听日志变化，自动滚动到底部
-// watch(logs, () => {
-//   scrollToBottom()
-// }, { deep: true })
+const scrollToBottom = async () => {
+  await nextTick()
+  if (virtualListRef.value && logs.value.length > 0) {
+    virtualListRef.value.scrollTo({ index: logs.value.length - 1, behavior: 'auto' })
+  }
+}
 
-function levelColor(level: string) {
-  switch (level) {
+function levelColor(level: string): 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error' {
+  switch ((level || '').toUpperCase()) {
     case 'DEBUG':
-      return 'indigo'
+      return 'primary'
     case 'INFO':
       return 'info'
     case 'WARN':
+    case 'WARNING':
       return 'warning'
     case 'ERROR':
+    case 'FATAL':
+    case 'PANIC':
       return 'error'
     default:
-      return ''
+      return 'default'
   }
 }
 
 onMounted(() => {
-  eventSource = new EventSource(`/api/v1/logs?token=${token.value}`)
+  const url = token.value
+    ? `/api/v1/logs?token=${encodeURIComponent(token.value)}`
+    : '/api/v1/logs'
+  eventSource = new EventSource(url)
+  eventSource.onopen = () => {
+    connectionError.value = ''
+  }
   eventSource.onmessage = (e) => {
-    // 统一处理数组格式的消息
-    const logArray = JSON.parse(e.data)
+    try {
+      const logArray = JSON.parse(e.data)
+      if (!Array.isArray(logArray)) {
+        return
+      }
+      logArray.forEach((logEntry: any) => {
+        logEntry.time = new Date(logEntry.time).toLocaleString()
+        logEntry._k = nextId++
+      })
 
-    // 处理数组中的每条日志
-    logArray.forEach((logEntry: any) => {
-      logEntry.time = new Date(logEntry.time).toLocaleString()
-      logEntry._k = nextId++
-    })
-
-    const newLogs = [...logs.value, ...logArray]
-    // 控制日志数量上限
-    if (newLogs.length > 500) {
-      const removeCount = newLogs.length - 500
-      newLogs.splice(0, removeCount)
+      const newLogs = [...logs.value, ...logArray]
+      if (newLogs.length > 500) {
+        newLogs.splice(0, newLogs.length - 500)
+      }
+      logs.value = newLogs
+      void scrollToBottom()
+    } catch (err) {
+      console.error('Failed to parse log SSE message:', err)
     }
-    // 直接添加所有日志
-    logs.value = newLogs
+  }
+  eventSource.onerror = () => {
+    if (!connectionError.value) {
+      connectionError.value = '日志流连接中断，正在重试...'
+      message.warning('日志流连接中断')
+    }
   }
 })
 

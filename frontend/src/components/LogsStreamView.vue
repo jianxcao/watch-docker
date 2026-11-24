@@ -30,8 +30,10 @@ const termConfig: TermConfig = {
   convertEol: true,
 }
 
-// 使用 VueUse 的 useWebSocket
-const { status, close, open } = useWebSocket(props.socketUrl, {
+const socketUrlRef = computed(() => props.socketUrl)
+
+// 使用 VueUse 的 useWebSocket（传入响应式 url 以便切换目标时重连）
+const { status, close, open } = useWebSocket(socketUrlRef, {
   autoReconnect: false,
   immediate: false,
   autoConnect: false,

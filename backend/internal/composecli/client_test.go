@@ -1,6 +1,13 @@
 package composecli
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/jianxcao/watch-docker/backend/internal/conf"
+)
 
 func TestMergeComposeProjectsMatchesConfigPathAndPreservesDirectoryName(t *testing.T) {
 	scanned := []ComposeProject{{
@@ -98,5 +105,63 @@ func TestMergeComposeProjectsAppendsUnmatchedRuntimeProject(t *testing.T) {
 	}
 	if got[0].Status != StatusCreatedStack || got[0].CreatedCount != 3 {
 		t.Fatalf("unexpected runtime project status: %#v", got[0])
+	}
+}
+
+func TestComposePathTraversalBlocked(t *testing.T) {
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	outsideDir := filepath.Join(tmpRoot, "outside-secret")
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outsideDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	outsideCompose := filepath.Join(outsideDir, "docker-compose.yaml")
+	if err := os.WriteFile(outsideCompose, []byte("services: {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origAppPath := conf.EnvCfg.APP_PATH
+	conf.EnvCfg.APP_PATH = appDir
+	defer func() { conf.EnvCfg.APP_PATH = origAppPath }()
+
+	c := &Client{}
+
+	// 1. ValidateProjectName rejects traversal
+	for _, bad := range []string{"", "..", "../evil", "a/b", "a\\b", "-flag"} {
+		if err := ValidateProjectName(bad); err == nil {
+			t.Fatalf("expected ValidateProjectName(%q) to fail", bad)
+		}
+	}
+	if _, err := c.SaveNewProject(context.Background(), "../../outside-secret", "services: {}\n", true); err == nil {
+		t.Fatalf("expected SaveNewProject traversal to fail")
+	}
+
+	// 2. GetProjectYaml / DeleteProject reject outside path
+	if _, err := c.GetProjectYaml(outsideCompose); err == nil {
+		t.Fatalf("expected GetProjectYaml outside APP_PATH to fail")
+	}
+	if err := c.DeleteProject(context.Background(), outsideCompose, StatusDraft); err == nil {
+		t.Fatalf("expected DeleteProject outside APP_PATH to fail")
+	}
+	if _, err := os.Stat(outsideCompose); err != nil {
+		t.Fatalf("expected outside compose directory to remain intact, stat err=%v", err)
+	}
+
+	// 3. Root APP_PATH itself cannot be deleted via compose.yaml inside root
+	rootCompose := filepath.Join(appDir, "docker-compose.yaml")
+	if _, _, err := ValidateComposeFilePath(rootCompose); err == nil {
+		t.Fatalf("expected compose file directly under APP_PATH root to be rejected")
+	}
+
+	// 4. Valid project subdir succeeds
+	saved, err := c.SaveNewProject(context.Background(), "valid-app", "services: {}\n", false)
+	if err != nil {
+		t.Fatalf("expected valid SaveNewProject to succeed, got %v", err)
+	}
+	if _, _, err := ValidateComposeFilePath(saved); err != nil {
+		t.Fatalf("expected ValidateComposeFilePath(%q) to succeed, got %v", saved, err)
 	}
 }

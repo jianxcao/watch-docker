@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	Logger      *zap.Logger
-	atomicLevel zap.AtomicLevel
+	Logger      *zap.Logger = zap.NewNop()
+	atomicLevel             = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 )
 
 // customTimeEncoder 自定义时间编码器，格式为 YYYY-MM-DD HH:mm:ss

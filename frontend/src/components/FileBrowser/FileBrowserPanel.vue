@@ -353,10 +353,10 @@ const {
   goHome,
   toggleHiddenFiles,
   restoreSettings,
-} = useFileList(props.containerId)
+} = useFileList(() => props.containerId)
 
 // 文件操作
-const { downloadFile, deleteEntry } = useFileOperations(props.containerId)
+const { downloadFile, deleteEntry } = useFileOperations(() => props.containerId)
 
 // 文件编辑器
 const { fileEditor, openFileEditor } = useFileEditor()
@@ -371,16 +371,16 @@ const {
   showContextMenu,
   hideContextMenu,
   isEntrySelected,
-} = useContextMenu(props.canEdit)
+} = useContextMenu(() => props.canEdit)
 
 // 文件交互
 const { handleEntryClick, handleDoubleClick } = useFileInteraction()
 
 // 文件操作（创建、重命名）
-const { createPath, renamePath } = useFileActions(props.containerId)
+const { createPath, renamePath } = useFileActions(() => props.containerId)
 
 // 文件上传
-const { uploading, handleFileSelect, handleDrop } = useFileUpload(props.containerId)
+const { uploading, handleFileSelect, handleDrop } = useFileUpload(() => props.containerId)
 const fileInput = ref<HTMLInputElement | null>(null)
 const isDragOver = ref(false)
 
@@ -519,6 +519,14 @@ const onEntryDoubleClick = (entry: (typeof displayEntries.value)[0]) => {
     props.canEdit,
   )
 }
+
+// 监听容器 ID 变化，切换或更新容器后重新加载目录
+watch(
+  () => props.containerId,
+  () => {
+    loadDirectory(props.initialPath)
+  },
+)
 
 // 生命周期
 onMounted(() => {

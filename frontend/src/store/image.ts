@@ -1,17 +1,21 @@
 import { imageApi } from '@/common/api'
-import type { ImageInfo } from '@/common/types'
+import { doesContainerUseImage } from '@/common/imageRef'
+import type { ContainerStatus, ImageInfo } from '@/common/types'
 import { formatBytes } from '@/common/utils'
 import { getToken } from '@/common/axiosConfig'
+import { useContainerStore } from '@/store/container'
 import { buildImageDownloadUrl, triggerBrowserDownload } from '@/utils/download'
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 export const useImageStore = defineStore('image', () => {
+  const containerStore = useContainerStore()
   // 状态
   const images = ref<ImageInfo[]>([])
   const loading = ref(false)
   const deleting = ref(new Set<string>())
   const downloading = ref(new Set<string>())
   const importing = ref(false)
+  let inFlightFetch: Promise<void> | null = null
 
   // 方法：检查镜像是否为悬空镜像（dangling image）
   const isDanglingImage = (image: ImageInfo): boolean => {
@@ -39,33 +43,56 @@ export const useImageStore = defineStore('image', () => {
     formattedTotalSize: formattedTotalSize.value,
   }))
 
-  // 方法：获取镜像列表
-  const fetchImages = async () => {
-    loading.value = true
-    try {
-      const data = await imageApi.getImages()
-      if (data.code === 0) {
-        images.value = data.data.images
-      } else {
-        console.error('获取镜像列表失败:', data.msg)
-        throw new Error(data.msg)
-      }
-    } catch (error) {
-      console.error('获取镜像列表失败:', error)
-      throw error
-    } finally {
-      loading.value = false
-    }
-  }
-
-  // 方法：定时获取镜像列表
-  const { pause: stopImagesPolling, resume: startImagesPolling } = useIntervalFn(
-    fetchImages,
-    10000,
-    {
-      immediate: false,
+  // 仅在容器身份或镜像引用发生变化时刷新列表，避免每秒 stats 心跳引发所有 ImageCard 重计算
+  const stableContainerRefs = ref<ContainerStatus[]>([])
+  watch(
+    () =>
+      containerStore.containers
+        .map((c) => `${c.id}|${c.name}|${c.image}|${c.imageID || ''}`)
+        .join('\n'),
+    () => {
+      stableContainerRefs.value = containerStore.containers.slice()
     },
+    { immediate: true },
   )
+
+  const imageUsageMap = computed(() => {
+    const map = new Map<string, ContainerStatus[]>()
+    const containers = stableContainerRefs.value
+    for (const image of images.value) {
+      map.set(
+        image.id,
+        containers.filter((ct) => doesContainerUseImage(ct, image)),
+      )
+    }
+    return map
+  })
+
+  // 方法：获取镜像列表（并发去重，避免重复请求）
+  const fetchImages = async () => {
+    if (inFlightFetch) {
+      return inFlightFetch
+    }
+    loading.value = true
+    inFlightFetch = (async () => {
+      try {
+        const data = await imageApi.getImages()
+        if (data.code === 0) {
+          images.value = data.data.images
+        } else {
+          console.error('获取镜像列表失败:', data.msg)
+          throw new Error(data.msg)
+        }
+      } catch (error) {
+        console.error('获取镜像列表失败:', error)
+        throw error
+      } finally {
+        loading.value = false
+        inFlightFetch = null
+      }
+    })()
+    return inFlightFetch
+  }
 
   // 方法：删除镜像
   const deleteImage = async (ref: string, force: boolean = false): Promise<boolean> => {
@@ -189,6 +216,7 @@ export const useImageStore = defineStore('image', () => {
     formattedTotalSize,
     stats,
     danglingImages,
+    imageUsageMap,
 
     // 方法
     fetchImages,
@@ -202,7 +230,5 @@ export const useImageStore = defineStore('image', () => {
     getImageDisplayTag,
     getDisplayId,
     isDanglingImage,
-    stopImagesPolling,
-    startImagesPolling,
   }
 })

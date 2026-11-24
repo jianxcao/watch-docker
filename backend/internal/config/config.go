@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,16 +17,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const MaskedSecretPlaceholder = "******"
+
 // DurationMinutes 表示以分钟为单位的时间间隔，JSON序列化时以分钟数表示
 type DurationMinutes time.Duration
 
-// MarshalJSON 将时间间隔序列化为分钟数
 func (d DurationMinutes) MarshalJSON() ([]byte, error) {
 	minutes := time.Duration(d).Minutes()
 	return json.Marshal(minutes)
 }
 
-// UnmarshalJSON 从分钟数反序列化时间间隔
 func (d *DurationMinutes) UnmarshalJSON(data []byte) error {
 	var minutes float64
 	if err := json.Unmarshal(data, &minutes); err != nil {
@@ -34,36 +36,23 @@ func (d *DurationMinutes) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Duration 返回标准 time.Duration
 func (d DurationMinutes) Duration() time.Duration {
 	return time.Duration(d)
 }
 
-// String 返回可读的字符串表示
 func (d DurationMinutes) String() string {
 	return time.Duration(d).String()
 }
 
-// ServerConfig HTTP 服务端口等配置
-// addr: 监听地址，例如 ":8080"
 type ServerConfig struct {
 	Addr string `mapstructure:"addr" json:"addr"`
 }
 
-// DockerConfig Docker 连接与容器发现相关配置
-// host: Docker API 访问地址（空则走环境变量 DOCKER_HOST / 默认本地）
-// includeStopped: 是否包含已停止容器
 type DockerConfig struct {
 	Host           string `mapstructure:"host" json:"host"`
 	IncludeStopped bool   `mapstructure:"includeStopped" json:"includeStopped"`
 }
 
-// ScanConfig 扫描相关配置
-// interval: 周期扫描间隔（与 cron 二选一）
-// cron: 使用 cron 表达式触发扫描
-// initialScanOnStart: 进程启动后立即进行一次扫描
-// concurrency: 并发获取远端 digest 的 worker 数
-// cacheTTL: registry 远端 digest 的缓存 TTL
 type ScanConfig struct {
 	Cron               string          `mapstructure:"cron" json:"cron"`
 	Concurrency        int             `mapstructure:"concurrency" json:"concurrency"`
@@ -72,10 +61,6 @@ type ScanConfig struct {
 	AllowComposeUpdate bool            `mapstructure:"allowComposeUpdate" json:"allowComposeUpdate"`
 }
 
-// PolicyConfig 策略配置
-// skip* 相关开关用于定义默认跳过规则
-// onlyLabels 为包含/排除的 label 过滤
-// floatingTags 指定哪些 tag 被视为"浮动"，仅这些会被检查更新
 type PolicyConfig struct {
 	SkipLabels       []string `mapstructure:"skipLabels" json:"skipLabels"`
 	OnlyLabels       []string `mapstructure:"onlyLabels" json:"onlyLabels"`
@@ -85,85 +70,53 @@ type PolicyConfig struct {
 	FloatingTags     []string `mapstructure:"floatingTags" json:"floatingTags"`
 }
 
-// RegistryAuth per-registry 凭据配置
-// host: registry 主机地址，支持 "dockerhub"/"docker.io"、"ghcr.io" 或自定义私有仓库
-// username: 用户名
-// token: 访问令牌或密码
 type RegistryAuth struct {
 	Host     string `mapstructure:"host" json:"host"`
 	Username string `mapstructure:"username" json:"username"`
 	Token    string `mapstructure:"token" json:"token"`
 }
 
-// RegistryMirror Docker Hub 镜像加速器配置
-// 仅对 docker.io 镜像生效。配置多个时按数组顺序作为 fallback：
-// 先试第一个启用的 mirror，失败则试第二个，最终回退到官方 registry-1.docker.io。
-//
-// name: 显示名称（仅用于前端展示），例如 "DaoCloud"
-// url: mirror 完整地址（含协议），例如 https://docker.m.daocloud.io
-// enabled: 是否启用
 type RegistryMirror struct {
 	Name    string `mapstructure:"name" json:"name"`
 	URL     string `mapstructure:"url" json:"url"`
 	Enabled bool   `mapstructure:"enabled" json:"enabled"`
 }
 
-// RegistryConfig registry 相关配置容器
-// auth: 支持配置多个 registry 的凭据
-// mirrors: Docker Hub 镜像加速器列表（仅对 docker.io 镜像生效）
 type RegistryConfig struct {
 	Auth    []RegistryAuth   `mapstructure:"auth" json:"auth"`
 	Mirrors []RegistryMirror `mapstructure:"mirrors" json:"mirrors"`
 }
 
-// ProxyConfig 代理相关配置
-// url: 代理服务器完整地址，支持以下格式：
-//   - HTTP 代理: http://proxy.example.com:8080
-//   - 带认证的 HTTP 代理: http://user:pass@proxy.example.com:8080
-//   - SOCKS5 代理: socks5://127.0.0.1:1080
-//   - 带认证的 SOCKS5 代理: socks5://user:pass@127.0.0.1:1080
 type ProxyConfig struct {
 	URL string `mapstructure:"url" json:"url"`
 }
 
-// LoggingConfig 日志相关配置
-// level: 日志级别（debug/info/warn/error）
 type LoggingConfig struct {
 	Level string `mapstructure:"level" json:"level"`
 }
 
-// NotificationConfig 通知相关配置
-// url: 通知地址，仅支持配置一个；允许使用占位符 {title}/{content}/{text}
-// method: 请求方法，仅允许 GET 或 POST
 type NotificationConfig struct {
 	URL      string `mapstructure:"url" json:"url"`
 	Method   string `mapstructure:"method" json:"method"`
 	IsEnable bool   `mapstructure:"isEnable" json:"isEnable"`
 }
 
-// ComposeConfig Docker Compose 相关配置
-// enabled: 是否启用 Compose 功能
-// scanInterval: 扫描间隔(秒)
-// logLines: 默认日志行数
 type ComposeConfig struct {
 	Enabled      bool `mapstructure:"enabled" json:"enabled"`
 	ScanInterval int  `mapstructure:"scanInterval" json:"scanInterval"`
 	LogLines     int  `mapstructure:"logLines" json:"logLines"`
 }
 
-// TwoFAUserConfig 用户二次验证配置
 type TwoFAUserConfig struct {
 	Method              string   `mapstructure:"method" json:"method"`
 	OTPSecret           string   `mapstructure:"otpSecret" json:"otpSecret,omitempty"`
-	WebAuthnCredentials []string `mapstructure:"webauthnCredentials" json:"webauthnCredentials,omitempty"` // Base64 编码的凭据
+	WebAuthnCredentials []string `mapstructure:"webauthnCredentials" json:"webauthnCredentials,omitempty"`
 }
 
-// TwoFAConfig 二次验证配置
 type TwoFAConfig struct {
 	Users map[string]TwoFAUserConfig `mapstructure:"users" json:"users"`
 }
 
-// Config 顶层配置聚合
 type Config struct {
 	Server      ServerConfig       `mapstructure:"server" json:"server"`
 	Docker      DockerConfig       `mapstructure:"docker" json:"docker"`
@@ -182,29 +135,168 @@ var (
 	globalMu  sync.RWMutex
 )
 
-// SetGlobal 设置进程内的全局配置（供动态读取）。
-func SetGlobal(c *Config) {
-	globalMu.Lock()
-	globalCfg = c
-	globalMu.Unlock()
-	Save()
+// Clone 返回配置的深拷贝，保证切片与 map 互相隔离，消除并发读写竞态。
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	cp.Policy.SkipLabels = append([]string(nil), c.Policy.SkipLabels...)
+	cp.Policy.OnlyLabels = append([]string(nil), c.Policy.OnlyLabels...)
+	cp.Policy.FloatingTags = append([]string(nil), c.Policy.FloatingTags...)
+	cp.Registry.Auth = append([]RegistryAuth(nil), c.Registry.Auth...)
+	cp.Registry.Mirrors = append([]RegistryMirror(nil), c.Registry.Mirrors...)
+	if c.TwoFAConfig.Users != nil {
+		cp.TwoFAConfig.Users = make(map[string]TwoFAUserConfig, len(c.TwoFAConfig.Users))
+		for k, u := range c.TwoFAConfig.Users {
+			uCopy := u
+			uCopy.WebAuthnCredentials = append([]string(nil), u.WebAuthnCredentials...)
+			cp.TwoFAConfig.Users[k] = uCopy
+		}
+	} else {
+		cp.TwoFAConfig.Users = make(map[string]TwoFAUserConfig)
+	}
+	return &cp
 }
 
-// Get 返回当前全局配置的快照；若未设置则返回默认值，避免空指针。
+// MaskedCopy 返回用于对外展示的安全脱敏配置副本（隐藏密钥与 2FA 内部凭据）。
+func (c *Config) MaskedCopy() *Config {
+	cp := c.Clone()
+	if cp == nil {
+		return nil
+	}
+	for i := range cp.Registry.Auth {
+		if cp.Registry.Auth[i].Token != "" {
+			cp.Registry.Auth[i].Token = MaskedSecretPlaceholder
+		}
+	}
+	if strings.TrimSpace(cp.Proxy.URL) != "" {
+		if u, err := url.Parse(cp.Proxy.URL); err == nil && u.User != nil {
+			if _, hasPass := u.User.Password(); hasPass {
+				u.User = url.UserPassword(u.User.Username(), MaskedSecretPlaceholder)
+				cp.Proxy.URL = u.String()
+			}
+		}
+	}
+	// 不向前端暴露任何用户的 OTP Secret 和 WebAuthn 凭据
+	cp.TwoFAConfig = TwoFAConfig{Users: map[string]TwoFAUserConfig{}}
+	return cp
+}
+
+// MergeMaskedSecrets 在保存来自 API 的配置前，恢复脱敏占位符、保留服务端只读字段并规范化空切片。
+func MergeMaskedSecrets(next, prev *Config) {
+	if next == nil || prev == nil {
+		return
+	}
+	next.Docker.Host = prev.Docker.Host
+	next.TwoFAConfig = prev.Clone().TwoFAConfig
+	if next.TwoFAConfig.Users == nil {
+		next.TwoFAConfig.Users = make(map[string]TwoFAUserConfig)
+	}
+	if next.Policy.SkipLabels == nil {
+		next.Policy.SkipLabels = []string{}
+	}
+	if next.Policy.OnlyLabels == nil {
+		next.Policy.OnlyLabels = []string{}
+	}
+	if next.Policy.FloatingTags == nil {
+		next.Policy.FloatingTags = []string{}
+	}
+	if next.Registry.Auth == nil {
+		next.Registry.Auth = []RegistryAuth{}
+	}
+	if next.Registry.Mirrors == nil {
+		next.Registry.Mirrors = []RegistryMirror{}
+	}
+
+	for i := range next.Registry.Auth {
+		if next.Registry.Auth[i].Token != MaskedSecretPlaceholder {
+			continue
+		}
+		restored := ""
+		for _, oldAuth := range prev.Registry.Auth {
+			if oldAuth.Host == next.Registry.Auth[i].Host && oldAuth.Username == next.Registry.Auth[i].Username {
+				restored = oldAuth.Token
+				break
+			}
+		}
+		if restored == "" && i < len(prev.Registry.Auth) && prev.Registry.Auth[i].Host == next.Registry.Auth[i].Host {
+			restored = prev.Registry.Auth[i].Token
+		}
+		next.Registry.Auth[i].Token = restored
+	}
+
+	if strings.TrimSpace(next.Proxy.URL) != "" {
+		if u, err := url.Parse(next.Proxy.URL); err == nil && u.User != nil {
+			if pass, hasPass := u.User.Password(); hasPass && pass == MaskedSecretPlaceholder {
+				restoredPass := ""
+				if strings.TrimSpace(prev.Proxy.URL) != "" {
+					if prevU, err := url.Parse(prev.Proxy.URL); err == nil && prevU.User != nil {
+						if oldPass, ok := prevU.User.Password(); ok {
+							restoredPass = oldPass
+						}
+					}
+				}
+				if restoredPass != "" {
+					u.User = url.UserPassword(u.User.Username(), restoredPass)
+				} else {
+					u.User = url.User(u.User.Username())
+				}
+				next.Proxy.URL = u.String()
+			}
+		}
+	}
+}
+
+// SetGlobal 设置进程内的全局配置并原子落盘（供动态读取）。
+func SetGlobal(c *Config) {
+	if err := Update(func(dst *Config) error {
+		*dst = *c.Clone()
+		return nil
+	}); err != nil {
+		fmt.Printf("警告: 保存全局配置失败: %v\n", err)
+	}
+}
+
+// Update 在写锁保护下安全修改全局配置、校验并原子写入磁盘。
+func Update(fn func(cfg *Config) error) error {
+	globalMu.Lock()
+	var next *Config
+	if globalCfg == nil {
+		next = defaults()
+	} else {
+		next = globalCfg.Clone()
+	}
+	if err := fn(next); err != nil {
+		globalMu.Unlock()
+		return err
+	}
+	if err := Validate(next); err != nil {
+		globalMu.Unlock()
+		return err
+	}
+	if err := writeConfigAtomic(next); err != nil {
+		globalMu.Unlock()
+		return err
+	}
+	globalCfg = next
+	globalMu.Unlock()
+	return nil
+}
+
+// Get 返回当前全局配置的只读深拷贝快照；若未设置则返回默认值，避免空指针或数据竞争。
 func Get() *Config {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
 	if globalCfg == nil {
-		// fall back to defaults to avoid nil deref
 		return defaults()
 	}
-	return globalCfg
+	return globalCfg.Clone()
 }
 
 // Loader 返回一个闭包，用于按需获取最新全局配置。
 func Loader() func() *Config { return Get }
 
-// defaults 返回默认配置（当未提供配置文件/环境变量时使用）。
 func defaults() *Config {
 	return &Config{
 		Server: ServerConfig{Addr: ":8080"},
@@ -223,7 +315,7 @@ func defaults() *Config {
 			SkipSemverPinned: true,
 			FloatingTags:     []string{"latest", "main", "stable"},
 		},
-		Proxy:   ProxyConfig{}, // 默认不使用代理
+		Proxy:   ProxyConfig{},
 		Logging: LoggingConfig{Level: "info"},
 		Notify:  NotificationConfig{Method: http.MethodGet, IsEnable: true},
 		Compose: ComposeConfig{
@@ -238,65 +330,87 @@ func defaults() *Config {
 }
 
 // Load 读取配置文件（YAML）并应用 ENV 覆盖，校验后设置为全局配置。
-// 覆盖顺序：defaults < YAML config < ENV（WATCH_*）。
-func Load(path string) (*Config, error) {
+func Load(cfgPath string) (*Config, error) {
 	cfg := defaults()
 
 	v := viper.New()
-	v.SetConfigFile(path)
+	v.SetConfigFile(cfgPath)
 	v.SetConfigType("yaml")
 	v.SetEnvPrefix("WATCH")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
-	err := v.ReadInConfig()
-	if err == nil {
+	if err := v.ReadInConfig(); err == nil {
 		if err := v.Unmarshal(&cfg); err != nil {
 			return nil, fmt.Errorf("unmarshal yaml: %w", err)
 		}
-	} else {
-		fmt.Println("read config file failed", err)
 	}
 
-	if err := validate(cfg); err != nil {
+	// 兼容 PORT 环境变量（当未通过 YAML 或 WATCH_SERVER_ADDR 显式指定端口时生效）
+	if portEnv := strings.TrimSpace(os.Getenv("PORT")); portEnv != "" && os.Getenv("WATCH_SERVER_ADDR") == "" && !v.IsSet("server.addr") {
+		if !strings.HasPrefix(portEnv, ":") {
+			portEnv = ":" + portEnv
+		}
+		cfg.Server.Addr = portEnv
+	}
+
+	if cfg.TwoFAConfig.Users == nil {
+		cfg.TwoFAConfig.Users = make(map[string]TwoFAUserConfig)
+	}
+	if cfg.Policy.SkipLabels == nil {
+		cfg.Policy.SkipLabels = []string{}
+	}
+	if cfg.Policy.OnlyLabels == nil {
+		cfg.Policy.OnlyLabels = []string{}
+	}
+	if cfg.Policy.FloatingTags == nil {
+		cfg.Policy.FloatingTags = []string{}
+	}
+
+	if err := Validate(cfg); err != nil {
 		return nil, err
 	}
 
 	SetGlobal(cfg)
-	return cfg, nil
+	return cfg.Clone(), nil
 }
 
-// validate 校验关键字段，提前发现配置错误。
-func validate(cfg *Config) error {
-	if cfg.Server.Addr == "" {
+// Validate 校验关键字段，提前发现配置错误。
+func Validate(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(cfg.Server.Addr) == "" {
 		return fmt.Errorf("server.addr is required")
 	}
 	if cfg.Scan.Concurrency <= 0 {
 		return fmt.Errorf("scan.concurrency must be > 0")
 	}
-	if strings.TrimSpace(cfg.Notify.URL) != "" {
-		method := strings.ToUpper(strings.TrimSpace(cfg.Notify.Method))
-		switch method {
-		case http.MethodGet, http.MethodPost:
-			cfg.Notify.Method = method
-		case "":
-			cfg.Notify.Method = http.MethodGet
-		default:
-			return fmt.Errorf("notify.method must be GET or POST")
+	method := strings.ToUpper(strings.TrimSpace(cfg.Notify.Method))
+	switch method {
+	case http.MethodGet, http.MethodPost:
+		cfg.Notify.Method = method
+	case "":
+		cfg.Notify.Method = http.MethodGet
+	default:
+		return fmt.Errorf("notify.method must be GET or POST")
+	}
+	if strings.TrimSpace(cfg.Proxy.URL) != "" {
+		u, err := url.Parse(strings.TrimSpace(cfg.Proxy.URL))
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("invalid proxy.url")
 		}
 	}
 	return nil
 }
 
-// Save 将指定配置保存到指定路径的 YAML 文件
-func Save() error {
+func writeConfigAtomic(cfg *Config) error {
 	configPath := path.Join(conf.EnvCfg.CONFIG_PATH, conf.EnvCfg.CONFIG_FILE)
-	cfg := Get()
-	if cfg == nil {
-		return fmt.Errorf("config is nil")
+	if strings.TrimSpace(configPath) == "" || configPath == "." {
+		return nil
 	}
-
-	if err := validate(cfg); err != nil {
-		return fmt.Errorf("config validation failed: %w", err)
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
 	}
 
 	yamlData, err := yaml.Marshal(cfg)
@@ -304,9 +418,46 @@ func Save() error {
 		return fmt.Errorf("marshal config to yaml: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, yamlData, 0644); err != nil {
-		return fmt.Errorf("write config file: %w", err)
+	tmpFile, err := os.CreateTemp(dir, ".config-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp config file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
 
+	if _, err := tmpFile.Write(yamlData); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return fmt.Errorf("write temp config file: %w", err)
+	}
+	if err := tmpFile.Chmod(0600); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return fmt.Errorf("chmod temp config file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close temp config file: %w", err)
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		cleanup()
+		return fmt.Errorf("rename config file: %w", err)
+	}
 	return nil
+}
+
+// Save 将当前全局配置保存到 YAML 文件
+func Save() error {
+	globalMu.RLock()
+	if globalCfg == nil {
+		globalMu.RUnlock()
+		return fmt.Errorf("config is nil")
+	}
+	cp := globalCfg.Clone()
+	globalMu.RUnlock()
+
+	if err := Validate(cp); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+	return writeConfigAtomic(cp)
 }

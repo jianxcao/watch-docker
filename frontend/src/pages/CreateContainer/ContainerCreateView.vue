@@ -8,7 +8,7 @@
       animated
     >
       <n-tab-pane name="basic" tab="基础">
-        <BasicTab v-model="basicForm" />
+        <BasicTab ref="basicTabRef" v-model="basicForm" />
       </n-tab-pane>
       <n-tab-pane name="env" tab="环境变量">
         <EnvTab v-model="envForm" />
@@ -82,6 +82,7 @@ const settingStore = useSettingStore()
 const containerStore = useContainerStore()
 const activeTab = ref('basic')
 const creating = ref(false)
+const basicTabRef = ref<InstanceType<typeof BasicTab> | null>(null)
 
 const tabTitleHeight = computed(() => 42)
 const bottomHeight = computed(() => 51 + settingStore.contentSafeBottom)
@@ -166,6 +167,14 @@ const handleCancel = () => {
 }
 
 const handleCreate = async () => {
+  try {
+    await basicTabRef.value?.validate()
+  } catch {
+    activeTab.value = 'basic'
+    message.error('请完善必填的基础配置信息')
+    return
+  }
+
   // 校验基础表单 - 直接校验数据而不依赖表单组件
   if (!basicForm.value.image || !basicForm.value.image.trim()) {
     activeTab.value = 'basic'

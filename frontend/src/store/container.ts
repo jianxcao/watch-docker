@@ -63,47 +63,62 @@ export const useContainerStore = defineStore('container', () => {
     return operationStates.value.get(id) ?? { type: 'idle' }
   }
 
-  // 方法：获取容器列表
-  const fetchContainers = async (isUserCache = true, isHaveUpdate = true) => {
-    loading.value = true
-    try {
-      const data = await containerApi.getContainers(isUserCache, isHaveUpdate)
-      if (data.code === 0) {
-        // 按照 ID 进行合并，新数据覆盖旧数据
-        const newContainers = data.data.containers
-        const existingContainersMap = new Map(containers.value.map((c) => [c.id, c]))
+  let inFlightCacheFetch: Promise<void> | null = null
 
-        containers.value = newContainers.map((newContainer) => {
-          const existingContainer = existingContainersMap.get(newContainer.id)
-          // 如果存在旧容器，合并数据，新数据覆盖旧数据
-          if (existingContainer) {
-            const res = { ...existingContainer, ...newContainer }
-            return res
-          }
-          // 如果是新容器，直接使用新数据
-          return newContainer
-        })
-      } else {
-        console.error('获取容器列表失败:', data.msg)
-        throw new Error(data.msg)
-      }
-    } catch (error) {
-      console.error('获取容器列表失败:', error)
-      throw error
-    } finally {
-      loading.value = false
+  // 方法：获取容器列表（缓存读取并发去重，避免页面初始化重复请求）
+  const fetchContainers = async (isUserCache = true, isHaveUpdate = true) => {
+    if (isUserCache && !isHaveUpdate && inFlightCacheFetch) {
+      return inFlightCacheFetch
     }
+    loading.value = true
+    const reqPromise = (async () => {
+      try {
+        const data = await containerApi.getContainers(isUserCache, isHaveUpdate)
+        if (data.code === 0) {
+          // 按照 ID 进行合并，新数据覆盖旧数据
+          const newContainers = data.data.containers
+          const existingContainersMap = new Map(containers.value.map((c) => [c.id, c]))
+
+          containers.value = newContainers.map((newContainer) => {
+            const existingContainer = existingContainersMap.get(newContainer.id)
+            // 如果存在旧容器，合并数据，新数据覆盖旧数据
+            if (existingContainer) {
+              const res = { ...existingContainer, ...newContainer }
+              return res
+            }
+            // 如果是新容器，直接使用新数据
+            return newContainer
+          })
+        } else {
+          console.error('获取容器列表失败:', data.msg)
+          throw new Error(data.msg)
+        }
+      } catch (error) {
+        console.error('获取容器列表失败:', error)
+        throw error
+      } finally {
+        loading.value = false
+        if (isUserCache && !isHaveUpdate) {
+          inFlightCacheFetch = null
+        }
+      }
+    })()
+
+    if (isUserCache && !isHaveUpdate) {
+      inFlightCacheFetch = reqPromise
+    }
+    return reqPromise
   }
 
-  // 方法：更新单个容器
-  const updateContainer = async (id: string, image?: string): Promise<boolean> => {
+  // 方法：更新单个容器（返回新容器 ID）
+  const updateContainer = async (id: string, image?: string): Promise<string | undefined> => {
     updating.value.add(id)
     setOperationState(id, { type: 'updating', step: 'pulling' })
     try {
       const data = await containerApi.updateContainer(id, image)
       if (data.code === 0) {
         await fetchContainers()
-        return true
+        return data.data?.newContainerId
       } else {
         throw new Error(data.msg)
       }
@@ -235,19 +250,12 @@ export const useContainerStore = defineStore('container', () => {
     return updating.value.has(id)
   }
 
-  // WebSocket 容器数据回调处理
+  // WebSocket 容器数据回调处理（完整同步增删与状态变更）
   const handleContainersUpdate = (newContainers: ContainerStatus[]) => {
-    const mapContainers = new Map<string, ContainerStatus>()
-    newContainers.forEach((container) => {
-      mapContainers.set(container.id, container)
-    })
-    const oldContainers = [...containers.value]
-    containers.value = oldContainers.map((container) => {
-      const newContainer = mapContainers.get(container.id)
-      if (newContainer) {
-        return newContainer
-      }
-      return container
+    const existingMap = new Map<string, ContainerStatus>(containers.value.map((c) => [c.id, c]))
+    containers.value = newContainers.map((container) => {
+      const existing = existingMap.get(container.id)
+      return existing ? { ...existing, ...container } : container
     })
   }
 
@@ -260,9 +268,8 @@ export const useContainerStore = defineStore('container', () => {
       const token = getToken()
 
       const baseUrl = '/api/v1'
-      const downloadUrl = `${baseUrl}/containers/${id}/export?token=${encodeURIComponent(
-        token,
-      )}&_t=${Date.now()}`
+      const tokenQuery = token ? `token=${encodeURIComponent(token)}&` : ''
+      const downloadUrl = `${baseUrl}/containers/${encodeURIComponent(id)}/export?${tokenQuery}_t=${Date.now()}`
 
       const downloadWindow = window.open(downloadUrl, '_blank')
 

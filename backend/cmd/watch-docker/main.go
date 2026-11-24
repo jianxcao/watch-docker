@@ -53,21 +53,23 @@ func main() {
 	sc := scanner.New(dockerClient, reg)
 
 	// init notification system
-	notifier := notify.New(func() *config.Config { return cfg })
+	notifier := notify.New(config.Loader())
 	notificationManager := notificationmanager.New(notifier, path.Join(conf.EnvCfg.CONFIG_PATH, "notification-history.json"))
 
+	// share a single updater instance between scheduler and API router so per-container locks match
+	upd := updater.New(dockerClient)
+
 	// start scheduler
-	sch := scheduler.New(log, sc, updater.New(dockerClient), notificationManager)
+	sch := scheduler.New(log, sc, upd, notificationManager)
 	sch.Start()
 
-	r := api.NewRouter(log, dockerClient, reg, sc, sch)
+	r := api.NewRouter(log, dockerClient, reg, sc, sch, upd)
 
 	srv := &http.Server{
-		Addr:         cfg.Server.Addr,
-		Handler:      r,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              cfg.Server.Addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
@@ -84,11 +86,14 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	logger.Logger.Info("shutting down http server")
-	// stop scheduler
-	sch.Stop()
+	// stop scheduler and wait for running cron jobs
+	sch.StopCron()
 	// close notification manager (flush pending notifications)
 	notificationManager.Close()
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Logger.Error("server shutdown error", logger.ZapErr(err))
+	}
+	if err := dockerClient.Close(); err != nil {
+		logger.Logger.Warn("close docker client error", logger.ZapErr(err))
 	}
 }

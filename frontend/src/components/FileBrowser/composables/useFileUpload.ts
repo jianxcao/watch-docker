@@ -1,11 +1,11 @@
 import { uploadContainerFiles } from '@/common/api'
 import { useMessage } from 'naive-ui'
-import { ref } from 'vue'
+import { ref, toValue, type MaybeRefOrGetter } from 'vue'
 
 /**
  * 文件上传功能
  */
-export function useFileUpload(containerId: string) {
+export function useFileUpload(containerId: MaybeRefOrGetter<string>) {
   const message = useMessage()
   const uploading = ref(false)
   const uploadProgress = ref(0)
@@ -20,7 +20,7 @@ export function useFileUpload(containerId: string) {
     uploadProgress.value = 0
 
     try {
-      const res = await uploadContainerFiles(containerId, targetPath, files)
+      const res = await uploadContainerFiles(toValue(containerId), targetPath, files)
       
       if (res.code === 0) {
         const count = res.data.uploaded.length

@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"github.com/moby/moby/client"
 	"go.uber.org/zap"
 )
 
-// containerShellUpgrader WebSocket 升级器（用于容器 Shell）
 var containerShellUpgrader = websocket.Upgrader{
 	CheckOrigin:       auth.CheckWebSocketOrigin,
 	HandshakeTimeout:  10 * time.Second,
@@ -25,17 +25,35 @@ var containerShellUpgrader = websocket.Upgrader{
 	EnableCompression: true,
 }
 
-// ContainerShellMessage 容器终端消息结构
 type ContainerShellMessage struct {
 	Type string `json:"type"` // "input", "resize"
-	Data string `json:"data"` // 输入数据
-	Rows uint16 `json:"rows"` // 终端行数
-	Cols uint16 `json:"cols"` // 终端列数
+	Data string `json:"data"`
+	Rows uint16 `json:"rows"`
+	Cols uint16 `json:"cols"`
+}
+
+var allowedContainerShells = map[string]struct{}{
+	"sh":            {},
+	"bash":          {},
+	"zsh":           {},
+	"ash":           {},
+	"/bin/sh":       {},
+	"/bin/bash":     {},
+	"/bin/zsh":      {},
+	"/bin/ash":      {},
+	"/usr/bin/bash": {},
+	"/usr/bin/zsh":  {},
 }
 
 // handleContainerShellWebSocket 处理容器 Shell WebSocket 连接
 func (s *Server) handleContainerShellWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if err := validateShellAccess(); err != nil {
+			logger.Logger.Warn("container shell access denied", zap.Error(err))
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+
 		containerID := c.Param("id")
 		if containerID == "" {
 			logger.Logger.Error("Missing containerID parameter")
@@ -43,13 +61,17 @@ func (s *Server) handleContainerShellWebSocket() gin.HandlerFunc {
 			return
 		}
 
-		// 获取 shell 类型，默认为 sh
-		shellType := c.DefaultQuery("shell", "sh")
+		shellType := strings.TrimSpace(c.DefaultQuery("shell", "sh"))
+		if _, ok := allowedContainerShells[shellType]; !ok {
+			logger.Logger.Warn("disallowed container shell requested", zap.String("shell", shellType))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的 shell 类型，仅允许 sh/bash/zsh/ash"})
+			return
+		}
+
 		logger.Logger.Info("Container Shell WebSocket connection request",
 			zap.String("containerID", containerID),
 			zap.String("shell", shellType))
 
-		// 检查容器是否在运行
 		ctx := c.Request.Context()
 		containerInfo, err := s.docker.InspectContainer(ctx, containerID)
 		if err != nil {
@@ -58,74 +80,66 @@ func (s *Server) handleContainerShellWebSocket() gin.HandlerFunc {
 			return
 		}
 
-		if !containerInfo.State.Running {
+		if containerInfo.State == nil || !containerInfo.State.Running {
 			logger.Logger.Warn("Container is not running", zap.String("containerID", containerID))
 			c.JSON(http.StatusBadRequest, gin.H{"error": "容器未运行"})
 			return
 		}
 
-		// 升级为 WebSocket 连接
 		conn, err := containerShellUpgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			logger.Logger.Error("Failed to upgrade WebSocket", zap.Error(err))
 			return
 		}
 		defer conn.Close()
+		writer := &synchronizedWebSocketWriter{conn: conn}
 
-		// 设置连接参数
 		conn.SetReadLimit(1024 * 1024)
-		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		conn.SetPongHandler(func(string) error {
-			conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-			return nil
+			return conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		})
 
-		// 创建上下文，用于控制 exec 会话
 		execCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-		// 创建 docker exec 配置
-		execConfig := container.ExecOptions{
+		execConfig := client.ExecCreateOptions{
 			AttachStdin:  true,
 			AttachStdout: true,
 			AttachStderr: true,
-			Tty:          true,
+			TTY:          true,
 			Cmd:          []string{shellType},
 		}
 
-		// 创建 exec 实例
 		execID, err := s.docker.ContainerExecCreate(execCtx, containerID, execConfig)
 		if err != nil {
 			logger.Logger.Error("Failed to create exec", zap.String("containerID", containerID), zap.Error(err))
 			errMsg := fmt.Sprintf("创建终端失败: %v\r\n", err)
-			conn.WriteMessage(websocket.BinaryMessage, []byte(errMsg))
-			cancel()
+			_ = writer.writeMessage(websocket.BinaryMessage, []byte(errMsg))
 			return
 		}
 
-		// 附加到 exec 实例
-		execAttach, err := s.docker.ContainerExecAttach(execCtx, execID.ID, container.ExecStartOptions{
-			Tty: true,
+		execAttach, err := s.docker.ContainerExecAttach(execCtx, execID.ID, client.ExecAttachOptions{
+			TTY: true,
 		})
-
+		if err != nil {
+			logger.Logger.Error("Failed to attach exec", zap.String("execID", execID.ID), zap.Error(err))
+			errMsg := fmt.Sprintf("附加终端失败: %v\r\n", err)
+			_ = writer.writeMessage(websocket.BinaryMessage, []byte(errMsg))
+			return
+		}
 		defer func() {
 			logger.Logger.Info("Container shell exec attached closed")
 			cancel()
 			execAttach.Close()
 		}()
 
-		if err != nil {
-			logger.Logger.Error("Failed to attach exec", zap.String("execID", execID.ID), zap.Error(err))
-			errMsg := fmt.Sprintf("附加终端失败: %v\r\n", err)
-			conn.WriteMessage(websocket.BinaryMessage, []byte(errMsg))
-			return
-		}
-
 		logger.Logger.Info("Container shell exec attached",
 			zap.String("containerID", containerID),
 			zap.String("execID", execID.ID),
 			zap.String("shell", shellType))
 
-		// 启动心跳检测
+		// 心跳检测（使用 synchronizedWebSocketWriter 防止并发写 panic）
 		go func() {
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
@@ -135,42 +149,39 @@ func (s *Server) handleContainerShellWebSocket() gin.HandlerFunc {
 				case <-execCtx.Done():
 					return
 				case <-ticker.C:
-					conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-					if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					if err := writer.writeMessage(websocket.PingMessage, nil); err != nil {
 						logger.Logger.Warn("WebSocket Ping failed", zap.Error(err))
 						cancel()
+						_ = conn.Close()
 						return
 					}
 				}
 			}
 		}()
 
-		// 读取 exec 输出并发送到 WebSocket
+		// 读取 exec 输出并发送到 WebSocket；退出时关闭 conn 使主读取循环及时返回
 		go func() {
-			defer cancel()
+			defer func() {
+				cancel()
+				_ = conn.Close()
+			}()
 			buf := make([]byte, 4096)
 			for {
 				select {
 				case <-execCtx.Done():
 					return
 				default:
-					if execCtx.Err() != nil {
-						return
-					}
 					n, err := execAttach.Reader.Read(buf)
 					if err != nil {
-						// 检查是否是正常关闭（context 已取消）
 						if err != io.EOF && execCtx.Err() == nil {
-							// 只有在 context 未取消时才记录错误，避免正常关闭时的误报
 							logger.Logger.Error("Error reading from exec", zap.Error(err))
 						}
 						return
 					}
 
 					if n > 0 {
-						conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-						if err := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
-							logger.Logger.Error("Failed to write message to WebSocket", zap.Error(err))
+						if err := writer.writeMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+							logger.Logger.Debug("Failed to write message to WebSocket", zap.Error(err))
 							return
 						}
 					}
@@ -192,14 +203,13 @@ func (s *Server) handleContainerShellWebSocket() gin.HandlerFunc {
 					}
 					return
 				}
+				_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 
 				switch messageType {
 				case websocket.TextMessage:
-					// 尝试解析为 JSON 消息（支持 resize）
 					var msg ContainerShellMessage
-					if err := json.Unmarshal(message, &msg); err == nil && msg.Type == "resize" {
-						// 调整终端大小
-						resizeErr := s.docker.ContainerExecResize(execCtx, execID.ID, container.ResizeOptions{
+					if err := json.Unmarshal(message, &msg); err == nil && msg.Type == "resize" && msg.Rows > 0 && msg.Cols > 0 {
+						resizeErr := s.docker.ContainerExecResize(execCtx, execID.ID, client.ExecResizeOptions{
 							Height: uint(msg.Rows),
 							Width:  uint(msg.Cols),
 						})
@@ -210,15 +220,17 @@ func (s *Server) handleContainerShellWebSocket() gin.HandlerFunc {
 								zap.Uint16("cols", msg.Cols),
 								zap.Error(resizeErr))
 						}
+					} else if err == nil && msg.Type == "input" {
+						if _, err := execAttach.Conn.Write([]byte(msg.Data)); err != nil {
+							return
+						}
 					} else {
-						// 普通文本输入
 						if _, err := execAttach.Conn.Write(message); err != nil {
 							logger.Logger.Error("Failed to write to exec", zap.Error(err))
 							return
 						}
 					}
 				case websocket.BinaryMessage:
-					// 二进制消息作为用户输入
 					if _, err := execAttach.Conn.Write(message); err != nil {
 						logger.Logger.Error("Failed to write to exec", zap.Error(err))
 						return

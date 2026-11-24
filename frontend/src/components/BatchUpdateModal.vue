@@ -133,7 +133,8 @@ const wsUrl = computed(() => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
   const token = settingStore.getToken()
-  return `${protocol}//${host}/api/v1/updates/batch/ws?token=${encodeURIComponent(token)}`
+  const base = `${protocol}//${host}/api/v1/updates/batch/ws`
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base
 })
 
 const { open, close: wsClose } = useWebSocket(wsUrl, {
@@ -153,9 +154,17 @@ const { open, close: wsClose } = useWebSocket(wsUrl, {
   },
   onError() {
     isConnecting.value = false
+    if (isStarted.value && !isAllDone.value) {
+      isAllDone.value = true
+      phase.value = 'done'
+    }
   },
   onDisconnected() {
     isConnecting.value = false
+    if (isStarted.value && !isAllDone.value) {
+      isAllDone.value = true
+      phase.value = 'done'
+    }
   },
 })
 

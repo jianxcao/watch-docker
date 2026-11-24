@@ -24,7 +24,7 @@
             <span class="stat-value value-gray">{{ containerStore.stats.stopped }}</span>
           </div>
           <div class="stat-item">
-            <span class="stat-label">正在更新</span>
+            <span class="stat-label">可更新</span>
             <span class="stat-value value-orange">{{ containerStore.stats.updateable }}</span>
           </div>
         </div>
@@ -44,7 +44,7 @@
             <span class="stat-value value-purple">{{ imageStore.stats.total }}</span>
           </div>
           <div class="stat-item">
-            <span class="stat-label">最大的</span>
+            <span class="stat-label">总大小</span>
             <span class="stat-value value-pink">{{ imageStore.stats.formattedTotalSize }}</span>
           </div>
         </div>
@@ -73,7 +73,9 @@
           </div>
           <div class="stat-item">
             <span class="stat-label">系统状态</span>
-            <span class="system-badge">{{ systemHealthText }}</span>
+            <span class="system-badge" :class="`badge-${appStore.systemHealth}`">{{
+              systemHealthText
+            }}</span>
           </div>
         </div>
       </div>
@@ -206,7 +208,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { useDialog, useMessage } from 'naive-ui'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
 import { useContainerStore } from '@/store/container'
@@ -234,6 +236,7 @@ const imageStore = useImageStore()
 const containerHooks = useContainer()
 const { showBatchUpdateModal } = containerHooks
 const settingStore = useSettingStore()
+const dialog = useDialog()
 const message = useMessage()
 
 // 系统清理状态
@@ -296,23 +299,31 @@ const handleRefreshAll = async () => {
   }
 }
 
-// 系统清理处理函数
-const handlePruneSystem = async () => {
-  isPruning.value = true
-  try {
-    const data = await api.container.pruneSystem()
-    if (data.code === 0) {
-      message.success(data.data.message || '系统清理完成')
-      // 清理完成后刷新数据
-      await Promise.all([containerStore.fetchContainers(), imageStore.fetchImages()])
-    } else {
-      message.error(data.msg || '系统清理失败')
-    }
-  } catch (error: any) {
-    message.error(error.message || '系统清理失败')
-  } finally {
-    isPruning.value = false
-  }
+// 系统清理处理函数（先经用户二次确认，避免误删未使用的网络、卷与悬空镜像）
+const handlePruneSystem = () => {
+  dialog.warning({
+    title: '确认系统清理',
+    content: '此操作将清理未使用的悬空镜像、网络和孤立数据，确定要继续吗？',
+    positiveText: '确认清理',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      isPruning.value = true
+      try {
+        const data = await api.container.pruneSystem()
+        if (data.code === 0) {
+          message.success(data.data.message || '系统清理完成')
+          // 清理完成后刷新数据
+          await Promise.all([containerStore.fetchContainers(), imageStore.fetchImages()])
+        } else {
+          message.error(data.msg || '系统清理失败')
+        }
+      } catch (error: any) {
+        message.error(error.message || '系统清理失败')
+      } finally {
+        isPruning.value = false
+      }
+    },
+  })
 }
 
 // 创建应用处理函数
@@ -327,12 +338,12 @@ const handleContainerClick = (containerId: string) => {
 
 // 页面初始化
 onMounted(async () => {
-  // 如果没有数据，先加载数据
-  if (containerStore.containers.length === 0) {
+  // 如果没有数据且未在加载中，才拉取初始数据，避免与 LayoutView 重复请求
+  if (!containerStore.loading && containerStore.containers.length === 0) {
     await containerStore.fetchContainers(true, false)
   }
 
-  if (imageStore.images.length === 0) {
+  if (!imageStore.loading && imageStore.images.length === 0) {
     await imageStore.fetchImages()
   }
 })

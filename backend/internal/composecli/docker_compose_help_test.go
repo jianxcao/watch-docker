@@ -36,10 +36,8 @@ func TestExecuteDockerComposeCommand(t *testing.T) {
 		{
 			name: "执行命令需要输出",
 			options: ExecDockerComposeOptions{
-				ExecPath: "/Users/jianxiong.cao/Downloads/docker/portainer",
-				// Args:          []string{"version"},
-				// Args:          []string{"ls", "-a", "--format", "json"},
-				Args:          []string{"up", "-d"},
+				ExecPath:      ".",
+				Args:          []string{"version"},
 				OperationName: "test version with output",
 				NeedOutput:    true,
 			},

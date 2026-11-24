@@ -7,7 +7,7 @@ import { useResponsive } from '@/hooks/useResponsive'
 export function useFileInteraction() {
   const { isMobile } = useResponsive()
 
-  // 处理文件条目点击
+  // 处理文件条目点击（移动端单击打开；桌面端单击仅选中，由双击打开）
   const handleEntryClick = (
     entry: FileEntry,
     currentPath: string,
@@ -20,19 +20,12 @@ export function useFileInteraction() {
   ) => {
     callbacks.onSelect(entry)
 
-    // 移动端单击打开目录或文件
     if (isMobile.value) {
       if (entry.type === 'directory') {
         const newPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`
         callbacks.onNavigate(newPath)
       } else {
         callbacks.onOpenFile(entry, !canEdit)
-      }
-    } else {
-      // PC 端单击只打开目录
-      if (entry.type === 'directory') {
-        const newPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`
-        callbacks.onNavigate(newPath)
       }
     }
   }

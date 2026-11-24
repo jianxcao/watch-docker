@@ -169,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, useThemeVars, type DropdownOption } from 'naive-ui'
 import {
@@ -191,6 +191,7 @@ import NetworkIcon from '@/assets/svg/networkIO.svg?component'
 import VolumeIcon from '@/assets/svg/volume.svg?component'
 import { useContainerStore } from '@/store/container'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 import { useContainer } from '@/hooks/useContainer'
 import { renderIcon } from '@/common/utils'
 import statsEmitter from '@/evt/containerStats'
@@ -211,10 +212,11 @@ const router = useRouter()
 const message = useMessage()
 const containerStore = useContainerStore()
 const settingStore = useSettingStore()
+const authStore = useAuthStore()
 const { handleStart, handleStop, handleRestart, handleUpdate, handleDelete } = useContainer()
 const theme = useThemeVars()
-// 状态
-const containerId = ref(route.params.id as string)
+// 状态（使用 computed 响应路由参数变化，避免更新容器产生新 ID 后停留在旧 ID）
+const containerId = computed(() => route.params.id as string)
 const containerDetail = ref<any>(null)
 const containerStats = ref<ContainerStats | null>(null)
 const loading = ref(false)
@@ -293,16 +295,21 @@ const tabHeight = computed(() => {
   return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value + settingStore.contentSafeBottom}px)`
 })
 
-// 日志 WebSocket URL
+// 日志 WebSocket URL（未开启认证时允许不带 token 连接）
 const logsSocketUrl = computed(() => {
   if (!containerDetail.value) {
     return ''
   }
 
   const token = settingStore.getToken()
+  if (authStore.authEnabled && !token) {
+    return ''
+  }
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1/containers/logs/${containerId.value}/ws?token=${token}&projectName=${encodeURIComponent(containerName.value)}`
+  const base = `${protocol}//${host}/api/v1/containers/logs/${encodeURIComponent(containerId.value)}/ws?projectName=${encodeURIComponent(containerName.value)}`
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base
 })
 
 // 加载容器详情
@@ -353,16 +360,31 @@ const handleMenuSelect = async (key: string) => {
       await handleRestart(container)
       await loadContainerDetail()
       break
-    case 'update':
-      await handleUpdate(container)
-      await loadContainerDetail()
+    case 'update': {
+      const newContainerId = await handleUpdate(container)
+      if (newContainerId && newContainerId !== containerId.value) {
+        await router.replace({ name: 'container-detail', params: { id: newContainerId } })
+      } else {
+        await loadContainerDetail()
+      }
       break
-    case 'delete':
-      await handleDelete(container)
-      handleBack()
+    }
+    case 'delete': {
+      const deleted = await handleDelete(container)
+      if (deleted) {
+        handleBack()
+      }
       break
+    }
   }
 }
+
+// 监听路由参数变化（容器更新产生新 ID 或切换容器时自动刷新）
+watch(containerId, (newId, oldId) => {
+  if (newId && newId !== oldId) {
+    void loadContainerDetail()
+  }
+})
 
 // 返回
 const handleBack = () => {

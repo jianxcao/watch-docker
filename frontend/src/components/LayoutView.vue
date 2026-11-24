@@ -82,20 +82,20 @@ watchEffect(() => {
   document.body.setAttribute('data-theme', settingStore.setting.theme)
 })
 
+let unmounted = false
+
 onMounted(async () => {
   await appStore.checkHealth()
-  Promise.all([
+  void Promise.allSettled([
     settingStore.fetchSystemInfo(),
     containerStore.fetchContainers(true, false),
     imageStore.fetchImages(),
-    containerStore.statsWebSocket.connect(),
   ])
-  imageStore.startImagesPolling()
+  containerStore.statsWebSocket.connect()
 })
 
 onUnmounted(() => {
-  imageStore.stopImagesPolling()
-
+  unmounted = true
   containerStore.statsWebSocket.disconnect()
 })
 
@@ -103,8 +103,8 @@ async function refresh() {
   if (appStore.systemHealth === 'unhealthy') {
     await appStore.checkHealth()
   }
-  containerStore.fetchContainers(true, false)
-  imageStore.fetchImages()
+  void containerStore.fetchContainers(true, false)
+  void imageStore.fetchImages()
   if (!containerStore.statsWebSocket.isConnected) {
     containerStore.statsWebSocket.connect()
   }
@@ -113,11 +113,11 @@ async function refresh() {
 const visibility = useDocumentVisibility()
 
 watch(visibility, (newVal) => {
-  console.debug('visibility', newVal)
   if (newVal === 'visible') {
     sleep(1000).then(() => {
-      console.debug('页面可见重新刷新')
-      refresh()
+      if (!unmounted) {
+        void refresh()
+      }
     })
   }
 })

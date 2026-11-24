@@ -10,7 +10,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 // import basicSsl from '@vitejs/plugin-basic-ssl'
 
 // 读取 package.json 中的版本号
-import packageJson from './package.json'
+import packageJson from './package.json' with { type: 'json' }
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -19,25 +19,16 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    // 生成 sourcemap（包含第三方库）
-    sourcemap: true,
+    sourcemap: false,
     rollupOptions: {
       output: {
-        // 不忽略任何文件，让所有 sourcemap 都可见
-        sourcemapIgnoreList: () => false,
-        advancedChunks: {
-          groups: [
-            {
-              test: /node_modules\/(?:vue|vue-router|@vueuse\/core|pinia)/,
-              name: 'common',
-              priority: 1,
-            },
-            {
-              test: /node_modules\/(?:naive-ui)/,
-              name: 'ui',
-              priority: 2,
-            },
-          ],
+        manualChunks(id: string) {
+          if (/node_modules\/(?:vue|vue-router|@vueuse\/core|pinia)\//.test(id)) {
+            return 'common'
+          }
+          if (/node_modules\/(?:naive-ui)\//.test(id)) {
+            return 'ui'
+          }
         },
       },
     },
@@ -70,14 +61,11 @@ export default defineConfig({
       // strategies: 'injectManifest',
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg}'],
-        navigateFallbackDenylist: [/.*\/api\/v\d+\/system\/logging.*/],
+        navigateFallbackDenylist: [/^\/api\//],
         disableDevLogs: true,
       },
-      injectManifest: {
-        rollupFormat: 'iife',
-      },
       devOptions: {
-        enabled: true,
+        enabled: false,
         type: 'module',
       },
       manifest: {
@@ -126,7 +114,6 @@ export default defineConfig({
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      Authorization: 'Basic YWRtaW46Q2lkc2ljLXNpc2phZC1yeXptdTE=',
     },
     proxy: {
       '/api': {

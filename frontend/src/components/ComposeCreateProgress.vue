@@ -125,8 +125,8 @@ const wsUrl = computed(() => {
   return url
 })
 
-// 使用 VueUse 的 useWebSocket
-const { send, open, close } = useWebSocket(wsUrl.value, {
+// 使用 VueUse 的 useWebSocket（保持响应式 wsUrl）
+const { send, open, close } = useWebSocket(wsUrl, {
   immediate: false,
   autoReconnect: false,
   heartbeat: {

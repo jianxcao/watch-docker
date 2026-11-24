@@ -17,7 +17,11 @@ app.use(router)
 
 // 初始化 token store
 const settingStore = useSettingStore()
-initTokenStore(() => settingStore.getToken())
+initTokenStore((url?: string) =>
+  url?.includes('/2fa/')
+    ? settingStore.getToken() || settingStore.getTmpToken()
+    : settingStore.getToken(),
+)
 
 // 初始化身份验证状态
 const authStore = useAuthStore()

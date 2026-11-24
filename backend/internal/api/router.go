@@ -41,10 +41,17 @@ type Server struct {
 	streamManagerBytes  *wsstream.StreamManager[[]byte] // 用于 compose logs (二进制流)
 }
 
-func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler) *gin.Engine {
+func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler, upd *updater.Updater) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(auth.SecurityHeadersMiddleware())
+	if err := r.SetTrustedProxies(nil); err != nil {
+		logger.Warn("set trusted proxies failed", zap.Error(err))
+	}
+
+	if upd == nil {
+		upd = updater.New(docker)
+	}
 
 	// 创建 WebSocket 管理器（string 类型用于 JSON 文本）
 	streamManagerString := wsstream.NewStreamManager[string]()
@@ -67,7 +74,7 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		docker:              docker,
 		registry:            reg,
 		scanner:             sc,
-		updater:             updater.New(docker),
+		updater:             upd,
 		scheduler:           sch,
 		wsStatsManager:      wsStatsManager,
 		composeClient:       composeClient,
@@ -141,6 +148,24 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 // handleGetInfo 获取系统信息
 func (s *Server) handleGetInfo() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 判断是否已通过完整认证（若开启认证，未登录时仅返回最小公开版本信息，避免泄露 Docker 与宿主机路径）
+		isAuthenticated := !auth.IsAuthEnabled()
+		if !isAuthenticated {
+			if token, err := auth.ExtractTokenFromRequest(c); err == nil {
+				if _, err := auth.ValidateFullAccessClaims(token); err == nil {
+					isAuthenticated = true
+				}
+			}
+		}
+
+		if !isAuthenticated {
+			c.JSON(http.StatusOK, NewSuccessRes(gin.H{"info": gin.H{
+				"version":                        conf.GetVersionInfo(),
+				"isSecondaryVerificationEnabled": conf.EnvCfg.IS_SECONDARY_VERIFICATION,
+			}}))
+			return
+		}
+
 		// 获取 Docker 版本信息
 		dockerVersion, err := s.docker.GetVersion(c.Request.Context())
 		if err != nil {
@@ -149,16 +174,37 @@ func (s *Server) handleGetInfo() gin.HandlerFunc {
 			return
 		}
 
+		var gitCommit, goVersion, buildTime string
+		for _, comp := range dockerVersion.Components {
+			if comp.Details == nil {
+				continue
+			}
+			if comp.Name == "Engine" || (gitCommit == "" && comp.Details["GitCommit"] != "") {
+				if v := comp.Details["GitCommit"]; v != "" {
+					gitCommit = v
+				}
+				if v := comp.Details["GoVersion"]; v != "" {
+					goVersion = v
+				}
+				if v := comp.Details["BuildTime"]; v != "" {
+					buildTime = v
+				}
+				if comp.Name == "Engine" {
+					break
+				}
+			}
+		}
+
 		// 获取当前应用版本
 		envCfg := conf.EnvCfg
 
 		info := gin.H{
 			"dockerVersion":                  dockerVersion.Version,
 			"dockerAPIVersion":               dockerVersion.APIVersion,
-			"dockerPlatform":                 dockerVersion.Platform,
-			"dockerGitCommit":                dockerVersion.GitCommit,
-			"dockerGoVersion":                dockerVersion.GoVersion,
-			"dockerBuildTime":                dockerVersion.BuildTime,
+			"dockerPlatform":                 dockerVersion.Platform.Name,
+			"dockerGitCommit":                gitCommit,
+			"dockerGoVersion":                goVersion,
+			"dockerBuildTime":                buildTime,
 			"version":                        conf.GetVersionInfo(),
 			"appPath":                        envCfg.APP_PATH,
 			"isOpenDockerShell":              conf.EnvCfg.IS_OPEN_DOCKER_SHELL,
@@ -170,10 +216,10 @@ func (s *Server) handleGetInfo() gin.HandlerFunc {
 	}
 }
 
-// handleGetConfig 获取当前配置
+// handleGetConfig 获取当前配置（返回脱敏副本，隐藏 Token、代理密码与 2FA 内部凭据）
 func (s *Server) handleGetConfig() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		cfg := config.Get()
+		cfg := config.Get().MaskedCopy()
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"config": cfg}))
 	}
 }
@@ -181,26 +227,39 @@ func (s *Server) handleGetConfig() gin.HandlerFunc {
 // handleSaveConfig 保存配置并使其生效
 func (s *Server) handleSaveConfig() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var cfg config.Config
-		oldCfg := config.Get()
-		if err := c.ShouldBindJSON(&cfg); err != nil {
+		var incoming config.Config
+		if err := c.ShouldBindJSON(&incoming); err != nil {
 			s.logger.Error("invalid config format", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "invalid config format"))
 			return
 		}
 
-		if oldCfg.Logging.Level != cfg.Logging.Level {
-			s.logger.Info("log level changed", zap.String("old_level", oldCfg.Logging.Level), zap.String("new_level", cfg.Logging.Level))
-			if err := logger.SetLogLevel(cfg.Logging.Level); err != nil {
-				s.logger.Error("设置日志出错， 请重启容器", zap.String("level", cfg.Logging.Level), zap.Error(err))
+		var oldLogLevel string
+		err := config.Update(func(prev *config.Config) error {
+			oldLogLevel = prev.Logging.Level
+			next := incoming.Clone()
+			config.MergeMaskedSecrets(next, prev)
+			*prev = *next
+			return nil
+		})
+		if err != nil {
+			s.logger.Warn("save config rejected", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
+			return
+		}
+
+		if oldLogLevel != incoming.Logging.Level {
+			s.logger.Info("log level changed", zap.String("old_level", oldLogLevel), zap.String("new_level", incoming.Logging.Level))
+			if err := logger.SetLogLevel(incoming.Logging.Level); err != nil {
+				s.logger.Error("设置日志出错， 请重启容器", zap.String("level", incoming.Logging.Level), zap.Error(err))
 			}
 		}
 
-		// 设置为全局配置（这会触发保存到文件）
-		config.SetGlobal(&cfg)
-
 		// 动态更新 registry 客户端的认证凭据
-		if s.scanner != nil {
+		if s.registry != nil {
+			s.registry.UpdateManifestCredentials()
+			s.logger.Info("registry credentials updated")
+		} else if s.scanner != nil {
 			s.scanner.GetRegistryClient().UpdateManifestCredentials()
 			s.logger.Info("registry credentials updated")
 		}
@@ -208,8 +267,7 @@ func (s *Server) handleSaveConfig() gin.HandlerFunc {
 		// 重启调度器以应用新的配置
 		if s.scheduler != nil {
 			s.logger.Info("restarting scheduler to apply new configuration")
-			s.scheduler.Stop()
-			s.scheduler.Start()
+			s.scheduler.Restart()
 		}
 
 		s.logger.Info("config updated successfully")

@@ -101,9 +101,9 @@ const handleEnvTextChange = () => {
   nextTick(() => {
     const lines = formValue.value.envText.split('\n').filter((line) => line.trim())
     const newEnvList = lines.reduce((acc, line) => {
-      let [key, value] = line.split('=')
-      key = (key || '').trim()
-      value = (value || '').trim()
+      const eqIndex = line.indexOf('=')
+      const key = (eqIndex >= 0 ? line.slice(0, eqIndex) : line).trim()
+      const value = eqIndex >= 0 ? line.slice(eqIndex + 1).trim() : ''
       if (key) {
         acc.push(`${key}=${value}`)
       }
@@ -112,10 +112,10 @@ const handleEnvTextChange = () => {
 
     formValue.value.env = newEnvList
     formValue.value.envList = newEnvList.map((item) => {
-      const [key, ...valueParts] = item.split('=')
+      const eqIndex = item.indexOf('=')
       return {
-        key: key || '',
-        value: valueParts.join('=') || '',
+        key: eqIndex >= 0 ? item.slice(0, eqIndex) : item,
+        value: eqIndex >= 0 ? item.slice(eqIndex + 1) : '',
       }
     })
   })

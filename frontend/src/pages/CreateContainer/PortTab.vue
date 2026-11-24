@@ -119,7 +119,7 @@ const addPort = () => {
   formValue.value.portList.push({
     hostPort: null,
     containerPort: null,
-    protocol: ['tcp', 'udp'] as ('tcp' | 'udp')[],
+    protocol: ['tcp'] as ('tcp' | 'udp')[],
   })
 }
 

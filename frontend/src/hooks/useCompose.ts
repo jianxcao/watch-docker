@@ -13,8 +13,9 @@ export const useCompose = () => {
     project: ComposeProject,
     action: ComposeAction,
     confirmMessage: string,
-  ) => {
-    return new Promise<void>((resolve, reject) => {
+  ): Promise<boolean> => {
+    return new Promise<boolean>((resolve, reject) => {
+      let settled = false
       const d = dialog.warning({
         title: '确认操作',
         content: confirmMessage,
@@ -24,15 +25,23 @@ export const useCompose = () => {
           d.loading = true
           try {
             await composeStore.executeProjectAction(project, action)
-            resolve()
+            settled = true
+            resolve(true)
           } catch (error) {
+            settled = true
             reject(error)
           } finally {
             d.loading = false
           }
         },
         onNegativeClick: () => {
-          reject(new Error('用户取消操作'))
+          settled = true
+          resolve(false)
+        },
+        onAfterLeave: () => {
+          if (!settled) {
+            resolve(false)
+          }
         },
       })
     })
@@ -43,41 +52,58 @@ export const useCompose = () => {
     project: ComposeProject,
     action: ComposeAction,
     confirmMessage: string,
-  ) => {
-    dialog.warning({
-      title: '确认操作',
-      content: confirmMessage,
-      positiveText: '确认',
-      negativeText: '取消',
-      onPositiveClick: () => {
-        composeStore.executeProjectAction(project, action)
-      },
+  ): Promise<void> => {
+    return new Promise((resolve) => {
+      let settled = false
+      dialog.warning({
+        title: '确认操作',
+        content: confirmMessage,
+        positiveText: '确认',
+        negativeText: '取消',
+        onPositiveClick: async () => {
+          try {
+            await composeStore.executeProjectAction(project, action)
+          } finally {
+            settled = true
+            resolve()
+          }
+        },
+        onNegativeClick: () => {
+          settled = true
+          resolve()
+        },
+        onAfterLeave: () => {
+          if (!settled) {
+            resolve()
+          }
+        },
+      })
     })
   }
 
   // 直接执行操作（无确认弹窗，卡片展示进度）
   const executeAction = (project: ComposeProject, action: ComposeAction) => {
-    composeStore.executeProjectAction(project, action)
+    return composeStore.executeProjectAction(project, action)
   }
 
   // 启动项目（直接执行，卡片展示进度）
   const handleStart = (project: ComposeProject) => {
-    executeAction(project, 'start')
+    return executeAction(project, 'start')
   }
 
   // 停止项目（直接执行，卡片展示进度）
   const handleStop = (project: ComposeProject) => {
-    executeAction(project, 'stop')
+    return executeAction(project, 'stop')
   }
 
   // 重启项目（直接执行，卡片展示进度）
   const handleRestart = (project: ComposeProject) => {
-    executeAction(project, 'restart')
+    return executeAction(project, 'restart')
   }
 
   // 重新创建项目（确认后立即关闭弹窗，卡片展示进度）
   const handleCreate = (project: ComposeProject) => {
-    executeActionWithQuickConfirm(
+    return executeActionWithQuickConfirm(
       project,
       'create',
       `确定要重新创建项目 "${project.name}" 吗？这将停止并删除所有容器，然后重新创建它们。`,
@@ -85,16 +111,17 @@ export const useCompose = () => {
   }
 
   // 删除项目（阻塞式确认，完成后关闭弹窗）
-  const handleDelete = async (project: ComposeProject) => {
+  const handleDelete = async (project: ComposeProject): Promise<boolean> => {
     try {
       const confirmMessage =
         project.status === 'draft' || project.status === 'created_stack'
           ? `确定要删除项目 "${project.name}" 吗？这将删除该项目的配置文件（草稿）。此操作不可撤销！`
           : `确定要删除项目 "${project.name}" 吗？这将停止并删除所有容器、网络和卷。此操作不可撤销！`
 
-      await executeActionWithConfirm(project, 'delete', confirmMessage)
+      return await executeActionWithConfirm(project, 'delete', confirmMessage)
     } catch (error) {
       console.error('删除项目失败:', error)
+      return false
     }
   }
 
@@ -117,6 +144,10 @@ export const useCompose = () => {
         return '已停止'
       case 'partial':
         return '部分运行'
+      case 'draft':
+        return '草稿'
+      case 'created_stack':
+        return '已创建'
       case 'error':
         return '错误'
       case 'unknown':

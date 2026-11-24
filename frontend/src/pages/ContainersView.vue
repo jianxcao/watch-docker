@@ -331,8 +331,8 @@ const filteredContainers = computed(() => {
     })
   }
 
-  // 排序
-  return containers.sort((a, b) => {
+  // 排序（使用副本避免修改 store 原数组）
+  return [...containers].sort((a, b) => {
     let result = 0
 
     switch (sortBy.value) {
@@ -461,19 +461,19 @@ onMounted(async () => {
     gap: 16px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

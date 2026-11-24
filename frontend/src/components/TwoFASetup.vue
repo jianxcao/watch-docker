@@ -159,10 +159,39 @@ const handleOTPVerify = async () => {
   }
 }
 
-// 复制密钥
-const copySecret = () => {
-  navigator.clipboard.writeText(otpSecret.value)
-  message.success('已复制到剪贴板')
+// 复制密钥（兼容 HTTP 非安全上下文的剪贴板回退方案）
+const copySecret = async () => {
+  const secret = otpSecret.value
+  if (!secret) {
+    return
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(secret)
+      message.success('已复制到剪贴板')
+      return
+    }
+  } catch {
+    // 剪贴板 API 不可用或被拒绝时使用回退方案
+  }
+  try {
+    const textarea = document.createElement('textarea')
+    textarea.value = secret
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(textarea)
+    if (ok) {
+      message.success('已复制到剪贴板')
+    } else {
+      message.warning('复制失败，请手动选中密钥复制')
+    }
+  } catch {
+    message.warning('复制失败，请手动选中密钥复制')
+  }
 }
 
 // WebAuthn 设置

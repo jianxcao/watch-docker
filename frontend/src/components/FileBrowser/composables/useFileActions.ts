@@ -1,12 +1,12 @@
 import { createContainerPath, renameContainerPath } from '@/common/api'
 import { useDialog, useMessage } from 'naive-ui'
-import { h } from 'vue'
+import { h, toValue, type MaybeRefOrGetter } from 'vue'
 import { NInput } from 'naive-ui'
 
 /**
  * 文件/文件夹创建和重命名功能
  */
-export function useFileActions(containerId: string) {
+export function useFileActions(containerId: MaybeRefOrGetter<string>) {
   const message = useMessage()
   const dialog = useDialog()
 
@@ -53,7 +53,7 @@ export function useFileActions(containerId: string) {
       const name = inputValue.trim()
       const fullPath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`
 
-      const res = await createContainerPath(containerId, {
+      const res = await createContainerPath(toValue(containerId), {
         path: fullPath,
         type,
       })
@@ -128,7 +128,7 @@ export function useFileActions(containerId: string) {
       const newName = inputValue.trim()
       const newPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`
 
-      const res = await renameContainerPath(containerId, {
+      const res = await renameContainerPath(toValue(containerId), {
         oldPath,
         newPath,
       })

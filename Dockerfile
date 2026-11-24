@@ -1,14 +1,14 @@
 # 前端构建阶段
-FROM node:22-alpine AS frontend-builder
+FROM node:24-alpine AS frontend-builder
 
 # 设置工作目录
 WORKDIR /app
 
 # 固定与 lockfile 生成环境一致的 pnpm，避免构建时自动升级导致配置不兼容
-RUN npm install -g pnpm@10.30.3
+RUN npm install -g pnpm@12.18.0
 
 # 复制前端代码
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 
 # 安装依赖
 RUN pnpm install --frozen-lockfile
@@ -20,7 +20,7 @@ COPY frontend/ .
 RUN pnpm build
 
 # 后端构建阶段
-FROM golang:1.25.1-alpine AS backend-builder
+FROM golang:1.26-alpine AS backend-builder
 
 # 添加平台参数，由 Docker buildx 自动提供
 ARG TARGETPLATFORM
@@ -52,7 +52,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags docker -a
     -o watch-docker cmd/watch-docker/main.go
 
 # 运行阶段
-FROM alpine:latest
+FROM alpine:3.22
 
 # 安装ca-certificates、timezone数据、wget (用于健康检查)、gosu和shadow-utils
 RUN apk --no-cache add ca-certificates tzdata wget gosu shadow
@@ -88,22 +88,20 @@ COPY ./entrypoint /app/entrypoint
 RUN chmod +x /app/entrypoint
 RUN chmod +x /app/watch-docker
 
-# 设置目录权限
-RUN chown -R watch-docker:watch-docker /app /config
-RUN chmod -R 755 /app
+# 设置目录权限（保持二进制与启动脚本为 root 只读可执行，仅数据目录授权给运行用户）
+RUN chown -R watch-docker:watch-docker /config && \
+    chmod -R 755 /app
 
 ENV PGID=1000
 ENV PUID=1000
 ENV UMASK=022
 ENV CONFIG_PATH=/config
 ENV CONFIG_FILE=config.yaml
-ENV PORT=8088
-ENV LOG_LEVEL=info
-ENV LOG_FORMAT=text
+ENV PORT=8080
 ENV STATIC_DIR=/app/static
 ENV USER_NAME=admin
 ENV USER_PASSWORD=admin
 LABEL watchdocker.skip="true"
-# 启动应用
-ENTRYPOINT ["/app/entrypoint" ]
-EXPOSE 8088
+# 启动应用（通过 dumb-init 转发信号并回收僵尸进程）
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "/app/entrypoint"]
+EXPOSE 8080

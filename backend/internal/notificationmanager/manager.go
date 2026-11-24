@@ -299,8 +299,7 @@ func (m *Manager) shouldSkipNotification(containerName, image, digest string, ev
 	defer m.mu.RUnlock()
 
 	today := time.Now().Format("2006-01-02")
-	if m.history.Date != today {
-		// 日期变了，重置历史记录
+	if m.history == nil || m.history.Date != today || m.history.SentToday == nil {
 		return false
 	}
 
@@ -321,14 +320,21 @@ func (m *Manager) markAsNotified(containerName, image, digest string, eventType 
 	today := time.Now().Format("2006-01-02")
 
 	// 检查日期是否变化，如果变化了就清理过期记录
-	if m.history.Date != today {
+	if m.history == nil || m.history.Date != today {
+		oldDate := ""
+		if m.history != nil {
+			oldDate = m.history.Date
+		}
 		logger.Logger.Debug("日期变更，清理过期通知历史",
-			zap.String("old_date", m.history.Date),
+			zap.String("old_date", oldDate),
 			zap.String("today", today))
 		m.history = &NotificationHistory{
 			SentToday: make(map[string]bool),
 			Date:      today,
 		}
+	}
+	if m.history.SentToday == nil {
+		m.history.SentToday = make(map[string]bool)
 	}
 
 	key := fmt.Sprintf("%s|%s|%s|%s", containerName, image, digest, today)
@@ -360,6 +366,10 @@ func (m *Manager) loadHistory() {
 			Date:      today,
 		}
 		return
+	}
+
+	if history.SentToday == nil {
+		history.SentToday = make(map[string]bool)
 	}
 
 	// 只保留当天的历史记录，过期的直接丢弃

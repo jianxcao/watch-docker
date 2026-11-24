@@ -62,6 +62,7 @@ import { useWebSocket } from '@vueuse/core'
 import TermView from '@/components/Term/TermView.vue'
 import type { Terminal } from '@xterm/xterm'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 import { API_ENDPOINTS } from '@/constants/api'
 
 interface Props {
@@ -101,13 +102,19 @@ const terminalHeight = computed(() => {
   return 'calc(100% - 48px)'
 })
 
+const authStore = useAuthStore()
+
 // WebSocket URL
 const getWebSocketUrl = () => {
   const token = settingStore.getToken()
+  if (authStore.authEnabled && !token) {
+    throw new Error('未登录，请先登录后再连接 Shell')
+  }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
   const baseUrl = API_ENDPOINTS.CONTAINER_SHELL_WS(props.containerId, selectedShell.value)
-  return `${protocol}//${host}/api/v1${baseUrl}&token=${token}`
+  const fullBase = `${protocol}//${host}/api/v1${baseUrl}`
+  return token ? `${fullBase}&token=${encodeURIComponent(token)}` : fullBase
 }
 
 // 使用 VueUse 的 useWebSocket
@@ -122,17 +129,20 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
       return
     }
     // 处理接收到的数据
-    if (newData instanceof Blob) {
-      // 二进制数据
+    if (newData instanceof ArrayBuffer) {
+      terminal.value.write(new Uint8Array(newData))
+    } else if (newData instanceof Blob) {
       newData.arrayBuffer().then((buffer) => {
         terminal.value?.write(new Uint8Array(buffer))
       })
     } else if (typeof newData === 'string') {
-      // 文本数据
       terminal.value.write(newData)
     }
   },
-  onConnected: () => {
+  onConnected: (_ws) => {
+    if (_ws) {
+      _ws.binaryType = 'arraybuffer'
+    }
     errorMessage.value = ''
     message.success('Shell 连接成功')
 

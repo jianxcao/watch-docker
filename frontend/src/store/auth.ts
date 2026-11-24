@@ -25,6 +25,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   // 检查认证状态加载中
   const checkingAuth = ref(false)
+  let initPromise: Promise<void> | null = null
 
   // 计算属性：是否需要登录
   const requiresAuth = computed(() => {
@@ -36,32 +37,47 @@ export const useAuthStore = defineStore('auth', () => {
     return settingStore.currentUsername
   })
 
-  // 初始化：从setting store恢复token
-  const initAuth = async () => {
-    checkingAuth.value = true
-    try {
-      // 检查是否启用身份验证
-      const authStatusRes = await authApi.checkAuthStatus()
-      authEnabled.value = authStatusRes.data.authEnabled
+  const setAuthStatus = (enabled: boolean) => {
+    authEnabled.value = enabled
+  }
 
-      // 如果启用了身份验证，检查当前token状态
-      if (authEnabled.value) {
-        const savedToken = settingStore.getToken()
-        if (savedToken) {
+  // 初始化：从setting store恢复token（不将 tempToken 视作完整登录态）
+  const initAuth = () => {
+    if (initPromise) {
+      return initPromise
+    }
+    checkingAuth.value = true
+    initPromise = (async () => {
+      try {
+        const authStatusRes = await authApi.checkAuthStatus()
+        authEnabled.value = authStatusRes.data.authEnabled
+
+        if (authEnabled.value) {
+          const savedToken = settingStore.getToken()
+          isLoggedIn.value = Boolean(savedToken)
+        } else {
           isLoggedIn.value = true
-          // 这里可以添加验证token有效性的逻辑
         }
-      } else {
-        // 如果未启用身份验证，自动设为已登录状态
-        isLoggedIn.value = true
+      } catch (error: any) {
+        console.error('Failed to check auth status:', error)
+        if (error?.code === 401 || error?.response?.status === 401) {
+          authEnabled.value = true
+          isLoggedIn.value = false
+        } else {
+          const hasSavedToken = Boolean(settingStore.getToken())
+          authEnabled.value = hasSavedToken
+          isLoggedIn.value = hasSavedToken
+        }
+      } finally {
+        checkingAuth.value = false
       }
-    } catch (error) {
-      console.error('Failed to check auth status:', error)
-      // 如果无法检查状态，默认不启用认证
-      authEnabled.value = false
-      isLoggedIn.value = true
-    } finally {
-      checkingAuth.value = false
+    })()
+    return initPromise
+  }
+
+  const waitForInit = async () => {
+    if (initPromise) {
+      await initPromise
     }
   }
 
@@ -122,6 +138,10 @@ export const useAuthStore = defineStore('auth', () => {
       settingStore.clearToken()
       settingStore.clearCurrentUsername()
       isLoggedIn.value = false
+      twoFARequired.value = false
+      twoFASetupRequired.value = false
+      tempToken.value = ''
+      twoFAMethod.value = ''
       navigateTo('/login')
     }
   }
@@ -141,13 +161,24 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  // 完成二次验证后设置完整 token
+  // 完成二次验证后设置完整 token，并清空临时 token
   const completeTwoFA = (fullToken: string) => {
+    settingStore.setTmpToken('')
     settingStore.setToken(fullToken)
     isLoggedIn.value = true
     twoFARequired.value = false
     twoFASetupRequired.value = false
     tempToken.value = ''
+    twoFAMethod.value = ''
+  }
+
+  // 取消二次验证流程，返回用户名密码登录界面
+  const cancelTwoFA = () => {
+    twoFARequired.value = false
+    twoFASetupRequired.value = false
+    tempToken.value = ''
+    twoFAMethod.value = ''
+    settingStore.setTmpToken('')
   }
 
   return {
@@ -167,9 +198,12 @@ export const useAuthStore = defineStore('auth', () => {
 
     // 方法
     initAuth,
+    waitForInit,
+    setAuthStatus,
     login,
     logout,
     forceLogout,
     completeTwoFA,
+    cancelTwoFA,
   }
 })

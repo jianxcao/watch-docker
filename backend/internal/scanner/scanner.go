@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/config"
@@ -17,6 +18,7 @@ type ContainerStatus struct {
 	ID            string                    `json:"id"`
 	Name          string                    `json:"name"`
 	Image         string                    `json:"image"`
+	ImageID       string                    `json:"imageID,omitempty"`
 	Running       bool                      `json:"running"`
 	CurrentDigest []string                  `json:"currentDigest"`
 	RemoteDigest  string                    `json:"remoteDigest"`
@@ -35,6 +37,9 @@ type ContainerStatus struct {
 type Scanner struct {
 	docker   *dockercli.Client
 	registry *registry.Client
+
+	snapshotMu sync.RWMutex
+	lastScanAt time.Time
 }
 
 func New(d *dockercli.Client, r *registry.Client) *Scanner {
@@ -42,12 +47,6 @@ func New(d *dockercli.Client, r *registry.Client) *Scanner {
 }
 
 // ScanOnce 扫描当前主机上的容器，返回其更新状态。
-//
-// 关键流程：
-// 1) 通过 Docker 客户端获取容器列表
-// 2) 对每个容器先做策略评估（policy.Evaluate），尽早跳过无需查询 registry 的容器
-// 3) 批量获取所有需要检查的镜像的远端 digest（使用批量模式）
-// 4) 与本地 RepoDigest 对比，生成 UpToDate/UpdateAvailable/Skipped/Error 状态
 func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency int, isUserCache bool, isHaveUpdate bool) ([]ContainerStatus, error) {
 	containers, err := s.docker.ListContainers(ctx, includeStopped)
 	if err != nil {
@@ -57,20 +56,23 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 	result := make([]ContainerStatus, len(containers))
 	cfg := config.Get()
 
-	// 1. 策略评估 + 收集需要查询的镜像
-	type containerInfo struct {
+	type containerEval struct {
 		containerIdx  int
-		image         string
+		query         registry.DigestQuery
 		repoDigests   []string
+		imageID       string
 		skippedUpdate bool
 	}
-	imageToContainers := make(map[string][]containerInfo)
+
+	queryMap := make(map[string]registry.DigestQuery)
+	evalsByQuery := make(map[string][]containerEval)
 
 	for i, ct := range containers {
 		st := ContainerStatus{
 			ID:            ct.ID,
 			Name:          ct.Name,
 			Image:         ct.Image,
+			ImageID:       ct.ImageID,
 			Running:       strings.EqualFold(ct.State, "running"),
 			Labels:        ct.Labels,
 			LastCheckedAt: now,
@@ -78,7 +80,6 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 			Ports:         ct.Ports,
 		}
 
-		// policy evaluation
 		dec := policy.Evaluate(policy.Input{
 			ImageRef:           ct.Image,
 			RepoDigests:        ct.RepoDigests,
@@ -102,40 +103,54 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 			continue
 		}
 
-		// 需要查询的容器。是否允许远程查询由 isHaveUpdate 控制。
-		imageToContainers[ct.Image] = append(imageToContainers[ct.Image], containerInfo{
+		q := registry.DigestQuery{
+			ImageRef:         ct.Image,
+			OS:               ct.ImageOS,
+			Arch:             ct.ImageArch,
+			Variant:          ct.ImageVariant,
+			NeedConfigDigest: len(ct.RepoDigests) == 0 && !ct.IsLocalImage,
+		}
+		qKey := q.Key()
+		if existing, ok := queryMap[qKey]; ok {
+			if q.NeedConfigDigest && !existing.NeedConfigDigest {
+				existing.NeedConfigDigest = true
+				queryMap[qKey] = existing
+			}
+		} else {
+			queryMap[qKey] = q
+		}
+
+		evalsByQuery[qKey] = append(evalsByQuery[qKey], containerEval{
 			containerIdx:  i,
-			image:         ct.Image,
+			query:         q,
 			repoDigests:   ct.RepoDigests,
+			imageID:       ct.ImageID,
 			skippedUpdate: dec.SkippedUpdate,
 		})
 	}
 
-	// 2. 批量查询所有镜像
-	if len(imageToContainers) == 0 {
+	if len(queryMap) == 0 {
 		return result, nil
 	}
 
-	imagesToQuery := make([]string, 0, len(imageToContainers))
-	for img := range imageToContainers {
-		imagesToQuery = append(imagesToQuery, img)
+	queries := make([]registry.DigestQuery, 0, len(queryMap))
+	for _, q := range queryMap {
+		queries = append(queries, q)
 	}
 
 	cacheOnly := !isHaveUpdate
-
 	if !isUserCache && !cacheOnly {
 		logger.Logger.Debug("批量扫描镜像",
 			zap.Int("totalContainers", len(containers)),
-			zap.Int("uniqueImages", len(imagesToQuery)))
+			zap.Int("uniqueQueries", len(queries)))
 	}
 
-	digestResults := s.registry.GetRemoteDigestsBatch(ctx, imagesToQuery, isUserCache || cacheOnly, cacheOnly, concurrency)
+	digestResults := s.registry.GetRemoteDigestsBatchWithPlatforms(ctx, queries, isUserCache || cacheOnly, cacheOnly, concurrency)
 
-	// 3. 填充结果
-	for image, infos := range imageToContainers {
-		digestResult := digestResults[image]
+	for qKey, evals := range evalsByQuery {
+		digestResult := digestResults[qKey]
 
-		for _, info := range infos {
+		for _, info := range evals {
 			ct := containers[info.containerIdx]
 			st := ContainerStatus{
 				ID:            ct.ID,
@@ -161,19 +176,15 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				case registry.ErrorTypeRateLimited:
 					st.Status = "Error"
 					st.SkipReason = "registry 请求频率超限，请稍后重试"
-					logger.Logger.Warn("get remote digest: rate limited",
-						zap.String("image", image))
+					logger.Logger.Warn("get remote digest: rate limited", zap.String("image", ct.Image))
 				case registry.ErrorTypeNotFound:
 					st.Status = "Error"
 					st.SkipReason = "镜像或标签不存在"
-					logger.Logger.Warn("get remote digest: not found",
-						zap.String("image", image))
+					logger.Logger.Warn("get remote digest: not found", zap.String("image", ct.Image))
 				default:
 					st.Status = "Error"
 					st.SkipReason = "registry: " + digestResult.Error.Error()
-					logger.Logger.Error("get remote digest",
-						zap.String("image", image),
-						logger.ZapErr(digestResult.Error))
+					logger.Logger.Error("get remote digest", zap.String("image", ct.Image), logger.ZapErr(digestResult.Error))
 				}
 				result[info.containerIdx] = st
 				continue
@@ -185,13 +196,39 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 			}
 			st.RemoteDigest = chosen
 
-			if len(st.CurrentDigest) == 0 || (st.RemoteDigest != "" && !compareDigests(st.CurrentDigest, st.RemoteDigest)) {
-				st.Status = "UpdateAvailable"
-			} else {
+			// 当 cacheOnly 且尚未有远端 digest 缓存时，视为当前已知（不误报 UpdateAvailable）
+			if chosen == "" && digestResult.ConfigDigest == "" {
 				st.Status = "UpToDate"
+				result[info.containerIdx] = st
+				continue
+			}
+
+			upToDate := false
+			if len(st.CurrentDigest) > 0 {
+				// 同时兼容本地存储 manifest list digest (IndexDigest) 或单平台 child manifest digest (ChildDigest)
+				upToDate = compareDigests(st.CurrentDigest, digestResult.IndexDigest) ||
+					compareDigests(st.CurrentDigest, digestResult.ChildDigest)
+			} else if digestResult.ConfigDigest != "" && info.imageID != "" {
+				// Mirror 拉取 retag+untag 后 RepoDigests 可能为空，此时比对镜像 Config Digest (ImageID) 消除无限更新循环
+				upToDate = strings.EqualFold(info.imageID, digestResult.ConfigDigest)
+				if upToDate {
+					st.CurrentDigest = []string{info.imageID}
+				}
+			}
+
+			if upToDate {
+				st.Status = "UpToDate"
+			} else {
+				st.Status = "UpdateAvailable"
 			}
 			result[info.containerIdx] = st
 		}
+	}
+
+	if !cacheOnly {
+		s.snapshotMu.Lock()
+		s.lastScanAt = now
+		s.snapshotMu.Unlock()
 	}
 
 	return result, nil
@@ -224,7 +261,6 @@ func extractDigest(value string) string {
 		}
 	}
 
-	// 支持仅有 digest 的格式，例如 "sha256:...."
 	if strings.HasPrefix(v, "sha256:") {
 		return v
 	}
