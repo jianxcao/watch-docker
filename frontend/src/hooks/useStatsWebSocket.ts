@@ -119,10 +119,11 @@ export default function useStatsWebSocket() {
 
   // 是否已连接
   const isConnected = computed(() => status.value === 'OPEN')
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   // 启动连接
   const connect = () => {
-    if (isConnected.value) {
+    if (status.value === 'OPEN' || status.value === 'CONNECTING') {
       return
     }
     console.debug('connect')
@@ -135,16 +136,25 @@ export default function useStatsWebSocket() {
 
   // 断开连接
   const disconnect = () => {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
     close()
   }
 
   // 重新连接
   const reconnect = () => {
     console.debug('reconnect')
-    if (status.value === 'OPEN') {
-      disconnect()
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
     }
-    setTimeout(() => {
+    if (status.value === 'OPEN' || status.value === 'CONNECTING') {
+      close()
+    }
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
       connect()
     }, 100)
   }

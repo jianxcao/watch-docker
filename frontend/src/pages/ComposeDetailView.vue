@@ -48,12 +48,11 @@
       <!-- Tabs 内容 -->
       <n-tabs
         v-else
+        v-model:value="activeTab"
         type="line"
         animated
         pane-class="compose-detail-pane"
         :pane-style="{ height: tabHeight }"
-        :default-value="activeTab"
-        @update:value="handleTabChange"
       >
         <!-- Tab 1: 容器列表 -->
         <n-tab-pane name="containers" tab="容器">
@@ -192,7 +191,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDialog, useMessage, useThemeVars, type DropdownOption } from 'naive-ui'
 import {
@@ -211,6 +210,7 @@ import DocumentIcon from '@/assets/svg/log.svg?component'
 import { useComposeStore } from '@/store/compose'
 import { useContainerStore } from '@/store/container'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 import { useResponsive } from '@/hooks/useResponsive'
 import { useContainer } from '@/hooks/useContainer'
 import type { ComposeProject, ContainerStatus } from '@/common/types'
@@ -231,6 +231,7 @@ const theme = useThemeVars()
 const composeStore = useComposeStore()
 const containerStore = useContainerStore()
 const settingStore = useSettingStore()
+const authStore = useAuthStore()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 const { handleStart, handleStop, handleRestart, handleUpdate, handleDelete, handleExport } = useContainer()
 const {
@@ -344,11 +345,13 @@ const handleMenuSelect = async (key: string) => {
       await handleComposeRestart(currentProject.value)
       await containerStore.fetchContainers(true, false)
       break
-    case 'delete':
-      handleComposeDelete(currentProject.value).then(() => {
+    case 'delete': {
+      const deleted = await handleComposeDelete(currentProject.value)
+      if (deleted) {
         handleBack()
-      })
+      }
       break
+    }
     case 'pull':
       showPullLogs.value = true
       break
@@ -387,9 +390,13 @@ const logsSocketUrl = computed(() => {
     return undefined
   }
   const token = settingStore.getToken()
+  if (authStore.authEnabled && !token) {
+    return undefined
+  }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1/compose/logs/${currentProject.value.name}/ws?token=${token}&composeFile=${encodeURIComponent(currentProject.value.composeFile)}&projectName=${encodeURIComponent(currentProject.value.name)}`
+  const base = `${protocol}//${host}/api/v1/compose/logs/${encodeURIComponent(currentProject.value.name)}/ws?composeFile=${encodeURIComponent(currentProject.value.composeFile)}&projectName=${encodeURIComponent(currentProject.value.name)}`
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base
 })
 
 // 获取状态文本
@@ -499,24 +506,27 @@ const handleDeployError = (errorMessage: string) => {
   deployLoading.value = false
 }
 
+let deployRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
 // 部署完成
 const handleDeployComplete = () => {
   deployLoading.value = false
+  if (deployRefreshTimer) {
+    clearTimeout(deployRefreshTimer)
+  }
   // 延迟刷新数据
-  setTimeout(() => {
+  deployRefreshTimer = setTimeout(() => {
+    deployRefreshTimer = null
     loadProjectData()
   }, 1000)
 }
 
-// Tab 切换
-const handleTabChange = (value: string) => {
-  activeTab.value = value
-
+watch(activeTab, (value) => {
   // 切换到 YAML tab 时加载内容
   if (value === 'yaml' && !yamlContent.value) {
-    loadYamlContent()
+    void loadYamlContent()
   }
-}
+})
 
 // 容器操作
 const handleStartContainer = async (container: ContainerStatus) => {
@@ -565,10 +575,17 @@ const handleBack = () => {
 // 监听项目名称变化
 watch(
   () => route.params.projectName,
-  (newName) => {
+  async (newName) => {
     if (newName && typeof newName === 'string') {
       projectName.value = newName
-      Init()
+      yamlContent.value = ''
+      originalYamlContent.value = ''
+      yamlValidationMessage.value = ''
+      isYamlValid.value = true
+      await Init()
+      if (activeTab.value === 'yaml') {
+        await loadYamlContent()
+      }
     }
   },
 )
@@ -576,6 +593,13 @@ watch(
 // 初始化
 onMounted(async () => {
   Init()
+})
+
+onUnmounted(() => {
+  if (deployRefreshTimer) {
+    clearTimeout(deployRefreshTimer)
+    deployRefreshTimer = null
+  }
 })
 </script>
 

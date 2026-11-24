@@ -84,18 +84,29 @@ func (s *Server) handleComposeCreateAndUpWebSocketCustom(c *gin.Context, appPath
 	})
 }
 
+func (s *Server) sendComposeWSError(c *gin.Context, errMsg string) {
+	conn, err := s.streamManagerBytes.UpgradeWebSocket(c)
+	if err != nil {
+		logger.Logger.Error("WebSocket 升级失败", zap.Error(err))
+		return
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.WriteMessage(websocket.TextMessage, []byte("\x1b[31m"+errMsg+"\x1b[0m\r\n"))
+	_ = conn.Close()
+}
+
 func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectName := c.Param("projectName")
 		composeFile := c.Query("composeFile")
 
 		if err := composecli.ValidateProjectName(projectName); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
 			return
 		}
-		projectPath, _, err := composecli.ValidateComposeFilePath(composeFile)
+		projectPath, _, err := s.composeClient.ResolveComposeTarget(c.Request.Context(), projectName, composeFile)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			s.sendComposeWSError(c, "无法读取项目日志: "+err.Error())
 			return
 		}
 
@@ -115,12 +126,12 @@ func (s *Server) handleComposeUpExistingWebSocket() gin.HandlerFunc {
 		composeFile := c.Query("composeFile")
 
 		if err := composecli.ValidateProjectName(projectName); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
 			return
 		}
 		projectPath, _, err := composecli.ValidateComposeFilePath(composeFile)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			s.sendComposeWSError(c, "非法项目路径: "+err.Error())
 			return
 		}
 
@@ -137,12 +148,12 @@ func (s *Server) handleComposePullWebSocket() gin.HandlerFunc {
 		composeFile := c.Query("composeFile")
 
 		if err := composecli.ValidateProjectName(projectName); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
 			return
 		}
 		projectPath, _, err := composecli.ValidateComposeFilePath(composeFile)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			s.sendComposeWSError(c, "非法项目路径: "+err.Error())
 			return
 		}
 

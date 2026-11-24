@@ -120,8 +120,18 @@ export function transformBasicForm(form: BasicFormValue): Partial<ContainerCreat
 export function transformEnvForm(form: EnvFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {}
 
-  if (form.env && form.env.length > 0) {
-    data.env = toRaw(form.env)
+  if (form.envList && form.envList.length > 0) {
+    const env = form.envList
+      .filter((item) => item.key.trim() !== '')
+      .map((item) => `${item.key.trim()}=${item.value}`)
+    if (env.length > 0) {
+      data.env = env
+    }
+  } else if (form.env && form.env.length > 0) {
+    const env = toRaw(form.env).filter(Boolean)
+    if (env.length > 0) {
+      data.env = env
+    }
   }
 
   return data
@@ -133,14 +143,39 @@ export function transformEnvForm(form: EnvFormValue): Partial<ContainerCreateReq
 export function transformPortForm(form: PortFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {}
   const exposedPorts: Record<string, Record<string, never>> = { ...(form.exposedPorts || {}) }
+  let portBindings: Record<string, { hostIP: string; hostPort: string }[]> = {}
 
-  if (form.portBindings && Object.keys(form.portBindings).length > 0) {
-    data.portBindings = toRaw(form.portBindings)
-    for (const portKey of Object.keys(form.portBindings)) {
+  if (form.portList && form.portList.length > 0) {
+    form.portList.forEach((port) => {
+      if (port.containerPort && port.protocol.length > 0) {
+        port.protocol.forEach((protocol) => {
+          const key = `${port.containerPort}/${protocol}`
+          if (!exposedPorts[key]) {
+            exposedPorts[key] = {}
+          }
+          if (port.hostPort) {
+            if (!portBindings[key]) {
+              portBindings[key] = []
+            }
+            portBindings[key].push({
+              hostIP: '',
+              hostPort: port.hostPort.toString(),
+            })
+          }
+        })
+      }
+    })
+  } else if (form.portBindings && Object.keys(form.portBindings).length > 0) {
+    portBindings = toRaw(form.portBindings)
+    for (const portKey of Object.keys(portBindings)) {
       if (!exposedPorts[portKey]) {
         exposedPorts[portKey] = {}
       }
     }
+  }
+
+  if (Object.keys(portBindings).length > 0) {
+    data.portBindings = portBindings
   }
 
   if (Object.keys(exposedPorts).length > 0) {
@@ -156,8 +191,18 @@ export function transformPortForm(form: PortFormValue): Partial<ContainerCreateR
 export function transformVolumeForm(form: VolumeFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {}
 
-  if (form.binds && form.binds.length > 0) {
-    data.binds = toRaw(form.binds)
+  if (form.volumeList && form.volumeList.length > 0) {
+    const binds = form.volumeList
+      .filter((item) => item.source.trim() && item.target.trim())
+      .map((item) => `${item.source.trim()}:${item.target.trim()}${item.readonly ? ':ro' : ''}`)
+    if (binds.length > 0) {
+      data.binds = binds
+    }
+  } else if (form.binds && form.binds.length > 0) {
+    const binds = toRaw(form.binds).filter(Boolean)
+    if (binds.length > 0) {
+      data.binds = binds
+    }
   }
 
   return data
@@ -182,19 +227,28 @@ export function transformNetworkForm(
     // 自定义网络配置模式
     data.networkMode = 'bridge'
 
-    if (form.customNetworks && form.customNetworks.length > 0) {
+    const validNetworks = (form.customNetworks || [])
+      .map((network) => ({ ...network, name: network.name?.trim() || '' }))
+      .filter((network) => network.name !== '')
+
+    const specialModeNetwork = validNetworks.find(
+      (network) => network.name === 'host' || network.name === 'none',
+    )
+
+    if (specialModeNetwork) {
+      data.networkMode = specialModeNetwork.name
+      data.publishAllPorts = false
+    } else if (validNetworks.length > 0) {
       const networksToCreate: any[] = []
       const endpointsConfig: Record<string, any> = {}
 
-      form.customNetworks.forEach((network) => {
-        if (!network.name) {
-          return
-        }
+      validNetworks.forEach((network) => {
+        const networkName = network.name
 
         // 如果网络不存在，构建网络创建配置
         if (!network.exists) {
           const networkToCreate: any = {
-            name: network.name,
+            name: networkName,
             driver: network.driver || 'bridge',
             enableIPv6: network.enableIPv6 || false,
             internal: network.internal || false,
@@ -246,8 +300,9 @@ export function transformNetworkForm(
         }
 
         // 配置容器连接到网络的参数
-        const endpointSettings: any = {
-          aliases: network.aliases || [],
+        const endpointSettings: any = {}
+        if (network.aliases && network.aliases.length > 0 && networkName !== 'bridge') {
+          endpointSettings.aliases = network.aliases
         }
 
         // 配置容器的静态 IP
@@ -266,7 +321,7 @@ export function transformNetworkForm(
           endpointSettings.macAddress = network.macAddress
         }
 
-        endpointsConfig[network.name] = endpointSettings
+        endpointsConfig[networkName] = endpointSettings
       })
 
       // 如果有需要创建的网络，添加到请求中
@@ -397,8 +452,19 @@ export function transformLabelForm(form: LabelFormValue): Partial<ContainerCreat
   const data: Partial<ContainerCreateRequest> = {}
 
   // 标签
-  if (form.labels && Object.keys(form.labels).length > 0) {
-    data.labels = form.labels
+  if (form.labelList && form.labelList.length > 0) {
+    const labels: Record<string, string> = {}
+    form.labelList.forEach((item) => {
+      const key = item.key.trim()
+      if (key) {
+        labels[key] = item.value
+      }
+    })
+    if (Object.keys(labels).length > 0) {
+      data.labels = labels
+    }
+  } else if (form.labels && Object.keys(form.labels).length > 0) {
+    data.labels = toRaw(form.labels)
   }
 
   return data

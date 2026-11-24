@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { useWebSocket } from '@vueuse/core'
 import { useMessage } from 'naive-ui'
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import Term, { type TermConfig } from './Term/TermView.vue'
 
 interface Props {
@@ -20,6 +20,15 @@ const props = withDefaults(defineProps<Props>(), {
 })
 const message = useMessage()
 const termRef = ref<InstanceType<typeof Term>>()
+const termReady = ref(false)
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+const clearReconnectTimer = () => {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+}
 
 // 终端配置（日志查看模式）
 const termConfig: TermConfig = {
@@ -33,21 +42,24 @@ const termConfig: TermConfig = {
 const socketUrlRef = computed(() => props.socketUrl)
 
 // 使用 VueUse 的 useWebSocket（传入响应式 url 以便切换目标时重连）
-const { status, close, open } = useWebSocket(socketUrlRef, {
+const { status, close: rawClose, open } = useWebSocket(socketUrlRef, {
   autoReconnect: false,
   immediate: false,
   autoConnect: false,
 
-  // 直接处理消息事件，支持二进制数据
+  // 直接处理消息事件，支持 ArrayBuffer、Blob 与文本帧
   onMessage: (_ws, event) => {
-    if (termRef.value && event.data) {
-      // 处理二进制消息
-      if (event.data instanceof ArrayBuffer) {
-        termRef.value.write(new Uint8Array(event.data))
-      } else if (typeof event.data === 'string') {
-        // 兼容文本消息
-        termRef.value.write(event.data)
-      }
+    if (!termRef.value || !event.data) {
+      return
+    }
+    if (event.data instanceof ArrayBuffer) {
+      termRef.value.write(new Uint8Array(event.data))
+    } else if (event.data instanceof Blob) {
+      event.data.arrayBuffer().then((buffer) => {
+        termRef.value?.write(new Uint8Array(buffer))
+      })
+    } else if (typeof event.data === 'string') {
+      termRef.value.write(event.data)
     }
   },
   onConnected: (_ws) => {
@@ -66,27 +78,59 @@ const { status, close, open } = useWebSocket(socketUrlRef, {
   },
 })
 
+const close = () => {
+  clearReconnectTimer()
+  rawClose()
+}
+
 // 连接状态
 const isConnecting = computed(() => status.value === 'CONNECTING')
 const isConnected = computed(() => status.value === 'OPEN')
 
 // 终端就绪回调
 const handleTermReady = () => {
-  // 终端初始化完成，可以开始连接
-  termRef.value?.writeln('\r\n\x1b[33m正在连接日志流...\x1b[0m\r\n')
-  open()
+  termReady.value = true
+  if (socketUrlRef.value) {
+    termRef.value?.writeln('\r\n\x1b[33m正在连接日志流...\x1b[0m\r\n')
+    open()
+  }
 }
+
+watch(socketUrlRef, (newUrl, oldUrl) => {
+  if (!termReady.value || newUrl === oldUrl) {
+    return
+  }
+  clearReconnectTimer()
+  rawClose()
+  if (newUrl) {
+    termRef.value?.clear()
+    termRef.value?.writeln('\r\n\x1b[33m正在重新连接日志流...\x1b[0m\r\n')
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      open()
+    }, 100)
+  }
+})
 
 // 重新连接
 const handleReconnect = () => {
-  close()
+  clearReconnectTimer()
+  rawClose()
   termRef.value?.clear()
+  if (!socketUrlRef.value) {
+    return
+  }
   termRef.value?.writeln('\r\n\x1b[33m正在重新连接日志流...\x1b[0m\r\n')
   // 等待关闭完成后再打开
-  setTimeout(() => {
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
     open()
   }, 100)
 }
+
+onBeforeUnmount(() => {
+  close()
+})
 
 // 清空日志
 const handleClearLogs = () => {

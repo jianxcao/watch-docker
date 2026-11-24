@@ -153,6 +153,11 @@ func (c *Client) setCache(key string, entry CacheEntry, ttl time.Duration) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if prev, ok := c.cache[key]; ok && now.Before(prev.Expiry) && entry.ErrorType == ErrorTypeNone && entry.ConfigDigest == "" && prev.ConfigDigest != "" {
+		if prev.IndexDigest == entry.IndexDigest && prev.ChildDigest == entry.ChildDigest {
+			entry.ConfigDigest = prev.ConfigDigest
+		}
+	}
 	c.cache[key] = entry
 	if len(c.cache) > 512 {
 		for k, v := range c.cache {
@@ -205,7 +210,9 @@ func canonicalHost(host string) string {
 	h := strings.ToLower(strings.TrimSpace(host))
 	h = strings.TrimPrefix(h, "https://")
 	h = strings.TrimPrefix(h, "http://")
-	h = strings.TrimSuffix(h, "/")
+	if idx := strings.IndexByte(h, '/'); idx >= 0 {
+		h = h[:idx]
+	}
 	switch h {
 	case "docker.io", "dockerhub", "index.docker.io", "registry-1.docker.io":
 		return "index.docker.io"
@@ -236,10 +243,10 @@ func normalizeImageRef(ref string) (normalized, host, repo, tag string, err erro
 	host = canonicalHost(reference.Domain(named))
 	repo = reference.Path(named)
 
-	if t, ok := named.(reference.NamedTagged); ok {
-		tag = t.Tag()
-	} else if d, ok := named.(reference.Digested); ok {
+	if d, ok := named.(reference.Digested); ok {
 		tag = d.Digest().String()
+	} else if t, ok := named.(reference.NamedTagged); ok {
+		tag = t.Tag()
 	} else {
 		tag = "latest"
 	}
@@ -252,7 +259,7 @@ func normalizeImageRef(ref string) (normalized, host, repo, tag string, err erro
 	return normalized, host, repo, tag, nil
 }
 
-// UpdateManifestCredentials 从全局配置全量替换认证凭据，支持任意仓库并清除已删除凭据
+// UpdateManifestCredentials 从全局配置全量替换认证凭据，支持任意仓库并清除已删除凭据与历史负面缓存
 func (c *Client) UpdateManifestCredentials() {
 	cfg := config.Get()
 	newCreds := make(map[string]authn.AuthConfig)
@@ -275,6 +282,14 @@ func (c *Client) UpdateManifestCredentials() {
 	c.credsMu.Lock()
 	c.credentials = newCreds
 	c.credsMu.Unlock()
+
+	c.mu.Lock()
+	clear(c.cache)
+	c.mu.Unlock()
+
+	c.rateLimitMu.Lock()
+	clear(c.rateLimits)
+	c.rateLimitMu.Unlock()
 }
 
 func (c *Client) getCredentialForHost(host string) (authn.AuthConfig, bool) {
@@ -341,10 +356,11 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 
 	cfg := config.Get()
 	if concurrency <= 0 {
-		concurrency = 3
-	}
-	if cfg != nil && cfg.Scan.Concurrency > 0 {
-		concurrency = cfg.Scan.Concurrency
+		if cfg != nil && cfg.Scan.Concurrency > 0 {
+			concurrency = cfg.Scan.Concurrency
+		} else {
+			concurrency = 3
+		}
 	}
 	if concurrency > 64 {
 		concurrency = 64
@@ -356,6 +372,8 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 	}
 	const rateLimitCooldown = 5 * time.Minute
 	const notFoundCacheTTL = 30 * time.Minute
+
+	mirrors := dockercli.EnabledMirrorEndpoints()
 
 	type pendingItem struct {
 		query      DigestQuery
@@ -409,7 +427,8 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 			continue
 		}
 
-		if c.isRegistryRateLimited(host) {
+		canMirror := dockercli.IsDockerHubImage(q.ImageRef) && len(mirrors) > 0
+		if !canMirror && c.isRegistryRateLimited(host) {
 			results[qKey] = DigestResult{
 				Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却", host),
 				ErrType: ErrorTypeRateLimited,
@@ -429,7 +448,6 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 		return results
 	}
 
-	mirrors := dockercli.EnabledMirrorHosts()
 	var (
 		resMu sync.Mutex
 		wg    sync.WaitGroup
@@ -452,15 +470,11 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 			defer func() { <-sem }()
 
 			sfKey := fmt.Sprintf("%s|cfg=%v", it.cacheKey, it.query.NeedConfigDigest)
-			val, err, _ := c.sf.Do(sfKey, func() (any, error) {
-				if c.isRegistryRateLimited(it.host) {
-					return DigestResult{
-						Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却", it.host),
-						ErrType: ErrorTypeRateLimited,
-					}, nil
-				}
+			ch := c.sf.DoChan(sfKey, func() (any, error) {
+				flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+				defer cancel()
 
-				dr := c.fetchDigest(ctx, it.query, it.normalized, it.host, mirrors)
+				dr := c.fetchDigest(flightCtx, it.query, it.normalized, it.host, mirrors)
 				if dr.Error != nil {
 					switch dr.ErrType {
 					case ErrorTypeRateLimited:
@@ -481,10 +495,15 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 			})
 
 			var finalRes DigestResult
-			if err != nil {
-				finalRes = DigestResult{Error: err, ErrType: detectErrorType(err)}
-			} else {
-				finalRes = val.(DigestResult)
+			select {
+			case <-ctx.Done():
+				finalRes = DigestResult{Error: ctx.Err(), ErrType: ErrorTypeGeneral}
+			case res := <-ch:
+				if res.Err != nil {
+					finalRes = DigestResult{Error: res.Err, ErrType: detectErrorType(res.Err)}
+				} else {
+					finalRes = res.Val.(DigestResult)
+				}
 			}
 
 			resMu.Lock()
@@ -497,10 +516,10 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 	return results
 }
 
-func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, host string, mirrors []string) DigestResult {
+func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, host string, mirrors []dockercli.MirrorEndpoint) DigestResult {
 	targetOS, targetArch, targetVariant := normalizePlatform(q.OS, q.Arch, q.Variant)
 
-	// 1. 若配置了 Docker Hub mirror 且镜像属于 docker.io，先尝试通过 mirror 查询
+	// 1. 若配置了 Docker Hub mirror 且镜像属于 docker.io，先尝试通过 mirror 查询（即使官方处于限流冷却也继续走 mirror）
 	if dockercli.IsDockerHubImage(q.ImageRef) && len(mirrors) > 0 {
 		if indexDig, childDig, configDig, ok := c.queryDigestViaMirrors(ctx, q.ImageRef, mirrors, targetOS, targetArch, targetVariant, q.NeedConfigDigest); ok {
 			return DigestResult{
@@ -508,6 +527,13 @@ func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, 
 				ChildDigest:  childDig,
 				ConfigDigest: configDig,
 			}
+		}
+	}
+
+	if c.isRegistryRateLimited(host) {
+		return DigestResult{
+			Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却", host),
+			ErrType: ErrorTypeRateLimited,
 		}
 	}
 
@@ -617,7 +643,7 @@ func selectDescriptorFromIndex(im *v1.IndexManifest, targetOS, targetArch, targe
 		if pos != targetOS || parch != targetArch {
 			continue
 		}
-		if targetVariant != "" && pvar == targetVariant {
+		if pvar == targetVariant {
 			return m
 		}
 		if archMatch == nil {

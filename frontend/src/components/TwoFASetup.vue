@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, nextTick, useTemplateRef } from 'vue'
 import { useMessage } from 'naive-ui'
 import QRCode from 'qrcode'
 import { startRegistration } from '@simplewebauthn/browser'
@@ -118,14 +118,18 @@ const handleOTPInit = async () => {
     if (res.code === 0) {
       otpSecret.value = res.data.secret
       const qrCodeURL = res.data.qrCodeURL
-      nextTick(() => {
-        if (qrCanvas.value) {
-          QRCode.toCanvas(qrCanvas.value, qrCodeURL, {
+      loading.value = false
+      await nextTick()
+      if (qrCanvas.value) {
+        try {
+          await QRCode.toCanvas(qrCanvas.value, qrCodeURL, {
             width: 256,
             margin: 2,
           })
+        } catch (qrErr: any) {
+          message.error(qrErr?.message || '生成二维码失败')
         }
-      })
+      }
     } else {
       message.error(res.msg || '初始化失败')
     }

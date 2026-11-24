@@ -40,6 +40,18 @@ services:
     expect(validateComposeYaml('name: demo\n').isValid).toBe(false)
     expect(validateComposeYaml('services:\n  web:\n    image: "nginx\n').isValid).toBe(false)
   })
+
+  it('ignores unmatched quotes inside YAML block scalars and treats only whitespace-preceded # as comments', () => {
+    const yaml = `services:
+  web:
+    image: nginx:latest
+    command: |
+      echo "hello" && sh -c 'don''t fail unmatched '
+    labels:
+      com.example.url: https://example.com#section
+`
+    expect(validateComposeYaml(yaml)).toEqual({ isValid: true, errorMessage: '' })
+  })
 })
 
 describe('imageRef (:port-aware matching)', () => {
@@ -56,6 +68,8 @@ describe('imageRef (:port-aware matching)', () => {
     })
     expect(normalizeImageRef('nginx')).toBe('nginx:latest')
     expect(normalizeImageRef('docker.io/library/nginx:latest')).toBe('nginx:latest')
+    expect(normalizeImageRef('registry-1.docker.io/library/nginx')).toBe('nginx:latest')
+    expect(normalizeImageRef('nginx:1.25@sha256:abcdef')).toBe('nginx@sha256:abcdef')
     expect(normalizeImageRef('localhost:5000/my-app')).toBe('localhost:5000/my-app:latest')
   })
 
@@ -76,6 +90,34 @@ describe('imageRef (:port-aware matching)', () => {
     }
     expect(doesContainerUseImage(container, img125)).toBe(true)
     expect(doesContainerUseImage(container, img127)).toBe(false)
+
+    // When both imageIDs exist and differ, never fall back to repoTags
+    expect(
+      doesContainerUseImage(
+        { image: 'nginx:1.25', imageID: 'sha256:111111111111222222222222' },
+        { id: 'sha256:999999999999888888888888', repoTags: ['nginx:1.25'], repoDigests: [] },
+      ),
+    ).toBe(false)
+
+    // 12-char short ID prefix match
+    expect(
+      doesContainerUseImage(
+        { image: 'nginx:1.25', imageID: 'abcdef123456' },
+        {
+          id: 'sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+          repoTags: [],
+          repoDigests: [],
+        },
+      ),
+    ).toBe(true)
+
+    // Digest ref must only match repoDigests and never fall back to validTags
+    expect(
+      doesContainerUseImage(
+        { image: 'nginx:latest@sha256:deadbeef' },
+        { id: 'sha256:other', repoTags: ['nginx:latest'], repoDigests: ['nginx@sha256:cafebabe'] },
+      ),
+    ).toBe(false)
 
     const registryPortImg = {
       id: 'sha256:ccc',

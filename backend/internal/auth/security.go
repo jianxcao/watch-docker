@@ -1,12 +1,15 @@
 package auth
 
 import (
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jianxcao/watch-docker/backend/internal/conf"
 )
 
 // SecurityHeadersMiddleware 添加安全响应头
@@ -42,8 +45,9 @@ type LoginRateLimiter struct {
 }
 
 var (
-	loginLimiter = newRateLimiter(5, 5*time.Minute, 15*time.Minute)
-	otpLimiter   = newRateLimiter(8, 5*time.Minute, 15*time.Minute)
+	loginLimiter   = newRateLimiter(5, 5*time.Minute, 15*time.Minute)
+	loginIPLimiter = newRateLimiter(60, 5*time.Minute, 15*time.Minute)
+	otpLimiter     = newRateLimiter(8, 5*time.Minute, 15*time.Minute)
 )
 
 func newRateLimiter(maxAttempts int, window, lockout time.Duration) *LoginRateLimiter {
@@ -59,6 +63,10 @@ func newRateLimiter(maxAttempts int, window, lockout time.Duration) *LoginRateLi
 
 func GetLoginRateLimiter() *LoginRateLimiter {
 	return loginLimiter
+}
+
+func GetLoginIPRateLimiter() *LoginRateLimiter {
+	return loginIPLimiter
 }
 
 func GetOTPRateLimiter() *LoginRateLimiter {
@@ -141,47 +149,74 @@ func (l *LoginRateLimiter) cleanup() {
 
 // CheckWebSocketOrigin 验证 WebSocket 请求的 Origin 头，防御 CSWSH 攻击
 func CheckWebSocketOrigin(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
 		return true
 	}
 
-	host := r.Host
-	if host == "" {
-		host = r.Header.Get("Host")
+	u, err := url.Parse(origin)
+	if err != nil || u.User != nil {
+		return false
 	}
-	if host == "" {
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
 		return false
 	}
 
-	originHost := extractHostname(extractHost(origin))
-	requestHost := extractHostname(host)
-	if originHost == "" || requestHost == "" {
+	originHost := strings.TrimSpace(u.Hostname())
+	if originHost == "" {
 		return false
 	}
 
-	return strings.EqualFold(originHost, requestHost)
-}
-
-func extractHost(origin string) string {
-	origin = strings.TrimSpace(origin)
-	if idx := strings.Index(origin, "://"); idx >= 0 {
-		origin = origin[idx+3:]
+	reqHost := strings.TrimSpace(r.Host)
+	if reqHost == "" {
+		reqHost = strings.TrimSpace(r.Header.Get("Host"))
 	}
-	if idx := strings.Index(origin, "/"); idx >= 0 {
-		origin = origin[:idx]
+	if reqHost == "" {
+		return false
 	}
-	return origin
-}
 
-func extractHostname(hostPort string) string {
-	if strings.HasPrefix(hostPort, "[") {
-		if idx := strings.Index(hostPort, "]"); idx >= 0 {
-			return hostPort[1:idx]
+	reqHostName, reqPort := splitRequestHostPort(reqHost)
+	if reqHostName == "" {
+		return false
+	}
+
+	if strings.EqualFold(originHost, reqHostName) {
+		if !IsAuthEnabled() {
+			return normalizeSchemePort(u.Port(), scheme) == normalizeSchemePort(reqPort, scheme)
+		}
+		return true
+	}
+
+	if allowedDomains := strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS); allowedDomains != "" {
+		for _, allowed := range strings.Split(allowedDomains, ",") {
+			candidate := strings.TrimSpace(allowed)
+			if candidate == "" {
+				continue
+			}
+			if strings.EqualFold(candidate, originHost) || strings.EqualFold(candidate, u.Host) {
+				return true
+			}
 		}
 	}
-	if idx := strings.LastIndex(hostPort, ":"); idx >= 0 {
-		return hostPort[:idx]
+
+	return false
+}
+
+func splitRequestHostPort(hostPort string) (host, port string) {
+	hostPort = strings.TrimSpace(hostPort)
+	if h, p, err := net.SplitHostPort(hostPort); err == nil {
+		return h, p
 	}
-	return hostPort
+	if strings.HasPrefix(hostPort, "[") && strings.HasSuffix(hostPort, "]") {
+		return hostPort[1 : len(hostPort)-1], ""
+	}
+	return hostPort, ""
+}
+
+func normalizeSchemePort(port, scheme string) string {
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		return ""
+	}
+	return port
 }

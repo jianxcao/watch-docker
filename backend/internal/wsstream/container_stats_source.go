@@ -96,8 +96,8 @@ func (s *ContainerStatsSource) sendStats(ctx context.Context, messageChan chan s
 	// 获取配置
 	cfg := config.Get()
 
-	// 使用scanner获取完整的容器状态信息
-	containerStatuses, err := s.scanner.ScanOnce(ctx, cfg.Docker.IncludeStopped, cfg.Scan.Concurrency, true, false)
+	// 使用scanner获取完整的容器状态信息 (始终包含已停止容器，避免前端列表闪烁/丢失已停止容器)
+	containerStatuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true, false)
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		logger.Logger.Error("获取容器状态失败", zap.Error(err))
 		return err

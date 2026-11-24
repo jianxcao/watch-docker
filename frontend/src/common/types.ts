@@ -250,8 +250,16 @@ export interface Config {
     auth: RegistryAuth[]
     mirrors: RegistryMirror[]
   }
+  proxy: {
+    url: string
+  }
   logging: {
     level: string
+  }
+  compose: {
+    enabled: boolean
+    scanInterval: number
+    logLines: number
   }
 }
 

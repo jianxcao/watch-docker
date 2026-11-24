@@ -54,31 +54,62 @@ export function normalizeImageRef(raw: string): string {
     repo = repo.slice('docker.io/'.length)
   } else if (repo.startsWith('index.docker.io/')) {
     repo = repo.slice('index.docker.io/'.length)
+  } else if (repo.startsWith('registry-1.docker.io/')) {
+    repo = repo.slice('registry-1.docker.io/'.length)
   }
   if (repo.startsWith('library/') && repo.slice('library/'.length).indexOf('/') === -1) {
     repo = repo.slice('library/'.length)
   }
 
-  if (tag) {
-    return `${repo}:${tag}`
-  }
   if (digest) {
     return `${repo}@${digest}`
+  }
+  if (tag) {
+    return `${repo}:${tag}`
   }
   return `${repo}:latest`
 }
 
+function stripSha256Prefix(id: string): string {
+  const trimmed = id.trim().toLowerCase()
+  return trimmed.startsWith('sha256:') ? trimmed.slice('sha256:'.length) : trimmed
+}
+
+function isMatchingImageId(a: string, b: string): boolean {
+  const left = a.trim().toLowerCase()
+  const right = b.trim().toLowerCase()
+  if (!left || !right) {
+    return false
+  }
+  if (left === right) {
+    return true
+  }
+  const leftHex = stripSha256Prefix(left)
+  const rightHex = stripSha256Prefix(right)
+  if (leftHex === rightHex) {
+    return true
+  }
+  const hexShortRe = /^[0-9a-f]{12,64}$/
+  if (hexShortRe.test(leftHex) && hexShortRe.test(rightHex)) {
+    return leftHex.length <= rightHex.length
+      ? rightHex.startsWith(leftHex)
+      : leftHex.startsWith(rightHex)
+  }
+  return false
+}
+
 /**
  * 精确判断容器是否使用了指定镜像：
- * 1) 优先精确比对 imageID；
- * 2) 其次比对规范化后的 repo:tag 或 repo@digest（不会将不同版本标签误判为使用中）。
+ * 1) 当双方都有 imageID 时严格按 imageID 比对（支持 12-64 位短 ID 前缀，不匹配时不回退标签）；
+ * 2) 若容器引用本身是 digest，则仅比对 repoDigests，不回退到标签；
+ * 3) 其次比对规范化后的 repo:tag。
  */
 export function doesContainerUseImage(
   container: Pick<ContainerStatus, 'image' | 'imageID'>,
   image: Pick<ImageInfo, 'id' | 'repoTags' | 'repoDigests'>,
 ): boolean {
-  if (container.imageID && image.id && container.imageID === image.id) {
-    return true
+  if (container.imageID && image.id) {
+    return isMatchingImageId(container.imageID, image.id)
   }
 
   const rawContainerImage = (container.image || '').trim()
@@ -86,13 +117,13 @@ export function doesContainerUseImage(
     return false
   }
 
-  if (image.id && (rawContainerImage === image.id || image.id === `sha256:${rawContainerImage}`)) {
+  if (image.id && isMatchingImageId(rawContainerImage, image.id)) {
     return true
   }
 
   const { digest: containerDigest } = parseImageRef(rawContainerImage)
-  if (containerDigest && image.repoDigests?.some((rd) => rd.endsWith(`@${containerDigest}`))) {
-    return true
+  if (containerDigest) {
+    return Boolean(image.repoDigests?.some((rd) => rd.endsWith(`@${containerDigest}`)))
   }
 
   const validTags = (image.repoTags || []).filter((tag) => tag && tag !== '<none>:<none>')

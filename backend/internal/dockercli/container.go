@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
@@ -203,11 +204,14 @@ func comparableRepoDigests(img image.InspectResponse) []string {
 }
 
 func isLocalImage(img image.InspectResponse, parentID string, comparableDigests []string) bool {
-	if len(comparableDigests) > 0 {
+	if len(img.RepoDigests) > 0 {
 		return false
 	}
 	if img.Identity != nil && len(img.Identity.Build) > 0 && len(img.Identity.Pull) == 0 {
 		return true
+	}
+	if len(comparableDigests) > 0 {
+		return false
 	}
 	if strings.TrimSpace(parentID) != "" {
 		return true
@@ -342,8 +346,14 @@ func (c *Client) WaitContainerStopped(ctx context.Context, id string, maxWaitSec
 		}
 		res, err := c.docker.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 		if err != nil {
-			// 容器不存在或无法访问，认为已停止
-			return nil
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errdefs.IsNotFound(err) {
+				// 容器已不存在（例如 --rm 自动移除），认为已停止
+				return nil
+			}
+			return err
 		}
 
 		if res.Container.State != nil && !res.Container.State.Running {

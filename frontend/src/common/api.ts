@@ -35,9 +35,6 @@ const request = axios
 export const healthApi = {
   // 健康检查
   health: () => axios.get<any>(API_ENDPOINTS.HEALTH),
-
-  // 就绪检查
-  ready: () => axios.get<any>(API_ENDPOINTS.READY),
 }
 
 // 身份验证相关API
@@ -49,6 +46,7 @@ export const authApi = {
       username?: string
       needTwoFA?: boolean
       isSetup?: boolean
+      isAccountSetup?: boolean
       method?: string
       tempToken?: string
     }>(API_ENDPOINTS.LOGIN, {
@@ -76,6 +74,7 @@ export const containerApi = {
   getContainers: (isUserCache = true, isHaveUpdate = true) =>
     axios.get<{ containers: ContainerStatus[] }>(API_ENDPOINTS.CONTAINERS, {
       params: { isUserCache, isHaveUpdate },
+      timeout: isHaveUpdate ? 10 * 60 * 1000 : 30 * 1000,
     }),
 
   // 获取容器详情
@@ -93,13 +92,13 @@ export const containerApi = {
     axios.post<{ ok: boolean; newContainerId?: string }>(
       API_ENDPOINTS.CONTAINER_UPDATE(id),
       { image },
-      { timeout: 20 * 60 * 1000 },
+      { timeout: 10 * 60 * 1000 },
     ),
 
   // 批量更新容器
   batchUpdate: () =>
     axios.post<BatchUpdateResult>(API_ENDPOINTS.BATCH_UPDATE, undefined, {
-      timeout: 20 * 60 * 1000,
+      timeout: 10 * 60 * 1000,
     }),
 
   // 启动容器
@@ -126,7 +125,7 @@ export const containerApi = {
   // 系统清理
   pruneSystem: () =>
     axios.post<{ ok: boolean; message: string }>(API_ENDPOINTS.PRUNE_SYSTEM, undefined, {
-      timeout: 5 * 60 * 1000,
+      timeout: 10 * 60 * 1000,
     }),
 
   // 导入容器
@@ -178,26 +177,26 @@ export const composeApi = {
   getProjects: () => axios.get<{ projects: ComposeProject[] }>('/compose'),
 
   // 启动项目
-  startProject: (project: ComposeProject) => axios.post<{ ok: boolean }>(`/compose/start`, project),
+  startProject: (project: ComposeProject) =>
+    axios.post<{ ok: boolean }>(`/compose/start`, project, { timeout: 3 * 60 * 1000 }),
 
   // 停止项目
-  stopProject: (project: ComposeProject) => axios.post<{ ok: boolean }>(`/compose/stop`, project),
+  stopProject: (project: ComposeProject) =>
+    axios.post<{ ok: boolean }>(`/compose/stop`, project, { timeout: 3 * 60 * 1000 }),
 
   createProject: (project: ComposeProject) =>
-    axios.post<{ ok: boolean }>(`/compose/create`, project),
+    axios.post<{ ok: boolean }>(`/compose/create`, project, { timeout: 5 * 60 * 1000 }),
+
   // 重新创建项目
   restartProject: (project: ComposeProject) =>
-    axios.post<{ ok: boolean }>(`/compose/restart`, project),
+    axios.post<{ ok: boolean }>(`/compose/restart`, project, { timeout: 5 * 60 * 1000 }),
 
   // 删除项目
   deleteProject: (project: ComposeProject) =>
     axios.delete<{ ok: boolean }>(`/compose/delete`, {
       data: project,
+      timeout: 3 * 60 * 1000,
     }),
-
-  // 获取项目日志
-  getProjectLogs: (name: string, lines = 100) =>
-    axios.get<{ logs: string }>(`/compose/${encodeURIComponent(name)}/logs`, { params: { lines } }),
 
   // 创建新项目（保存 YAML 文件）
   saveNewProject: (name: string, yamlContent: string) =>

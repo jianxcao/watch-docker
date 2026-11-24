@@ -74,6 +74,7 @@ func (s *Server) handleBatchUpdateWebSocket() gin.HandlerFunc {
 				logger.Logger.Error("marshal batch update message failed", zap.Error(err))
 				return
 			}
+			_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				logger.Logger.Error("write batch update message failed", zap.Error(err))
 			}

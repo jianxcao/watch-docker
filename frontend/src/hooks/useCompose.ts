@@ -60,13 +60,10 @@ export const useCompose = () => {
         content: confirmMessage,
         positiveText: '确认',
         negativeText: '取消',
-        onPositiveClick: async () => {
-          try {
-            await composeStore.executeProjectAction(project, action)
-          } finally {
-            settled = true
-            resolve()
-          }
+        onPositiveClick: () => {
+          settled = true
+          void composeStore.executeProjectAction(project, action).catch(() => {})
+          resolve()
         },
         onNegativeClick: () => {
           settled = true
@@ -114,7 +111,7 @@ export const useCompose = () => {
   const handleDelete = async (project: ComposeProject): Promise<boolean> => {
     try {
       const confirmMessage =
-        project.status === 'draft' || project.status === 'created_stack'
+        project.status === 'draft'
           ? `确定要删除项目 "${project.name}" 吗？这将删除该项目的配置文件（草稿）。此操作不可撤销！`
           : `确定要删除项目 "${project.name}" 吗？这将停止并删除所有容器、网络和卷。此操作不可撤销！`
 
@@ -140,6 +137,7 @@ export const useCompose = () => {
     switch (status) {
       case 'running':
         return '运行中'
+      case 'exited':
       case 'stopped':
         return '已停止'
       case 'partial':

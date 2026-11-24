@@ -61,7 +61,7 @@
         </n-tab-pane>
 
         <!-- Tab 4: Shell -->
-        <n-tab-pane name="shell" tab="Shell">
+        <n-tab-pane v-if="settingStore.systemInfo?.isOpenDockerShell" name="shell" tab="Shell">
           <template #tab>
             <div class="flex items-center gap-2">
               <n-icon size="18">
@@ -195,7 +195,7 @@ import { useAuthStore } from '@/store/auth'
 import { useContainer } from '@/hooks/useContainer'
 import { renderIcon } from '@/common/utils'
 import statsEmitter from '@/evt/containerStats'
-import type { ContainerStats } from '@/common/types'
+import type { ContainerStats, ContainerStatus } from '@/common/types'
 
 // 导入 Tab 组件
 import OverviewTab from './OverviewTab.vue'
@@ -340,11 +340,19 @@ const handleMenuSelect = async (key: string) => {
     return
   }
 
-  // 从容器列表中找到对应的容器对象
-  const container = containerStore.findContainerById(containerId.value)
-  if (!container) {
-    message.error('找不到容器信息')
-    return
+  // 从容器列表中找到对应的容器对象（已停止容器可能尚未同步进 store，使用详情兜底）
+  const container: ContainerStatus = containerStore.findContainerById(containerId.value) || {
+    id: containerDetail.value.Id,
+    name: containerName.value,
+    image: containerDetail.value.Config?.Image || '',
+    running: Boolean(containerDetail.value.State?.Running),
+    status: '',
+    skipped: false,
+    skipReason: '',
+    labels: containerDetail.value.Config?.Labels || {},
+    lastCheckedAt: '',
+    startedAt: containerDetail.value.State?.StartedAt || '',
+    ports: [],
   }
 
   switch (key) {
@@ -385,6 +393,17 @@ watch(containerId, (newId, oldId) => {
     void loadContainerDetail()
   }
 })
+
+// 若系统关闭容器终端功能且当前位于 Shell Tab，则切回概览
+watch(
+  () => settingStore.systemInfo?.isOpenDockerShell,
+  (enabled) => {
+    if (!enabled && activeTab.value === 'shell') {
+      activeTab.value = 'overview'
+    }
+  },
+  { immediate: true },
+)
 
 // 返回
 const handleBack = () => {

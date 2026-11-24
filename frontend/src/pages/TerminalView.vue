@@ -52,7 +52,7 @@
             size="tiny"
             :options="shellOptions"
             :loading="shellOptionsLoading"
-            :disabled="connecting || shellOptionsLoading"
+            :disabled="shellOptionsLoading"
             @update:value="handleShellChange"
           />
           <n-button circle size="tiny" @click="reconnect" :loading="connecting">
@@ -76,7 +76,7 @@
 </template>
 
 <script setup lang="ts">
-import { shallowRef, computed, onMounted, onUnmounted } from 'vue'
+import { shallowRef, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useWebSocket } from '@vueuse/core'
 import { useMessage, useThemeVars } from 'naive-ui'
 import { RefreshOutline, CloseCircleOutline, TerminalOutline } from '@vicons/ionicons5'
@@ -224,13 +224,15 @@ const {
       terminal.value.write(event.data)
     }
   },
-  onConnected: (_ws) => {
+  onConnected: async (_ws) => {
     connecting.value = false
     connectionError.value = ''
     // 设置二进制类型为 arraybuffer
     if (_ws) {
       _ws.binaryType = 'arraybuffer'
     }
+    await nextTick()
+    termRef.value?.fit()
     if (terminal.value) {
       handleTermResize({
         cols: terminal.value.cols,
@@ -283,8 +285,8 @@ const handleTermResize = (size: { cols: number; rows: number }) => {
 }
 
 // 重新连接
-const reconnect = async () => {
-  if (connecting.value) {
+const reconnect = async (force = false) => {
+  if (connecting.value && !force) {
     return
   }
   connecting.value = true
@@ -316,7 +318,7 @@ const handleShellChange = (shell: string) => {
     rememberShell(terminalTarget.value, shell, shellOptions.value, () => window.localStorage)
   }
   if (isTerminalReady.value) {
-    void reconnect()
+    void reconnect(true)
   }
 }
 

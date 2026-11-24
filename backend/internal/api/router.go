@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
@@ -41,12 +42,28 @@ type Server struct {
 	streamManagerBytes  *wsstream.StreamManager[[]byte] // 用于 compose logs (二进制流)
 }
 
+// NewRouter 创建 HTTP 路由引擎（保持兼容旧签名）
 func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler, upd *updater.Updater) *gin.Engine {
+	r, _ := NewRouterWithLifecycle(logger, docker, reg, sc, sch, upd)
+	return r
+}
+
+// NewRouterWithLifecycle 创建 HTTP 路由引擎与优雅退出时关闭长连接流的清理函数
+func NewRouterWithLifecycle(log *zap.Logger, docker *dockercli.Client, reg *registry.Client, sc *scanner.Scanner, sch *scheduler.Scheduler, upd *updater.Updater) (*gin.Engine, func()) {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(auth.SecurityHeadersMiddleware())
-	if err := r.SetTrustedProxies(nil); err != nil {
-		logger.Warn("set trusted proxies failed", zap.Error(err))
+
+	var trustedProxies []string
+	if raw := strings.TrimSpace(conf.EnvCfg.TRUSTED_PROXIES); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			if p := strings.TrimSpace(entry); p != "" {
+				trustedProxies = append(trustedProxies, p)
+			}
+		}
+	}
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		log.Warn("set trusted proxies failed", zap.Error(err))
 	}
 
 	if upd == nil {
@@ -62,15 +79,11 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	// 创建 WebSocket 管理器（使用 wsstream 框架）
 	wsStatsManager := NewStatsWebSocketManager(docker, sc, streamManagerString)
 
-	// 创建 Compose 客户端
-	cfg := config.Get()
-	var composeClient *composecli.Client
-	if cfg.Compose.Enabled {
-		composeClient = composecli.NewClient(docker.GetDockerClient())
-	}
+	// 始终构建 Compose 客户端，通过路由中间件按当前 config 动态检查 Compose.Enabled
+	composeClient := composecli.NewClient(docker.GetDockerClient())
 
 	s := &Server{
-		logger:              logger,
+		logger:              log,
 		docker:              docker,
 		registry:            reg,
 		scanner:             sc,
@@ -120,10 +133,21 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 		// 设置镜像相关路由
 		s.setupImageRoutes(protected)
 
-		// 设置 Compose 相关路由
-		if s.composeClient != nil {
-			s.setupComposeRoutes(protected)
-		}
+		// 设置 Compose 相关路由（动态检查 Compose.Enabled，支持配置页热切换无需重启）
+		composeGroup := protected.Group("")
+		composeGroup.Use(func(c *gin.Context) {
+			if !config.Get().Compose.Enabled {
+				if strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
+					c.String(http.StatusForbidden, "Compose 功能未启用")
+				} else {
+					c.JSON(http.StatusForbidden, NewErrorResCode(CodeBadRequest, "Compose 功能未启用"))
+				}
+				c.Abort()
+				return
+			}
+			c.Next()
+		})
+		s.setupComposeRoutes(composeGroup)
 
 		// 设置 Volume 相关路由
 		s.setupVolumeRoutes(protected)
@@ -142,7 +166,13 @@ func NewRouter(logger *zap.Logger, docker *dockercli.Client, reg *registry.Clien
 	}
 	s.setupStaticRoutes(r)
 
-	return r
+	closeStreams := func() {
+		logger.CloseAllSubscribers()
+		streamManagerString.Close()
+		streamManagerBytes.Close()
+	}
+
+	return r, closeStreams
 }
 
 // handleGetInfo 获取系统信息
@@ -285,9 +315,10 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		clientIP := c.ClientIP()
 		limiter := auth.GetLoginRateLimiter()
+		ipLimiter := auth.GetLoginIPRateLimiter()
 
-		if limiter.IsBlocked(clientIP) {
-			s.logger.Warn("login blocked due to rate limit", zap.String("ip", clientIP))
+		if ipLimiter.IsBlocked(clientIP) {
+			s.logger.Warn("login blocked due to per-IP flood rate limit", zap.String("ip", clientIP))
 			c.JSON(http.StatusTooManyRequests, NewErrorResCode(CodeBadRequest, "登录尝试次数过多，请稍后再试"))
 			return
 		}
@@ -298,11 +329,19 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 			return
 		}
 
+		loginKey := clientIP + "|" + strings.ToLower(strings.TrimSpace(req.Username))
+		if limiter.IsBlocked(loginKey) {
+			s.logger.Warn("login blocked due to rate limit", zap.String("ip", clientIP), zap.String("username", req.Username))
+			c.JSON(http.StatusTooManyRequests, NewErrorResCode(CodeBadRequest, "登录尝试次数过多，请稍后再试"))
+			return
+		}
+
 		// 验证用户凭据
 		if !auth.ValidateCredentials(req.Username, req.Password) {
-			blocked, remaining := limiter.RecordFailure(clientIP)
+			ipBlocked, _ := ipLimiter.RecordFailure(clientIP)
+			blocked, remaining := limiter.RecordFailure(loginKey)
 			s.logger.Warn("login failed", zap.String("username", req.Username), zap.String("ip", clientIP), zap.Int("remaining", remaining))
-			if blocked {
+			if blocked || ipBlocked {
 				c.JSON(http.StatusTooManyRequests, NewErrorResCode(CodeBadRequest, "登录尝试次数过多，请15分钟后再试"))
 			} else {
 				c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "用户名或密码错误"))
@@ -310,7 +349,7 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 			return
 		}
 
-		limiter.RecordSuccess(clientIP)
+		limiter.RecordSuccess(loginKey)
 
 		// 检查是否启用二次验证
 		envCfg := conf.EnvCfg
@@ -334,6 +373,13 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 				return
 			}
 
+			isAccountSetup, err := twofa.IsUserSetup(req.Username)
+			if err != nil {
+				s.logger.Error("check user account 2fa setup status failed", zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查设置状态失败"))
+				return
+			}
+
 			// 生成临时 token
 			tempToken, err := auth.GenerateTempToken(req.Username)
 			if err != nil {
@@ -342,13 +388,14 @@ func (s *Server) handleLogin() gin.HandlerFunc {
 				return
 			}
 
-			s.logger.Info("user login, need 2fa", zap.String("username", req.Username), zap.Bool("isSetup", isSetup), zap.String("method", string(userConfig.Method)), zap.String("rpid", rpid))
+			s.logger.Info("user login, need 2fa", zap.String("username", req.Username), zap.Bool("isSetup", isSetup), zap.Bool("isAccountSetup", isAccountSetup), zap.String("method", string(userConfig.Method)), zap.String("rpid", rpid))
 			c.JSON(http.StatusOK, NewSuccessRes(gin.H{
-				"needTwoFA": true,
-				"isSetup":   isSetup,
-				"method":    userConfig.Method,
-				"tempToken": tempToken,
-				"username":  req.Username,
+				"needTwoFA":      true,
+				"isSetup":        isSetup,
+				"isAccountSetup": isAccountSetup,
+				"method":         userConfig.Method,
+				"tempToken":      tempToken,
+				"username":       req.Username,
 			}))
 			return
 		}
@@ -388,11 +435,10 @@ func (s *Server) handleAuthStatus() gin.HandlerFunc {
 
 // handleLogStream 处理日志 SSE 流
 func (s *Server) handleLogStream(c *gin.Context) {
-	// 设置SSE相关头部
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	// 设置 SSE 相关头部（避免 HTTP/2 非法的 hop-by-hop Header）
+	c.Writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("Transfer-Encoding", "chunked")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
 
 	// 订阅日志
 	ch := logger.Subscribe()
@@ -401,8 +447,16 @@ func (s *Server) handleLogStream(c *gin.Context) {
 	// 将请求上下文用于取消
 	ctx := c.Request.Context()
 
-	// 简单心跳，防止某些代理超时
-	c.Writer.Flush()
+	// 先发送初始 SSE 注释心跳建立流连接，防止反代缓冲
+	if _, err := c.Writer.Write([]byte(": ok\n\n")); err != nil {
+		return
+	}
+	if f, ok := c.Writer.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -412,7 +466,13 @@ func (s *Server) handleLogStream(c *gin.Context) {
 			}
 			// 发送事件
 			c.SSEvent("message", msg)
-			// 手动刷新
+			if f, ok := c.Writer.(http.Flusher); ok {
+				f.Flush()
+			}
+		case <-ticker.C:
+			if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil {
+				return
+			}
 			if f, ok := c.Writer.(http.Flusher); ok {
 				f.Flush()
 			}

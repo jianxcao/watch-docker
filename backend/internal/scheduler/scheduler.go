@@ -221,21 +221,26 @@ func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
 		uctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		s.logger.Info(fmt.Sprintf("开始执行更新任务: %s", st.Name))
 		if _, err := s.updater.UpdateContainer(uctx, st.ID, st.Image); err != nil {
+			cancel()
+			if ctx.Err() != nil {
+				s.logger.Info(fmt.Sprintf("更新任务随调度器停止而中断: %s", st.Name))
+				break
+			}
 			s.logger.Error(fmt.Sprintf("更新任务失败: %s", st.Name), zap.Error(err))
 			if s.notificationManager != nil {
 				if notifyErr := s.notificationManager.NotifyUpdateFailed(ctx, st.Name, st.Image, err.Error()); notifyErr != nil {
 					s.logger.Error("发送更新失败通知失败", zap.Error(notifyErr))
 				}
 			}
-		} else {
-			s.logger.Info(fmt.Sprintf("更新任务完成: %s", st.Name))
-			if s.notificationManager != nil {
-				if notifyErr := s.notificationManager.NotifyUpdateSuccess(ctx, st.Name, st.Image); notifyErr != nil {
-					s.logger.Error("发送更新成功通知失败", zap.Error(notifyErr))
-				}
-			}
+			continue
 		}
 		cancel()
+		s.logger.Info(fmt.Sprintf("更新任务完成: %s", st.Name))
+		if s.notificationManager != nil {
+			if notifyErr := s.notificationManager.NotifyUpdateSuccess(ctx, st.Name, st.Image); notifyErr != nil {
+				s.logger.Error("发送更新成功通知失败", zap.Error(notifyErr))
+			}
+		}
 	}
 	s.logger.Info("批量更新任务完成")
 }

@@ -2,7 +2,6 @@
 export const API_ENDPOINTS = {
   // 健康检查
   HEALTH: '/healthz',
-  READY: '/readyz',
 
   // 身份验证
   LOGIN: '/login',
@@ -48,15 +47,18 @@ export const API_ENDPOINTS = {
   NETWORK_DISCONNECT: (id: string) => `/networks/${encodeURIComponent(id)}/disconnect`,
 } as const
 
-// 错误码常量
+// 错误码常量（与 backend/internal/api/res.go 对齐）
 export const ERROR_CODES = {
   SUCCESS: 0,
   BAD_REQUEST: 40000,
-  IMAGE_REQUIRED: 40001,
+  UNAUTHORIZED: 40001,
+  IMAGE_REQUIRED: 40002,
   SCAN_FAILED: 50001,
   UPDATE_FAILED: 50002,
   DOCKER_ERROR: 50003,
   REGISTRY_ERROR: 50004,
+  INVALID_REQUEST: 50005,
+  INTERNAL_ERROR: 50006,
 } as const
 
 // HTTP 状态码

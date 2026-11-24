@@ -17,7 +17,7 @@
                   :min="1"
                   :max="65535"
                   size="small"
-                  @blur="updatePorts"
+                  @update:value="updatePorts"
                 />
               </div>
               <div class="port-arrow">
@@ -31,7 +31,7 @@
                   :min="1"
                   :max="65535"
                   size="small"
-                  @blur="updatePorts"
+                  @update:value="updatePorts"
                 />
               </div>
               <div class="port-protocol">
@@ -130,11 +130,13 @@ const removePort = (index: number) => {
 
 const updatePorts = () => {
   const portBindings: Record<string, PortBinding[]> = {}
+  const exposedPorts: Record<string, Record<string, never>> = {}
 
   formValue.value.portList.forEach((port) => {
     if (port.containerPort && port.protocol.length > 0) {
       port.protocol.forEach((protocol) => {
         const key = `${port.containerPort}/${protocol}`
+        exposedPorts[key] = {}
         if (port.hostPort) {
           if (!portBindings[key]) {
             portBindings[key] = []
@@ -149,6 +151,7 @@ const updatePorts = () => {
   })
 
   formValue.value.portBindings = portBindings
+  formValue.value.exposedPorts = exposedPorts
 }
 
 const validate = () => formRef.value?.validate()

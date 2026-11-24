@@ -31,9 +31,6 @@
       <div v-if="!isRunning" class="terminal-message">
         <n-empty description="容器未运行，无法连接 Shell" />
       </div>
-      <div v-else-if="!isConnected && !isConnecting" class="terminal-message">
-        <n-empty description="点击连接按钮开始使用 Shell" />
-      </div>
       <div v-else-if="errorMessage" class="terminal-message error">
         <n-result status="error" :title="errorMessage">
           <template #footer>
@@ -41,12 +38,15 @@
           </template>
         </n-result>
       </div>
+      <div v-else-if="!isConnected && !isConnecting" class="terminal-message">
+        <n-empty description="点击连接按钮开始使用 Shell" />
+      </div>
       <TermView
         v-else
         ref="terminalRef"
         :config="termConfig"
         :auto-fit="true"
-        :height="terminalHeight"
+        height="100%"
         @ready="handleTerminalReady"
         @data="handleTerminalData"
         @resize="handleTerminalResize"
@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useWebSocket } from '@vueuse/core'
 import TermView from '@/components/Term/TermView.vue'
@@ -81,6 +81,7 @@ const terminal = ref<Terminal>()
 const errorMessage = ref('')
 const selectedShell = ref('sh')
 const wsUrl = ref('')
+let isUnmounting = false
 
 // Shell 选项
 const shellOptions = [
@@ -160,7 +161,8 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
     message.error('Shell 连接失败')
   },
   onDisconnected: () => {
-    if (!errorMessage.value) {
+    terminal.value = undefined
+    if (!isUnmounting && !errorMessage.value) {
       message.info('Shell 连接已关闭')
     }
   },
@@ -247,7 +249,7 @@ const handleTerminalResize = (size: { cols: number; rows: number }) => {
   }
 }
 
-// 监听容器运行状态变化
+// 监听容器运行状态与容器 ID 变化
 watch(
   () => props.isRunning,
   (newValue) => {
@@ -257,6 +259,23 @@ watch(
     }
   },
 )
+
+watch(
+  () => props.containerId,
+  () => {
+    errorMessage.value = ''
+    terminal.value = undefined
+    if (status.value !== 'CLOSED') {
+      close()
+    }
+  },
+)
+
+onBeforeUnmount(() => {
+  isUnmounting = true
+  terminal.value = undefined
+  close()
+})
 </script>
 
 <style scoped lang="less">

@@ -17,6 +17,7 @@ export const useAuthStore = defineStore('auth', () => {
   // 二次验证状态
   const twoFARequired = ref(false)
   const twoFASetupRequired = ref(false)
+  const twoFAAccountSetup = ref(false)
   const tempToken = ref('')
   const twoFAMethod = ref('')
 
@@ -50,6 +51,9 @@ export const useAuthStore = defineStore('auth', () => {
     initPromise = (async () => {
       try {
         const authStatusRes = await authApi.checkAuthStatus()
+        if (authStatusRes.code !== 0 || authStatusRes.data?.authEnabled === undefined) {
+          throw new Error(authStatusRes.msg || '检查认证状态失败')
+        }
         authEnabled.value = authStatusRes.data.authEnabled
 
         if (authEnabled.value) {
@@ -76,9 +80,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const waitForInit = async () => {
-    if (initPromise) {
-      await initPromise
-    }
+    await (initPromise ?? initAuth())
   }
 
   // 登录
@@ -86,11 +88,16 @@ export const useAuthStore = defineStore('auth', () => {
     loginLoading.value = true
     try {
       const res = await authApi.login(loginUsername, password)
+      if (res.code !== 0) {
+        return { success: false, message: res.msg || '登录失败' }
+      }
 
       // 检查是否需要二次验证
       if (res.data?.needTwoFA) {
+        settingStore.setToken('')
         twoFARequired.value = true
         twoFASetupRequired.value = !res.data.isSetup
+        twoFAAccountSetup.value = Boolean(res.data.isAccountSetup)
         tempToken.value = res.data.tempToken || ''
         twoFAMethod.value = res.data.method || ''
         // 保存临时 token 到 setting store
@@ -101,23 +108,28 @@ export const useAuthStore = defineStore('auth', () => {
           success: true,
           needTwoFA: true,
           isSetup: res.data.isSetup,
+          isAccountSetup: res.data.isAccountSetup,
           method: res.data.method,
         }
       }
 
       // 不需要二次验证，直接登录
       if (res.data?.token) {
+        settingStore.setTmpToken('')
         settingStore.setToken(res.data.token)
         settingStore.setCurrentUsername(res.data.username || loginUsername)
         isLoggedIn.value = true
         twoFARequired.value = false
+        twoFASetupRequired.value = false
+        twoFAAccountSetup.value = false
+        void settingStore.fetchSystemInfo(true)
         return { success: true }
       } else {
-        return { success: false, message: '登录失败' }
+        return { success: false, message: res.msg || '登录失败' }
       }
     } catch (error: any) {
       console.error('Login failed:', error)
-      const message = error.response?.data?.msg || error.message || '登录失败'
+      const message = error.response?.data?.msg || error.msg || error.message || '登录失败'
       return { success: false, message }
     } finally {
       loginLoading.value = false
@@ -140,6 +152,7 @@ export const useAuthStore = defineStore('auth', () => {
       isLoggedIn.value = false
       twoFARequired.value = false
       twoFASetupRequired.value = false
+      twoFAAccountSetup.value = false
       tempToken.value = ''
       twoFAMethod.value = ''
       navigateTo('/login')
@@ -154,6 +167,7 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn.value = false
     twoFARequired.value = false
     twoFASetupRequired.value = false
+    twoFAAccountSetup.value = false
     tempToken.value = ''
     twoFAMethod.value = ''
     if (authEnabled.value) {
@@ -168,14 +182,17 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn.value = true
     twoFARequired.value = false
     twoFASetupRequired.value = false
+    twoFAAccountSetup.value = false
     tempToken.value = ''
     twoFAMethod.value = ''
+    void settingStore.fetchSystemInfo(true)
   }
 
   // 取消二次验证流程，返回用户名密码登录界面
   const cancelTwoFA = () => {
     twoFARequired.value = false
     twoFASetupRequired.value = false
+    twoFAAccountSetup.value = false
     tempToken.value = ''
     twoFAMethod.value = ''
     settingStore.setTmpToken('')
@@ -190,6 +207,7 @@ export const useAuthStore = defineStore('auth', () => {
     checkingAuth,
     twoFARequired,
     twoFASetupRequired,
+    twoFAAccountSetup,
     tempToken,
     twoFAMethod,
 

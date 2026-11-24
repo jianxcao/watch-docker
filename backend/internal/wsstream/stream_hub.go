@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,6 +67,7 @@ type StreamHub[T MessageType] struct {
 	cancel        context.CancelFunc
 	sourceStarted bool
 	done          chan struct{}
+	closing       atomic.Bool
 	key           string
 	manager       *StreamManager[T]
 }
@@ -266,6 +268,11 @@ func (h *StreamHub[T]) broadcastError(errMsg string) {
 }
 
 func (h *StreamHub[T]) closeAllClients() {
+	h.closing.Store(true)
+	if h.manager != nil {
+		h.manager.RemoveHubIfMatch(h.key, h)
+	}
+
 	h.mu.RLock()
 	clientCount := len(h.clients)
 	clients := make([]*Client[T], 0, clientCount)
@@ -286,11 +293,15 @@ func (h *StreamHub[T]) closeAllClients() {
 		for _, client := range clients {
 			client.conn.Close()
 		}
+		h.cancel()
 	}()
 }
 
 // RegisterClient 安全注册客户端（若 Hub 已退出则返回 false，避免永久阻塞）
 func (h *StreamHub[T]) RegisterClient(client *Client[T]) bool {
+	if h.IsClosed() {
+		return false
+	}
 	select {
 	case h.register <- client:
 		return true
@@ -312,6 +323,9 @@ func (h *StreamHub[T]) UnregisterClient(client *Client[T]) {
 
 // IsClosed 检查 Hub 是否已处于停止状态
 func (h *StreamHub[T]) IsClosed() bool {
+	if h.closing.Load() {
+		return true
+	}
 	select {
 	case <-h.ctx.Done():
 		return true

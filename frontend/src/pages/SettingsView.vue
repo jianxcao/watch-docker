@@ -318,7 +318,13 @@
     <!-- 底部保存按钮 -->
     <Teleport to="#footer" defer>
       <div class="save-button-container">
-        <n-button type="primary" size="large" @click="handleSave" :loading="saving">
+        <n-button
+          type="primary"
+          size="large"
+          @click="handleSave"
+          :loading="saving"
+          :disabled="!configLoaded || loadingConfig"
+        >
           <template #icon>
             <SaveOutline />
           </template>
@@ -330,17 +336,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useMessage, useDialog } from 'naive-ui'
 import type { Config, RegistryMirror } from '@/common/types'
 import { AddOutline, ArrowUpOutline, ArrowDownOutline, SaveOutline } from '@vicons/ionicons5'
 import { configApi, twoFAApi } from '@/common/api'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 import TwoFASetup from '@/components/TwoFASetup.vue'
 
 const message = useMessage()
 const dialog = useDialog()
 const settingStore = useSettingStore()
+const authStore = useAuthStore()
 
 // 二次验证管理状态
 const showTwoFAModal = ref(false)
@@ -351,10 +359,12 @@ const twoFAStatus = reactive({
   method: '',
 })
 const isSecondaryVerificationEnabled = computed(
-  () => Boolean(settingStore.systemInfo?.isSecondaryVerificationEnabled),
+  () => authStore.authEnabled && Boolean(settingStore.systemInfo?.isSecondaryVerificationEnabled),
 )
 
-// 保存状态
+// 加载与保存状态
+const loadingConfig = ref(false)
+const configLoaded = ref(false)
 const saving = ref(false)
 
 const notifyUrlPlaceholder = computed(() => {
@@ -399,8 +409,16 @@ const configForm = reactive<Config>({
     auth: [],
     mirrors: [],
   },
+  proxy: {
+    url: '',
+  },
   logging: {
     level: 'info',
+  },
+  compose: {
+    enabled: false,
+    scanInterval: 30,
+    logLines: 100,
   },
 })
 
@@ -511,12 +529,26 @@ const handleSave = async () => {
   if (saving.value) {
     return
   }
+  if (!configLoaded.value || loadingConfig.value) {
+    message.warning('配置尚未加载完成，请稍后重试')
+    return
+  }
+  if (!Number.isFinite(configForm.scan.concurrency) || configForm.scan.concurrency < 1) {
+    message.error('扫描并发数不能小于 1')
+    return
+  }
+  if (!Number.isFinite(configForm.scan.cacheTTL) || configForm.scan.cacheTTL < 1) {
+    message.error('缓存时间（TTL）不能小于 1 分钟')
+    return
+  }
 
   saving.value = true
   try {
     const response = await configApi.saveConfig(configForm)
     if (response.code === 0) {
       message.success('配置保存成功')
+      await loadConfig(true)
+      void settingStore.fetchSystemInfo(true)
     } else {
       throw new Error(response.msg || '保存失败')
     }
@@ -528,13 +560,14 @@ const handleSave = async () => {
 }
 
 // 加载配置
-const loadConfig = async () => {
+const loadConfig = async (silent = false) => {
+  loadingConfig.value = true
   try {
     const response = await configApi.getConfig()
 
     if (response.code === 0 && response.data?.config) {
       const serverCfg = response.data.config
-      // 将服务器返回的配置合并到表单中，并规范化可能为 null 的数组字段
+      // 将服务器返回的配置合并到表单中，并规范化可能为 null 的数组/嵌套字段
       Object.assign(configForm, serverCfg)
       if (!configForm.policy) {
         configForm.policy = {
@@ -564,12 +597,23 @@ const loadConfig = async () => {
       if (!Array.isArray(configForm.registry.auth)) {
         configForm.registry.auth = []
       }
-      message.success('配置加载成功')
+      if (!configForm.proxy) {
+        configForm.proxy = { url: '' }
+      }
+      if (!configForm.compose) {
+        configForm.compose = { enabled: false, scanInterval: 30, logLines: 100 }
+      }
+      configLoaded.value = true
+      if (!silent) {
+        message.success('配置加载成功')
+      }
     } else {
       throw new Error(response.msg || '获取配置失败')
     }
   } catch (error: any) {
     message.error(`加载配置失败: ${error.message || '未知错误'}`)
+  } finally {
+    loadingConfig.value = false
   }
 }
 
@@ -628,10 +672,19 @@ const handleDisableTwoFA = () => {
   })
 }
 
+watch(
+  isSecondaryVerificationEnabled,
+  (enabled) => {
+    if (enabled) {
+      void loadTwoFAStatus()
+    }
+  },
+)
+
 // 页面初始化
 onMounted(async () => {
   await loadConfig()
-  if (!settingStore.systemInfo) {
+  if (!settingStore.systemInfo || (authStore.authEnabled && !settingStore.systemInfo.dockerVersion)) {
     await settingStore.fetchSystemInfo()
   }
   await loadTwoFAStatus()

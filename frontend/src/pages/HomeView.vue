@@ -102,7 +102,12 @@
           批量更新容器 ({{ containerStore.updateableContainers.length }})
         </n-button>
 
-        <n-button class="action-primary" size="large" @click="handleCreateApp">
+        <n-button
+          v-if="settingStore.systemInfo?.isComposeEnabled"
+          class="action-primary"
+          size="large"
+          @click="handleCreateApp"
+        >
           <template #icon>
             <n-icon>
               <AddCircleOutline />
@@ -244,7 +249,7 @@ const isPruning = ref(false)
 
 // 版本信息
 const appVersion = 'v' + __APP_VERSION__
-const version = computed(() => settingStore.systemInfo?.version.version)
+const version = computed(() => settingStore.systemInfo?.version?.version || '-')
 
 const systemHealthText = computed(() => {
   switch (appStore.systemHealth) {
@@ -277,10 +282,18 @@ const lastRefreshText = computed(() => {
 })
 
 // 最近检查的容器（最多5个）
+const parseCheckTime = (val?: string) => {
+  if (!val || val.startsWith('0001-01-01')) {
+    return 0
+  }
+  const ts = new Date(val).getTime()
+  return Number.isNaN(ts) ? 0 : ts
+}
+
 const recentContainers = computed(() => {
   return containerStore.containers
     .slice()
-    .sort((a, b) => new Date(b.lastCheckedAt).getTime() - new Date(a.lastCheckedAt).getTime())
+    .sort((a, b) => parseCheckTime(b.lastCheckedAt) - parseCheckTime(a.lastCheckedAt))
     .slice(0, 5)
 })
 

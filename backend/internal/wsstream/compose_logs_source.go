@@ -2,6 +2,7 @@ package wsstream
 
 import (
 	"context"
+	"sync"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -13,6 +14,7 @@ type ComposeLogsSource struct {
 	projectPath string
 	projectName string
 	key         string
+	mu          sync.Mutex
 	reader      *ByteStreamReader
 }
 
@@ -31,10 +33,15 @@ func (s *ComposeLogsSource) Start(ctx context.Context) (StreamReader[[]byte], er
 		zap.String("projectPath", s.projectPath),
 		zap.String("projectName", s.projectName))
 
+	args := []string{"--ansi", "always", "logs", "--follow", "--timestamps", "--tail=500"}
+	if s.projectPath == "" {
+		args = []string{"-p", s.projectName, "--ansi", "always", "logs", "--follow", "--timestamps", "--tail=500"}
+	}
+
 	// 执行 docker compose logs 命令
 	result := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      s.projectPath,
-		Args:          []string{"--ansi", "always", "logs", "--follow", "--timestamps", "--tail=500"},
+		Args:          args,
 		OperationName: "compose logs",
 	})
 
@@ -45,8 +52,11 @@ func (s *ComposeLogsSource) Start(ctx context.Context) (StreamReader[[]byte], er
 		return nil, result.Error
 	}
 	// 使用 ByteStreamReader 直接流式传输日志
-	s.reader = NewByteStreamReader(result.Reader)
-	return s.reader, nil
+	reader := NewByteStreamReader(result.Reader)
+	s.mu.Lock()
+	s.reader = reader
+	s.mu.Unlock()
+	return reader, nil
 }
 
 // Stop 停止 Compose 日志流
@@ -54,9 +64,13 @@ func (s *ComposeLogsSource) Stop() error {
 	logger.Logger.Info("停止 Compose 日志流",
 		zap.String("projectName", s.projectName))
 
-	if s.reader != nil {
-		s.reader.Close()
-		s.reader = nil
+	s.mu.Lock()
+	reader := s.reader
+	s.reader = nil
+	s.mu.Unlock()
+
+	if reader != nil {
+		reader.Close()
 	}
 	return nil
 }

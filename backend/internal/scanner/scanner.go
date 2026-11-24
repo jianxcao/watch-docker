@@ -209,10 +209,18 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 				// 同时兼容本地存储 manifest list digest (IndexDigest) 或单平台 child manifest digest (ChildDigest)
 				upToDate = compareDigests(st.CurrentDigest, digestResult.IndexDigest) ||
 					compareDigests(st.CurrentDigest, digestResult.ChildDigest)
-			} else if digestResult.ConfigDigest != "" && info.imageID != "" {
-				// Mirror 拉取 retag+untag 后 RepoDigests 可能为空，此时比对镜像 Config Digest (ImageID) 消除无限更新循环
-				upToDate = strings.EqualFold(info.imageID, digestResult.ConfigDigest)
-				if upToDate {
+			} else if info.imageID != "" {
+				if cacheOnly && digestResult.ConfigDigest == "" {
+					// 缓存条目仅含 index/child digest 且暂无 ConfigDigest 时，cacheOnly 阶段不误报更新
+					upToDate = true
+				} else if digestResult.ConfigDigest != "" && strings.EqualFold(info.imageID, digestResult.ConfigDigest) {
+					// Mirror 拉取 retag+untag 后 RepoDigests 可能为空，此时比对镜像 Config Digest (ImageID) 消除无限更新循环
+					upToDate = true
+					st.CurrentDigest = []string{info.imageID}
+				} else if (digestResult.IndexDigest != "" && strings.EqualFold(info.imageID, digestResult.IndexDigest)) ||
+					(digestResult.ChildDigest != "" && strings.EqualFold(info.imageID, digestResult.ChildDigest)) {
+					// 兼容 containerd snapshotter 无 RepoDigests 时 ImageID 即 manifest/index digest 的场景
+					upToDate = true
 					st.CurrentDigest = []string{info.imageID}
 				}
 			}

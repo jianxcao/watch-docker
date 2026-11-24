@@ -114,14 +114,22 @@ const initTerminal = () => {
   }
   terminal.value.unicode.activeVersion = '11'
   terminal.value?.textarea?.setAttribute('enterkeyhint', 'send')
+  const safeFit = () => {
+    const el = terminalRef.value
+    if (!el || el.clientWidth === 0 || el.clientHeight === 0 || !fitAddon) {
+      return false
+    }
+    fitAddon.fit()
+    return true
+  }
+
   // 自适应大小
   if (props.autoFit) {
-    fitAddon?.fit()
+    safeFit()
 
     // 监听窗口大小变化
     resizeObserver.value = new ResizeObserver(() => {
-      fitAddon?.fit()
-      if (terminal.value) {
+      if (safeFit() && terminal.value) {
         emit('resize', {
           cols: terminal.value.cols,
           rows: terminal.value.rows,
@@ -182,6 +190,10 @@ const reset = () => {
 
 // 调整大小
 const fit = () => {
+  const el = terminalRef.value
+  if (!el || el.clientWidth === 0 || el.clientHeight === 0) {
+    return
+  }
   fitAddon?.fit()
 }
 
@@ -213,8 +225,6 @@ const cleanup = () => {
     // 2. 清理 terminal（会自动清理已加载的 addons）
     if (terminal.value) {
       try {
-        // Send Ctrl+C to the terminal
-        terminal.value?.write('\x03')
         if (fitAddon) {
           fitAddon.dispose()
         }

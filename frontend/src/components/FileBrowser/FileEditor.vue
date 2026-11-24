@@ -2,6 +2,7 @@
   <n-modal
     :show="show"
     :mask-closable="!hasChanges"
+    :close-on-esc="false"
     preset="card"
     class="file-editor-modal"
     style="width: 90vw; max-width: 1200px"
@@ -9,7 +10,11 @@
   >
     <template #header>
       <div class="flex items-center gap-2">
-        <n-icon><ArrowBack /></n-icon>
+        <n-button text @click="handleClose" title="关闭编辑器">
+          <template #icon>
+            <n-icon><ArrowBack /></n-icon>
+          </template>
+        </n-button>
         <span>{{ fileName }}</span>
         <span v-if="hasChanges" class="text-warning">●</span>
         <span v-if="readOnly" class="text-xs text-gray-500">(只读)</span>
@@ -250,36 +255,53 @@ const isMac = computed(() => {
   return typeof window !== 'undefined' && window.navigator.platform.includes('Mac')
 })
 
+// 加载请求序号（防止异步加载期间切换文件/关闭后产生竞态覆盖）
+let loadRequestId = 0
+
 // 加载文件内容
 const loadFile = async () => {
   if (!props.filePath || !props.show) {
     return
   }
 
+  const requestId = ++loadRequestId
+  error.value = null
+  hasChanges.value = false
+
+  if (editorView.value) {
+    editorView.value.destroy()
+    editorView.value = null
+  }
+
   // 检查是否为二进制文件
   if (isBinaryFile(props.fileName)) {
+    loading.value = false
+    content.value = ''
     error.value = '此文件为二进制文件，不支持在线预览。请下载后查看。'
     return
   }
 
   loading.value = true
-  error.value = null
 
   try {
-    console.log('Loading file:', props.filePath)
     const res = await getContainerFileContent(props.containerId, props.filePath)
-    console.log('File content response:', res)
+    if (requestId !== loadRequestId || !props.show) {
+      return
+    }
 
     if (res.code === 0 && res.data) {
       content.value = res.data.content ?? ''
       hasChanges.value = false
-      await initEditor()
+      await initEditor(requestId)
     } else {
       const errorMsg = res.msg || '加载文件失败'
       console.error('Load file failed:', errorMsg, 'code:', res.code)
       throw new Error(errorMsg)
     }
   } catch (err: any) {
+    if (requestId !== loadRequestId) {
+      return
+    }
     console.error('Load file error:', err)
     let errorMessage = err.message || '加载文件失败'
 
@@ -291,19 +313,20 @@ const loadFile = async () => {
     error.value = errorMessage
     content.value = ''
   } finally {
-    loading.value = false
+    if (requestId === loadRequestId) {
+      loading.value = false
+    }
   }
 }
 
 // 初始化编辑器
-const initEditor = async () => {
+const initEditor = async (requestId: number) => {
   if (!editorContainer.value) {
     return
   }
 
-  const targetPath = props.filePath
   const language = await loadLanguageSupport(props.fileName)
-  if (!props.show || targetPath !== props.filePath || !editorContainer.value) {
+  if (requestId !== loadRequestId || !props.show || !editorContainer.value) {
     return
   }
 
@@ -383,6 +406,9 @@ const handleClose = () => {
     }
   }
 
+  loadRequestId++
+  loading.value = false
+
   emit('update:show', false)
   emit('close')
 
@@ -396,12 +422,21 @@ const handleClose = () => {
   error.value = null
 }
 
-// 监听显示状态
+// 监听显示状态与目标文件变化
 watch(
-  () => props.show,
-  (show) => {
+  [() => props.show, () => props.containerId, () => props.filePath],
+  ([show]) => {
     if (show) {
       void loadFile()
+    } else {
+      loadRequestId++
+      loading.value = false
+      if (editorView.value) {
+        editorView.value.destroy()
+        editorView.value = null
+      }
+      hasChanges.value = false
+      error.value = null
     }
   },
 )

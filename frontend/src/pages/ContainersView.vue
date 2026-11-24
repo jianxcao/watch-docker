@@ -332,6 +332,14 @@ const filteredContainers = computed(() => {
   }
 
   // 排序（使用副本避免修改 store 原数组）
+  const parseTime = (value?: string) => {
+    if (!value || value.startsWith('0001-01-01')) {
+      return 0
+    }
+    const ts = new Date(value).getTime()
+    return Number.isNaN(ts) ? 0 : ts
+  }
+
   return [...containers].sort((a, b) => {
     let result = 0
 
@@ -340,7 +348,7 @@ const filteredContainers = computed(() => {
         result = a.name.localeCompare(b.name)
         break
       case 'created':
-        result = new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
+        result = parseTime(a.startedAt) - parseTime(b.startedAt)
         break
       case 'status':
         // 按状态排序：运行中 > 已停止 > 其他

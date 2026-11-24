@@ -94,6 +94,16 @@ export function useXhrUpload() {
             onError?.(err)
             reject(new Error(errorMsg))
           }
+        } else if (xhr.status === 401 || xhr.status === 403) {
+          void import('@/store/auth').then(({ useAuthStore }) => {
+            const authStore = useAuthStore()
+            authStore.setAuthStatus(true)
+            authStore.forceLogout()
+          })
+          const errorMsg = `登录已过期或无权限 (${xhr.status})`
+          message.error(errorMsg)
+          onError?.(new Error(errorMsg))
+          reject(new Error(errorMsg))
         } else {
           const errorMsg = `上传失败 (${xhr.status})`
           message.error(errorMsg)
@@ -104,6 +114,21 @@ export function useXhrUpload() {
 
       xhr.addEventListener('error', () => {
         const errorMsg = '网络错误'
+        message.error(errorMsg)
+        uploading.value = false
+        onError?.(new Error(errorMsg))
+        reject(new Error(errorMsg))
+      })
+
+      xhr.addEventListener('abort', () => {
+        const errorMsg = '上传已取消'
+        uploading.value = false
+        onError?.(new Error(errorMsg))
+        reject(new Error(errorMsg))
+      })
+
+      xhr.addEventListener('timeout', () => {
+        const errorMsg = '上传超时'
         message.error(errorMsg)
         uploading.value = false
         onError?.(new Error(errorMsg))

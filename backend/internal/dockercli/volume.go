@@ -110,7 +110,7 @@ func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
 		refCount := volumeRefCount[vol.Name]
 
 		var size int64
-		if vol.UsageData != nil {
+		if vol.UsageData != nil && vol.UsageData.Size > 0 {
 			size = vol.UsageData.Size
 		}
 		totalSize += size
@@ -165,7 +165,7 @@ func (c *Client) GetVolume(ctx context.Context, name string) (*VolumeDetailRespo
 	}
 
 	var size int64
-	if vol.UsageData != nil {
+	if vol.UsageData != nil && vol.UsageData.Size > 0 {
 		size = vol.UsageData.Size
 	}
 
@@ -180,7 +180,7 @@ func (c *Client) GetVolume(ctx context.Context, name string) (*VolumeDetailRespo
 		Status:     vol.Status,
 	}
 
-	if vol.UsageData != nil || len(containers) > 0 {
+	if size > 0 || len(containers) > 0 {
 		volumeInfo.UsageData = &VolumeUsageData{
 			Size:     size,
 			RefCount: len(containers),

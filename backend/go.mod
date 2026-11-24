@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/blang/semver/v4 v4.0.0
+	github.com/containerd/errdefs v1.0.0
 	github.com/creack/pty v1.1.24
 	github.com/distribution/reference v0.6.0
 	github.com/gin-gonic/gin v1.12.0
@@ -12,6 +13,7 @@ require (
 	github.com/google/go-containerregistry v0.22.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/kelseyhightower/envconfig v1.4.0
+	github.com/moby/docker-image-spec v1.3.1
 	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.3
 	github.com/opencontainers/image-spec v1.1.1
@@ -31,7 +33,6 @@ require (
 	github.com/bytedance/sonic/loader v0.5.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/docker/cli v29.7.2+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
@@ -59,7 +60,6 @@ require (
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
-	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect

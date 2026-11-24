@@ -57,6 +57,16 @@ func Unsubscribe(ch chan string) {
 	subscribersMu.Unlock()
 }
 
+// CloseAllSubscribers 关闭所有当前日志订阅者通道，唤醒阻塞中的 SSE 请求以便优雅停机
+func CloseAllSubscribers() {
+	subscribersMu.Lock()
+	for ch := range subscribers {
+		delete(subscribers, ch)
+		close(ch)
+	}
+	subscribersMu.Unlock()
+}
+
 // broadcast 向所有订阅者发送日志，并维护缓冲区
 func broadcast(logMsg string) {
 	subscribersMu.Lock()

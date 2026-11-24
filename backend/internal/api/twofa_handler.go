@@ -121,6 +121,20 @@ func consumeOTPSetupSecret(username, secret string) bool {
 	return true
 }
 
+func extractHostNameOnly(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		return host[1 : len(host)-1]
+	}
+	return host
+}
+
 // extractRPIDAndOrigin 从请求提取 RPID 和 Origin；仅当未设置 Origin 时根据 Host 推导，不盲信外部伪造头。
 func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
 	origin = strings.TrimSpace(c.GetHeader("Origin"))
@@ -133,10 +147,7 @@ func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
 				host = u.Host
 			}
 			// 若请求 Host 存在，要求 Origin 主机与请求 Host 主机一致
-			reqHostOnly := host
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				reqHostOnly = h
-			}
+			reqHostOnly := extractHostNameOnly(host)
 			if reqHostOnly != "" && !strings.EqualFold(reqHostOnly, rpid) {
 				rpid = reqHostOnly
 			}
@@ -157,12 +168,13 @@ func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
 	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
 		scheme = "https"
 	}
-	origin = scheme + "://" + host
-
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+	originHost := host
+	if _, _, err := net.SplitHostPort(host); err != nil && strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		originHost = "[" + host + "]"
 	}
-	rpid = host
+	origin = scheme + "://" + originHost
+
+	rpid = extractHostNameOnly(host)
 	return rpid, origin
 }
 
@@ -227,11 +239,19 @@ func (s *Server) handleTwoFAStatus() gin.HandlerFunc {
 			return
 		}
 
+		isAccountSetup, err := twofa.IsUserSetup(username.(string))
+		if err != nil {
+			s.logger.Error("check user account setup status failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查设置状态失败"))
+			return
+		}
+
 		envCfg := conf.EnvCfg
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
-			"enabled": envCfg.IS_SECONDARY_VERIFICATION,
-			"isSetup": isSetup,
-			"method":  userConfig.Method,
+			"enabled":        envCfg.IS_SECONDARY_VERIFICATION,
+			"isSetup":        isSetup,
+			"isAccountSetup": isAccountSetup,
+			"method":         userConfig.Method,
 		}))
 	}
 }

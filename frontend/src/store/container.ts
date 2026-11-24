@@ -64,31 +64,47 @@ export const useContainerStore = defineStore('container', () => {
   }
 
   let inFlightCacheFetch: Promise<void> | null = null
+  let activeFetchCount = 0
+  let latestFetchSeq = 0
+
+  const mergeContainerItem = (
+    existing: ContainerStatus | undefined,
+    incoming: ContainerStatus,
+  ): ContainerStatus => {
+    if (!existing) {
+      return incoming
+    }
+    return {
+      ...existing,
+      ...incoming,
+      errorType: incoming.errorType ?? '',
+      stats: incoming.running ? (incoming.stats ?? existing.stats) : undefined,
+    }
+  }
 
   // 方法：获取容器列表（缓存读取并发去重，避免页面初始化重复请求）
   const fetchContainers = async (isUserCache = true, isHaveUpdate = true) => {
     if (isUserCache && !isHaveUpdate && inFlightCacheFetch) {
       return inFlightCacheFetch
     }
+    const seq = ++latestFetchSeq
+    activeFetchCount++
     loading.value = true
-    const reqPromise = (async () => {
+    let reqPromise!: Promise<void>
+    reqPromise = (async () => {
       try {
         const data = await containerApi.getContainers(isUserCache, isHaveUpdate)
         if (data.code === 0) {
+          if (seq !== latestFetchSeq) {
+            return
+          }
           // 按照 ID 进行合并，新数据覆盖旧数据
           const newContainers = data.data.containers
           const existingContainersMap = new Map(containers.value.map((c) => [c.id, c]))
 
-          containers.value = newContainers.map((newContainer) => {
-            const existingContainer = existingContainersMap.get(newContainer.id)
-            // 如果存在旧容器，合并数据，新数据覆盖旧数据
-            if (existingContainer) {
-              const res = { ...existingContainer, ...newContainer }
-              return res
-            }
-            // 如果是新容器，直接使用新数据
-            return newContainer
-          })
+          containers.value = newContainers.map((newContainer) =>
+            mergeContainerItem(existingContainersMap.get(newContainer.id), newContainer),
+          )
         } else {
           console.error('获取容器列表失败:', data.msg)
           throw new Error(data.msg)
@@ -97,8 +113,9 @@ export const useContainerStore = defineStore('container', () => {
         console.error('获取容器列表失败:', error)
         throw error
       } finally {
-        loading.value = false
-        if (isUserCache && !isHaveUpdate) {
+        activeFetchCount = Math.max(0, activeFetchCount - 1)
+        loading.value = activeFetchCount > 0
+        if (isUserCache && !isHaveUpdate && inFlightCacheFetch === reqPromise) {
           inFlightCacheFetch = null
         }
       }
@@ -253,10 +270,9 @@ export const useContainerStore = defineStore('container', () => {
   // WebSocket 容器数据回调处理（完整同步增删与状态变更）
   const handleContainersUpdate = (newContainers: ContainerStatus[]) => {
     const existingMap = new Map<string, ContainerStatus>(containers.value.map((c) => [c.id, c]))
-    containers.value = newContainers.map((container) => {
-      const existing = existingMap.get(container.id)
-      return existing ? { ...existing, ...container } : container
-    })
+    containers.value = newContainers.map((container) =>
+      mergeContainerItem(existingMap.get(container.id), container),
+    )
   }
 
   statsEmitter.on('containers', handleContainersUpdate)

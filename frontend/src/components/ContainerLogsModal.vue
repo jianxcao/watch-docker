@@ -85,7 +85,8 @@ const socketUrl = computed(() => {
   const token = settingStore.getToken()
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1/containers/logs/${props.container.id}/ws?token=${token}&id=${encodeURIComponent(props.container.id)}&projectName=${encodeURIComponent(props.container.name)}`
+  const tokenQuery = token ? `token=${encodeURIComponent(token)}&` : ''
+  return `${protocol}//${host}/api/v1/containers/logs/${encodeURIComponent(props.container.id)}/ws?${tokenQuery}id=${encodeURIComponent(props.container.id)}&projectName=${encodeURIComponent(props.container.name)}`
 })
 
 const handleClose = () => {

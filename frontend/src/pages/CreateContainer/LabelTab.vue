@@ -16,7 +16,7 @@
                   v-model:value="label.key"
                   placeholder="键"
                   size="small"
-                  @blur="updateLabels"
+                  @update:value="updateLabels"
                 />
               </div>
               <div class="label-separator">
@@ -28,7 +28,7 @@
                   v-model:value="label.value"
                   placeholder="值"
                   size="small"
-                  @blur="updateLabels"
+                  @update:value="updateLabels"
                 />
               </div>
               <div class="label-delete">
@@ -94,8 +94,9 @@ const removeLabel = (index: number) => {
 const updateLabels = () => {
   const labels: Record<string, string> = {}
   formValue.value.labelList.forEach((label) => {
-    if (label.key.trim()) {
-      labels[label.key] = label.value
+    const key = label.key.trim()
+    if (key) {
+      labels[key] = label.value
     }
   })
   formValue.value.labels = labels

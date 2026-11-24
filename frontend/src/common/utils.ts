@@ -238,12 +238,23 @@ export const validateComposeYaml = (yamlContent: string): YamlValidationResult =
       }
     }
 
-    // 检查是否存在顶级或缩进的 services: 键（忽略注释行）
+    // 检查是否存在顶级或缩进的 services: 键（忽略注释行与块标量内容）
     const lines = yaml.split('\n')
     let hasServicesKey = false
+    let blockBaseIndent: number | null = null
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
       const trimmed = line.trim()
+      const indent = line.length - line.trimStart().length
+
+      if (blockBaseIndent !== null) {
+        if (!trimmed || indent > blockBaseIndent) {
+          continue
+        }
+        blockBaseIndent = null
+      }
+
       if (!trimmed || trimmed.startsWith('#')) {
         continue
       }
@@ -255,6 +266,7 @@ export const validateComposeYaml = (yamlContent: string): YamlValidationResult =
       // 在忽略非引号注释和转义引号的前提下检查引号是否闭合
       let quoteChar: '"' | "'" | null = null
       let escaped = false
+      let commentStartIndex = -1
       for (let j = 0; j < line.length; j++) {
         const ch = line[j]
         if (quoteChar === '"') {
@@ -278,7 +290,8 @@ export const validateComposeYaml = (yamlContent: string): YamlValidationResult =
             quoteChar = null
           }
         } else {
-          if (ch === '#') {
+          if (ch === '#' && (j === 0 || /\s/.test(line[j - 1]))) {
+            commentStartIndex = j
             break
           }
           if (ch === '"' || ch === "'") {
@@ -292,6 +305,12 @@ export const validateComposeYaml = (yamlContent: string): YamlValidationResult =
           isValid: false,
           errorMessage: `第 ${i + 1} 行：引号未闭合`,
         }
+      }
+
+      const contentWithoutComment =
+        commentStartIndex >= 0 ? line.slice(0, commentStartIndex).trim() : trimmed
+      if (/^(?:[^#\s][^:]*:\s*|-\s*)[|>][+-]?\d*$/.test(contentWithoutComment)) {
+        blockBaseIndent = indent
       }
     }
 

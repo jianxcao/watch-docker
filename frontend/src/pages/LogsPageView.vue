@@ -36,12 +36,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 
 const message = useMessage()
 const settingStore = useSettingStore()
+const authStore = useAuthStore()
 const token = computed(() => settingStore.getToken())
 
 interface LogEntry {
@@ -80,9 +82,21 @@ function getExtraFields(log: LogEntry): Record<string, any> | null {
 
 const scrollToBottom = async () => {
   await nextTick()
+  if (!isNearBottom()) {
+    return
+  }
   if (virtualListRef.value && logs.value.length > 0) {
     virtualListRef.value.scrollTo({ index: logs.value.length - 1, behavior: 'auto' })
   }
+}
+
+const isNearBottom = (): boolean => {
+  const containerEl = containerRef.value?.querySelector('.n-vl') as HTMLElement | null
+  if (!containerEl) {
+    return true
+  }
+  const distance = containerEl.scrollHeight - containerEl.scrollTop - containerEl.clientHeight
+  return distance < 80
 }
 
 function levelColor(level: string): 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error' {
@@ -103,15 +117,24 @@ function levelColor(level: string): 'default' | 'primary' | 'info' | 'success' |
   }
 }
 
-onMounted(() => {
+const connectEventSource = () => {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+  if (authStore.authEnabled && !token.value) {
+    return
+  }
   const url = token.value
     ? `/api/v1/logs?token=${encodeURIComponent(token.value)}`
     : '/api/v1/logs'
-  eventSource = new EventSource(url)
-  eventSource.onopen = () => {
+  const es = new EventSource(url)
+  eventSource = es
+
+  es.onopen = () => {
     connectionError.value = ''
   }
-  eventSource.onmessage = (e) => {
+  es.onmessage = (e) => {
     try {
       const logArray = JSON.parse(e.data)
       if (!Array.isArray(logArray)) {
@@ -122,27 +145,57 @@ onMounted(() => {
         logEntry._k = nextId++
       })
 
+      const shouldScroll = isNearBottom()
       const newLogs = [...logs.value, ...logArray]
       if (newLogs.length > 500) {
         newLogs.splice(0, newLogs.length - 500)
       }
       logs.value = newLogs
-      void scrollToBottom()
+      if (shouldScroll) {
+        void scrollToBottom()
+      }
     } catch (err) {
       console.error('Failed to parse log SSE message:', err)
     }
   }
-  eventSource.onerror = () => {
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) {
+      connectionError.value = '日志流连接已关闭'
+      if (authStore.authEnabled) {
+        const headers: Record<string, string> = token.value
+          ? { Authorization: `Bearer ${token.value}` }
+          : {}
+        void fetch('/api/v1/config', { headers })
+          .then((res) => {
+            if (res.status === 401 || res.status === 403) {
+              authStore.forceLogout()
+            }
+          })
+          .catch(() => {})
+      }
+      return
+    }
     if (!connectionError.value) {
       connectionError.value = '日志流连接中断，正在重试...'
       message.warning('日志流连接中断')
     }
   }
+}
+
+watch(token, (newToken, oldToken) => {
+  if (newToken !== oldToken) {
+    connectEventSource()
+  }
+})
+
+onMounted(() => {
+  connectEventSource()
 })
 
 onBeforeUnmount(() => {
   if (eventSource) {
     eventSource.close()
+    eventSource = null
   }
 })
 </script>

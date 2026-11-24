@@ -12,7 +12,7 @@
                   <div>
                     <div>默认 Bridge 网络</div>
                     <n-text depth="3" style="font-size: 12px">
-                      自动创建 "容器名_default" 网络，适合简单场景
+                      连接到 Docker 默认 bridge 网络，适合常规场景
                     </n-text>
                   </div>
                 </n-radio>
@@ -37,7 +37,7 @@
         <div v-if="formValue.configMode === 'default'">
           <n-h3 prefix="bar">默认网络配置</n-h3>
           <n-alert type="info" :bordered="false">
-            将自动创建一个名为 "容器名_default" 的 bridge 网络，容器将连接到该网络并自动分配 IP 地址
+            容器将直接连接到 Docker 默认的 bridge 网络并自动分配 IP 地址
           </n-alert>
 
           <n-form-item label="发布所有已曝光的端口" style="margin-top: 16px">

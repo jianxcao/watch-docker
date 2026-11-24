@@ -91,7 +91,7 @@
               <n-icon size="16">
                 <CreateTimeIcon />
               </n-icon>
-              创建时间
+              启动时间
             </div>
             <div class="detail-label">
               <n-icon size="16">

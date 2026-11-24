@@ -314,7 +314,7 @@ import {
   NSpin,
 } from 'naive-ui'
 import { VList } from 'virtua/vue'
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   useContextMenu,
   useFileActions,
@@ -399,8 +399,10 @@ const handleDragOver = () => {
 
 // 处理拖拽离开
 const handleDragLeave = (e: DragEvent) => {
-  // 只有当离开整个文件列表区域时才取消高亮
-  if (e.target === e.currentTarget) {
+  // 只有当真正离开整个文件列表区域（而非移入子元素）时才取消高亮
+  const current = e.currentTarget as HTMLElement | null
+  const related = e.relatedTarget as Node | null
+  if (!current || !related || !current.contains(related)) {
     isDragOver.value = false
   }
 }
@@ -520,10 +522,22 @@ const onEntryDoubleClick = (entry: (typeof displayEntries.value)[0]) => {
   )
 }
 
-// 监听容器 ID 变化，切换或更新容器后重新加载目录
+// 路径变化时清理选中状态并关闭右键菜单
+watch(currentPath, () => {
+  selectedEntry.value = null
+  hideContextMenu()
+})
+
+// 监听容器 ID 变化，切换或更新容器后关闭编辑器/菜单并重新加载目录
 watch(
   () => props.containerId,
   () => {
+    fileEditor.value.show = false
+    fileEditor.value.filePath = ''
+    fileEditor.value.fileName = ''
+    fileEditor.value.readOnly = false
+    selectedEntry.value = null
+    hideContextMenu()
     loadDirectory(props.initialPath)
   },
 )

@@ -160,11 +160,16 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 		defer cancel()
 
 		cmd := exec.CommandContext(ctx, command.Path, command.Args...)
-		cmd.Env = append(os.Environ(),
+		env := append(os.Environ(),
 			"TERM=xterm-256color",
 			"LANG=zh_CN.UTF-8",
 			"LC_ALL=zh_CN.UTF-8",
 		)
+		if options.Target == terminalTargetHost {
+			// 容器内运行用户 HOME=/home/watch-docker，进入宿主机 root 命名空间时重置为宿主机 root 环境
+			env = append(env, "HOME=/root", "USER=root", "LOGNAME=root")
+		}
+		cmd.Env = env
 
 		ptmx, err := pty.Start(cmd)
 		if err != nil {

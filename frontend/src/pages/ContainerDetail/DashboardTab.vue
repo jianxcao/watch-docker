@@ -5,7 +5,7 @@
     </div>
     <div v-else-if="loading" class="loading-container">
       <n-spin size="large" />
-      <div style="mt-4">正在加载资源数据...</div>
+      <div class="mt-4">正在加载资源数据...</div>
     </div>
     <div v-else-if="error" class="error-container">
       <n-result status="error" title="连接失败" :description="error">
@@ -50,7 +50,7 @@
             </div>
             <div class="memory-info">
               {{ formatBytes(memoryUsage) }} /
-              {{ formatBytes(detailStats.memory_stats.limit) }}
+              {{ formatBytes(detailStats.memory_stats?.limit || 0) }}
             </div>
           </div>
           <div class="card-content">
@@ -75,34 +75,38 @@
           <div class="detail-section">
             <div class="detail-item">
               <span class="detail-label">CPU 核心数</span>
-              <span class="detail-value">{{ detailStats.cpu_stats.online_cpus }} CPU</span>
+              <span class="detail-value">{{
+                detailStats.cpu_stats?.online_cpus ??
+                detailStats.cpu_stats?.cpu_usage?.percpu_usage?.length ??
+                0
+              }} CPU</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">系统</span>
               <span class="detail-value">{{
-                formatDuration(detailStats.cpu_stats.system_cpu_usage / 1000000000)
+                formatDuration((detailStats.cpu_stats?.system_cpu_usage || 0) / 1000000000)
               }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">用户模式</span>
               <span class="detail-value">{{
-                formatDuration(detailStats.cpu_stats.cpu_usage.usage_in_usermode / 1000000000)
+                formatDuration((detailStats.cpu_stats?.cpu_usage?.usage_in_usermode || 0) / 1000000000)
               }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">内核模式</span>
               <span class="detail-value">{{
-                formatDuration(detailStats.cpu_stats.cpu_usage.usage_in_kernelmode / 1000000000)
+                formatDuration((detailStats.cpu_stats?.cpu_usage?.usage_in_kernelmode || 0) / 1000000000)
               }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">CPU限流周期</span>
-              <span class="detail-value">{{ detailStats.cpu_stats.throttling_data.periods }}</span>
+              <span class="detail-value">{{ detailStats.cpu_stats?.throttling_data?.periods || 0 }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">CPU限流时间</span>
               <span class="detail-value">{{
-                formatDuration(detailStats.cpu_stats.throttling_data.throttled_time / 1000000000)
+                formatDuration((detailStats.cpu_stats?.throttling_data?.throttled_time || 0) / 1000000000)
               }}</span>
             </div>
           </div>
@@ -117,48 +121,50 @@
           <div class="detail-section">
             <div class="detail-item">
               <span class="detail-label">使用中(包括缓存文件)</span>
-              <span class="detail-value">{{ formatBytes(detailStats.memory_stats.usage) }}</span>
+              <span class="detail-value">{{ formatBytes(detailStats.memory_stats?.usage || 0) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">内存限制</span>
-              <span class="detail-value">{{ formatBytes(detailStats.memory_stats.limit) }}</span>
+              <span class="detail-value">{{ formatBytes(detailStats.memory_stats?.limit || 0) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">缓存</span>
               <span class="detail-value">{{
                 formatBytes(
-                  detailStats.memory_stats.stats.file || detailStats.memory_stats.stats.cache || 0,
+                  detailStats.memory_stats?.stats?.file ||
+                    detailStats.memory_stats?.stats?.cache ||
+                    0,
                 )
               }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">活跃文件</span>
               <span class="detail-value">{{
-                formatBytes(detailStats.memory_stats.stats.active_file || 0)
+                formatBytes(detailStats.memory_stats?.stats?.active_file || 0)
               }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">非活跃文件</span>
               <span class="detail-value">{{
-                formatBytes(detailStats.memory_stats.stats.inactive_file || 0)
+                formatBytes(detailStats.memory_stats?.stats?.inactive_file || 0)
               }}</span>
             </div>
             <!-- <div class="detail-item">
               <span class="detail-label">页进</span>
               <span class="detail-value">{{
-                formatBytes(detailStats.memory_stats.stats.anon || 0)
+                formatBytes(detailStats.memory_stats?.stats?.anon || 0)
               }}</span>
             </div> -->
             <div class="detail-item">
               <span class="detail-label">页面故障</span>
               <span class="detail-value">{{
-                formatNumber(detailStats.memory_stats.stats.pgfault || 0)
+                formatNumber(detailStats.memory_stats?.stats?.pgfault || 0)
               }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">主要故障</span>
               <span class="detail-value">{{
-                formatNumber(detailStats.memory_stats.stats.pgmajfault || 0)
+                formatNumber(detailStats.memory_stats?.stats?.pgmajfault || 0)
               }}</span>
             </div>
           </div>
@@ -171,7 +177,7 @@
             <div class="card-title">进程数 (PIDs)</div>
           </div>
           <div class="large-stat">
-            <div class="large-stat-value">{{ detailStats.pids_stats.current }}</div>
+            <div class="large-stat-value">{{ detailStats.pids_stats?.current ?? 0 }}</div>
             <div class="large-stat-label">当前进程数</div>
           </div>
         </div>
@@ -334,6 +340,7 @@ const authStore = useAuthStore()
 const loading = ref(true)
 const error = ref('')
 const detailStats = ref<ContainerDetailStats | null>(null)
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 // 保存上一次的统计数据用于计算速率
 const prevStats = ref<ContainerDetailStats | null>(null)
@@ -373,6 +380,7 @@ const { status, open, close } = useWebSocket(wsUrl, {
     delay: 3000,
     onFailed() {
       console.error('容器统计 WebSocket 重连失败，已达到最大重试次数')
+      loading.value = false
       error.value = '连接失败，已达到最大重试次数'
       message.error('无法连接到容器统计服务')
     },
@@ -386,10 +394,9 @@ const { status, open, close } = useWebSocket(wsUrl, {
   // 页面卸载时自动关闭
   autoClose: true,
 
-  // 连接成功回调
+  // 连接成功回调（保持 loading，直到收到首帧统计数据）
   onConnected(ws) {
     console.log('容器统计 WebSocket 连接已建立')
-    loading.value = false
     error.value = ''
     // 设置二进制类型
     if (ws) {
@@ -400,6 +407,7 @@ const { status, open, close } = useWebSocket(wsUrl, {
   // 连接断开回调
   onDisconnected(_, event) {
     console.log('容器统计 WebSocket 连接已断开:', event.code, event.reason)
+    loading.value = false
     if (!error.value) {
       error.value = ''
     }
@@ -445,6 +453,7 @@ const { status, open, close } = useWebSocket(wsUrl, {
       prevTime.value = currentTime
 
       detailStats.value = newStats
+      loading.value = false
 
       // 数据接收成功，清除错误
       if (error.value) {
@@ -530,6 +539,10 @@ const connect = () => {
 
 // 断开连接
 const disconnect = () => {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
   close()
   detailStats.value = null
   prevStats.value = null
@@ -543,10 +556,9 @@ const disconnect = () => {
 
 // 重新连接
 const reconnect = () => {
-  if (isConnected.value) {
-    disconnect()
-  }
-  setTimeout(() => {
+  disconnect()
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
     connect()
   }, 100)
 }
@@ -558,15 +570,16 @@ const cpuPercent = computed(() => {
   }
 
   const cpuDelta =
-    detailStats.value.cpu_stats.cpu_usage.total_usage -
-    detailStats.value.precpu_stats.cpu_usage.total_usage
+    (detailStats.value.cpu_stats?.cpu_usage?.total_usage ?? 0) -
+    (detailStats.value.precpu_stats?.cpu_usage?.total_usage ?? 0)
   const systemDelta =
-    detailStats.value.cpu_stats.system_cpu_usage - detailStats.value.precpu_stats.system_cpu_usage
+    (detailStats.value.cpu_stats?.system_cpu_usage ?? 0) -
+    (detailStats.value.precpu_stats?.system_cpu_usage ?? 0)
 
   if (systemDelta > 0 && cpuDelta >= 0) {
     const cpuCount =
-      detailStats.value.cpu_stats.online_cpus ||
-      detailStats.value.cpu_stats.cpu_usage?.percpu_usage?.length ||
+      detailStats.value.cpu_stats?.online_cpus ||
+      detailStats.value.cpu_stats?.cpu_usage?.percpu_usage?.length ||
       1
     return (cpuDelta / systemDelta) * cpuCount * 100.0
   }
@@ -576,23 +589,23 @@ const cpuPercent = computed(() => {
 
 // 计算内存使用率
 const memoryUsage = computed(() => {
-  if (!detailStats.value || !detailStats.value.memory_stats.limit) {
+  if (!detailStats.value?.memory_stats?.limit) {
     return 0
   }
 
-  const usage = detailStats.value.memory_stats.usage
+  const usage = detailStats.value.memory_stats.usage || 0
 
   // 减去缓存
   const cache =
-    detailStats.value.memory_stats.stats.inactive_file ||
-    detailStats.value.memory_stats.stats.cache ||
+    detailStats.value.memory_stats.stats?.inactive_file ||
+    detailStats.value.memory_stats.stats?.cache ||
     0
   const actualUsage = usage > cache ? usage - cache : usage
   return actualUsage
 })
 
 const memoryPercent = computed(() => {
-  if (!detailStats.value || !detailStats.value.memory_stats.limit) {
+  if (!detailStats.value?.memory_stats?.limit) {
     return 0
   }
   const limit = detailStats.value.memory_stats.limit
@@ -634,7 +647,7 @@ const totalNetworkTxPackets = computed(() => {
 
 // 计算块读取字节
 const blockRead = computed(() => {
-  if (!detailStats.value || !detailStats.value.blkio_stats.io_service_bytes_recursive) {
+  if (!detailStats.value?.blkio_stats?.io_service_bytes_recursive) {
     return 0
   }
   return detailStats.value.blkio_stats.io_service_bytes_recursive
@@ -644,7 +657,7 @@ const blockRead = computed(() => {
 
 // 计算块写入字节
 const blockWrite = computed(() => {
-  if (!detailStats.value || !detailStats.value.blkio_stats.io_service_bytes_recursive) {
+  if (!detailStats.value?.blkio_stats?.io_service_bytes_recursive) {
     return 0
   }
   return detailStats.value.blkio_stats.io_service_bytes_recursive
@@ -663,6 +676,19 @@ watch(
     }
   },
   { immediate: false }, // 立即执行一次
+)
+
+// 切换容器时重连统计 WebSocket
+watch(
+  () => props.containerId,
+  (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      disconnect()
+      if (props.isRunning) {
+        connect()
+      }
+    }
+  },
 )
 
 onBeforeMount(() => {

@@ -64,8 +64,20 @@
 
       <!-- 二次验证 -->
       <div v-else>
+        <n-alert
+          v-if="authStore.twoFASetupRequired && authStore.twoFAAccountSetup"
+          type="warning"
+          title="请在原绑定域名完成二次验证"
+          class="mb-4"
+        >
+          当前账号已在其他域名绑定了 WebAuthn 生物验证，出于安全限制禁止使用临时凭据在新域名重新设置或覆盖 2FA，请使用已绑定的域名访问。
+        </n-alert>
+
         <!-- 设置二次验证 -->
-        <TwoFASetup v-if="authStore.twoFASetupRequired" @success="handleTwoFASuccess" />
+        <TwoFASetup
+          v-else-if="authStore.twoFASetupRequired"
+          @success="handleTwoFASuccess"
+        />
 
         <!-- 验证二次验证 -->
         <TwoFAVerify v-else :method="authStore.twoFAMethod" @success="handleTwoFASuccess" />

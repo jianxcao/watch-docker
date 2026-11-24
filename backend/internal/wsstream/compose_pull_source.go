@@ -3,6 +3,7 @@ package wsstream
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -14,6 +15,7 @@ type ComposePullSource struct {
 	projectPath string
 	projectName string
 	key         string
+	mu          sync.Mutex
 	reader      *ByteStreamReader
 }
 
@@ -46,8 +48,11 @@ func (s *ComposePullSource) Start(ctx context.Context) (StreamReader[[]byte], er
 		return nil, result.Error
 	}
 	// 使用 ByteStreamReader 直接流式传输日志
-	s.reader = NewByteStreamReader(result.Reader)
-	return s.reader, nil
+	reader := NewByteStreamReader(result.Reader)
+	s.mu.Lock()
+	s.reader = reader
+	s.mu.Unlock()
+	return reader, nil
 }
 
 // Stop 停止 Compose 拉取镜像流
@@ -55,9 +60,13 @@ func (s *ComposePullSource) Stop() error {
 	logger.Logger.Info("停止 Compose 拉取镜像流",
 		zap.String("projectName", s.projectName))
 
-	if s.reader != nil {
-		s.reader.Close()
-		s.reader = nil
+	s.mu.Lock()
+	reader := s.reader
+	s.reader = nil
+	s.mu.Unlock()
+
+	if reader != nil {
+		reader.Close()
 	}
 	return nil
 }

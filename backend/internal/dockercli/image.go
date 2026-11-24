@@ -59,7 +59,9 @@ func canonicalRegistryHost(host string) string {
 	h := strings.ToLower(strings.TrimSpace(host))
 	h = strings.TrimPrefix(h, "https://")
 	h = strings.TrimPrefix(h, "http://")
-	h = strings.TrimSuffix(h, "/")
+	if idx := strings.IndexByte(h, '/'); idx >= 0 {
+		h = h[:idx]
+	}
 	switch h {
 	case "docker.io", "dockerhub", "index.docker.io", "registry-1.docker.io":
 		return "docker.io"
@@ -134,20 +136,35 @@ func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, onProgr
 			continue
 		}
 
-		if _, err := c.docker.ImageTag(ctx, client.ImageTagOptions{
-			Source: mirrorRef,
-			Target: ref,
-		}); err != nil {
-			lastErr = fmt.Errorf("mirror %s retag 失败: %w", host, err)
-			logger.Logger.Warn("mirror 拉取成功但 retag 失败，尝试下一个或回退",
-				zap.String("mirrorRef", mirrorRef),
-				zap.String("targetRef", ref),
-				zap.Error(err))
-			_, _ = c.docker.ImageRemove(ctx, mirrorRef, client.ImageRemoveOptions{Force: false, PruneChildren: false})
-			continue
+		retagTarget := ref
+		skipRetag := false
+		if named, perr := reference.ParseNormalizedNamed(ref); perr == nil {
+			if _, isDigested := named.(reference.Digested); isDigested {
+				if tagged, isTagged := named.(reference.NamedTagged); isTagged {
+					retagTarget = named.Name() + ":" + tagged.Tag()
+				} else {
+					// 纯 digest 引用 (repo@sha256:...) 无法作为 Docker ImageTag target，保留拉取到本地的 mirror 镜像
+					skipRetag = true
+				}
+			}
 		}
 
-		_, _ = c.docker.ImageRemove(ctx, mirrorRef, client.ImageRemoveOptions{Force: false, PruneChildren: false})
+		if !skipRetag {
+			if _, err := c.docker.ImageTag(ctx, client.ImageTagOptions{
+				Source: mirrorRef,
+				Target: retagTarget,
+			}); err != nil {
+				lastErr = fmt.Errorf("mirror %s retag 失败: %w", host, err)
+				logger.Logger.Warn("mirror 拉取成功但 retag 失败，尝试下一个或回退",
+					zap.String("mirrorRef", mirrorRef),
+					zap.String("targetRef", retagTarget),
+					zap.Error(err))
+				_, _ = c.docker.ImageRemove(ctx, mirrorRef, client.ImageRemoveOptions{Force: false, PruneChildren: false})
+				continue
+			}
+
+			_, _ = c.docker.ImageRemove(ctx, mirrorRef, client.ImageRemoveOptions{Force: false, PruneChildren: false})
+		}
 		c.InvalidateImageCache()
 		logger.Logger.Info("通过 mirror 拉取镜像成功",
 			zap.String("originalRef", ref),

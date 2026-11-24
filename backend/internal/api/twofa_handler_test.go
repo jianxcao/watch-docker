@@ -167,3 +167,35 @@ func TestTwoFASetupAndTempTokenOverwriteProtection(t *testing.T) {
 		t.Fatalf("expected 200 when reconfiguring OTP with full token, got %d (%s)", fullInit.Code, fullInit.Body.String())
 	}
 }
+
+func TestExtractRPIDAndOriginBareIPv6(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		host       string
+		originHdr  string
+		wantRPID   string
+		wantOrigin string
+	}{
+		{"[::1]", "", "::1", "http://[::1]"},
+		{"[::1]:8080", "", "::1", "http://[::1]:8080"},
+		{"[::1]", "http://[::1]", "::1", "http://[::1]"},
+		{"localhost:8080", "https://localhost:8080", "localhost", "https://localhost:8080"},
+	}
+
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Host = tc.host
+		if tc.originHdr != "" {
+			req.Header.Set("Origin", tc.originHdr)
+		}
+		c.Request = req
+
+		gotRPID, gotOrigin := extractRPIDAndOrigin(c)
+		if gotRPID != tc.wantRPID || gotOrigin != tc.wantOrigin {
+			t.Fatalf("host=%q origin=%q: got (%q, %q), want (%q, %q)", tc.host, tc.originHdr, gotRPID, gotOrigin, tc.wantRPID, tc.wantOrigin)
+		}
+	}
+}

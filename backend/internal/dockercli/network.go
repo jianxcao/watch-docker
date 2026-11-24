@@ -455,15 +455,15 @@ func (c *Client) ConnectContainer(ctx context.Context, networkID string, req *Ne
 		ipamCfg = &network.EndpointIPAMConfig{}
 		if v4 := strings.TrimSpace(req.IPv4Address); v4 != "" {
 			a, err := netip.ParseAddr(v4)
-			if err != nil {
-				return fmt.Errorf("无效的 IPv4 地址 %q: %w", v4, err)
+			if err != nil || !a.Is4() {
+				return fmt.Errorf("无效的 IPv4 地址 %q", v4)
 			}
 			ipamCfg.IPv4Address = a
 		}
 		if v6 := strings.TrimSpace(req.IPv6Address); v6 != "" {
 			a, err := netip.ParseAddr(v6)
-			if err != nil {
-				return fmt.Errorf("无效的 IPv6 地址 %q: %w", v6, err)
+			if err != nil || !a.Is6() || a.Is4In6() {
+				return fmt.Errorf("无效的 IPv6 地址 %q", v6)
 			}
 			ipamCfg.IPv6Address = a
 		}

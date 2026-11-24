@@ -23,10 +23,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id: string) {
-          if (/node_modules\/(?:vue|vue-router|@vueuse\/core|pinia)\//.test(id)) {
+          if (/node_modules[\\/](?:@vue[\\/]|@vueuse[\\/]|vue[\\/]|vue-router[\\/]|pinia[\\/])/.test(id)) {
             return 'common'
           }
-          if (/node_modules\/(?:naive-ui)\//.test(id)) {
+          if (/node_modules[\\/]naive-ui[\\/]/.test(id)) {
             return 'ui'
           }
         },

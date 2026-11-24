@@ -44,9 +44,10 @@ type StatsManager struct {
 
 	// 后台任务与连接生命周期互斥锁，避免 Add/RemoveConnection 与 Start/StopMonitoring 竞态
 	lifecycleMu     sync.Mutex
-	stopChan        chan struct{} // 停止信号
-	isRunning       bool          // 任务运行状态
-	connectionCount int32         // 当前连接数
+	stopChan        chan struct{}      // 停止信号
+	loopCancel      context.CancelFunc // 取消后台采集循环
+	isRunning       bool               // 任务运行状态
+	connectionCount int32              // 当前连接数
 }
 
 // StatsManagerConfig 统计管理器配置
@@ -96,15 +97,20 @@ func (sm *StatsManager) StartMonitoring(ctx context.Context) {
 	sm.startMonitoringLocked(ctx)
 }
 
-func (sm *StatsManager) startMonitoringLocked(ctx context.Context) {
+func (sm *StatsManager) startMonitoringLocked(parentCtx context.Context) {
 	if sm.isRunning {
 		return
 	}
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	loopCtx, cancel := context.WithCancel(parentCtx)
 	sm.isRunning = true
 	stopCh := make(chan struct{})
 	sm.stopChan = stopCh
+	sm.loopCancel = cancel
 
-	go sm.statsMonitoringLoop(ctx, stopCh)
+	go sm.statsMonitoringLoop(loopCtx, stopCh)
 }
 
 // StopMonitoring 停止后台统计监控
@@ -115,14 +121,19 @@ func (sm *StatsManager) StopMonitoring() {
 }
 
 func (sm *StatsManager) stopMonitoringLocked() {
-	if !sm.isRunning {
-		return
-	}
 	sm.isRunning = false
+	if sm.loopCancel != nil {
+		sm.loopCancel()
+		sm.loopCancel = nil
+	}
 	if sm.stopChan != nil {
 		close(sm.stopChan)
 		sm.stopChan = nil
 	}
+	sm.statsMutex.Lock()
+	clear(sm.statsCache)
+	clear(sm.rawStatsCache)
+	sm.statsMutex.Unlock()
 }
 
 // getContainerStatsLocked 在已持有 statsMutex 读/写锁的情况下读取单个容器统计副本（禁止再次加锁）
@@ -178,6 +189,22 @@ func (sm *StatsManager) GetContainersStats(ctx context.Context, containerIDs []s
 
 // statsMonitoringLoop 后台统计监控循环
 func (sm *StatsManager) statsMonitoringLoop(ctx context.Context, stopCh <-chan struct{}) {
+	defer func() {
+		sm.lifecycleMu.Lock()
+		if sm.stopChan == stopCh {
+			sm.isRunning = false
+			sm.stopChan = nil
+			if sm.loopCancel != nil {
+				sm.loopCancel()
+				sm.loopCancel = nil
+			}
+		}
+		sm.lifecycleMu.Unlock()
+	}()
+
+	// 启动后立即采样一次，避免新连接等待首个 1s tick
+	sm.collectAllContainerStats(ctx)
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -433,7 +460,8 @@ func (sm *StatsManager) AddConnection(ctx context.Context) {
 
 	if sm.connectionCount >= 1 && !sm.isRunning {
 		logger.Logger.Debug("启动容器统计监控")
-		sm.startMonitoringLocked(ctx)
+		// 共享后台采集周期独立于单个请求 ctx，避免首个连接断开导致其他连接采集被取消
+		sm.startMonitoringLocked(context.Background())
 	}
 }
 

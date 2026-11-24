@@ -47,13 +47,25 @@ const detailLockKey = (config: IAxiosRequestConfig, promise: Promise<any>) => {
     config.source?.cancel()
     return p
   }
+  let entry: { promise: Promise<any>; config: IAxiosRequestConfig }
   const trackedPromise = promise.finally(() => {
-    delete lockUrl[lockKey]
+    const entries = lockUrl[lockKey]
+    if (!Array.isArray(entries)) {
+      return
+    }
+    const idx = entries.indexOf(entry)
+    if (idx >= 0) {
+      entries.splice(idx, 1)
+    }
+    if (entries.length === 0) {
+      delete lockUrl[lockKey]
+    }
   })
-  lockUrl[lockKey].push({
+  entry = {
     promise: trackedPromise,
     config,
-  })
+  }
+  lockUrl[lockKey].push(entry)
   return trackedPromise
 }
 
@@ -127,7 +139,9 @@ axios.interceptors.response.use(
       if (!isRedirectingToLogin) {
         isRedirectingToLogin = true
         try {
-          if (router.currentRoute.value.path !== '/login') {
+          if (router.currentRoute.value.path === '/login') {
+            authStore.cancelTwoFA()
+          } else {
             authStore.forceLogout()
           }
         } finally {
@@ -159,10 +173,15 @@ const req = axios.Axios.prototype.request
 /**
  * 覆盖全局request的方法，方便处理异常出现的情况
  */
-axios.Axios.prototype.request = function <R = any>(
+const wrappedRequest = function <R = any>(
   this: unknown,
-  config: IAxiosRequestConfig,
+  configOrUrl: string | IAxiosRequestConfig,
+  configArg?: IAxiosRequestConfig,
 ): Promise<R> {
+  const config: IAxiosRequestConfig =
+    typeof configOrUrl === 'string'
+      ? { ...(configArg || {}), url: configOrUrl }
+      : configOrUrl || {}
   if (config.lockKey) {
     const source = CancelToken.source()
     config.source = source
@@ -171,6 +190,9 @@ axios.Axios.prototype.request = function <R = any>(
   const promise = req.call(this, config)
   return detailLockKey(config, promise) as Promise<R>
 } as typeof req
+
+axios.Axios.prototype.request = wrappedRequest
+axios.request = wrappedRequest.bind(axios) as typeof axios.request
 
 const http = {
   request<P = any, T = any>(config: AxiosRequestConfig<T>) {

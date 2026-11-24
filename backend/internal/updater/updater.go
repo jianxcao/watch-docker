@@ -3,12 +3,14 @@ package updater
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/moby/moby/api/types/container"
@@ -46,10 +48,8 @@ type UpdateProgressCallback struct {
 func (u *Updater) UpdateContainerWithProgress(ctx context.Context, containerID, imageRef string, cb *UpdateProgressCallback) (string, error) {
 	// 先 inspect 获取规范化后的 64 位完整容器 ID 再加锁，确保定时任务与手动触发锁到同一容器
 	canonicalID := containerID
-	var preInspect *container.InspectResponse
 	if info, err := u.docker.InspectContainer(ctx, containerID); err == nil {
 		canonicalID = info.ID
-		preInspect = &info
 	}
 
 	mutex := u.getContainerLock(canonicalID)
@@ -58,20 +58,18 @@ func (u *Updater) UpdateContainerWithProgress(ctx context.Context, containerID, 
 
 	logger.Logger.Info("开始更新容器", zap.String("containerID", canonicalID), zap.String("imageRef", imageRef))
 
-	uctx := &updateContext{
-		containerID: canonicalID,
-		imageRef:    imageRef,
+	// 加锁后重新 inspect，防止等待锁期间容器已被并发更新/删除后继续误拉取
+	lockedInfo, err := u.docker.InspectContainer(ctx, canonicalID)
+	if err != nil {
+		return "", fmt.Errorf("inspect: %w", err)
 	}
 
-	if preInspect == nil {
-		info, err := u.docker.InspectContainer(ctx, canonicalID)
-		if err != nil {
-			return "", fmt.Errorf("inspect: %w", err)
-		}
-		preInspect = &info
+	uctx := &updateContext{
+		containerID: lockedInfo.ID,
+		imageRef:    imageRef,
 	}
-	if uctx.imageRef == "" && preInspect.Config != nil {
-		uctx.imageRef = preInspect.Config.Image
+	if uctx.imageRef == "" && lockedInfo.Config != nil {
+		uctx.imageRef = lockedInfo.Config.Image
 	}
 
 	// 1. 拉取镜像
@@ -130,16 +128,18 @@ func (u *Updater) UpdateContainerWithProgress(ctx context.Context, containerID, 
 		logger.Logger.Info("新容器已创建但未启动（因为旧容器原来是停止状态）", zap.String("containerID", uctx.newID))
 	}
 
-	// 5. 最终清理旧容器（不删匿名卷，因为匿名卷已被新容器继承）及无用旧镜像
+	// 5. 最终清理旧容器与旧镜像（脱离调用方 ctx，避免新容器已启动后因请求超时遗留 *-old-* 备份容器）
 	if cb != nil && cb.OnStep != nil {
 		cb.OnStep("cleanup", "正在清理旧容器")
 	}
+	cleanCtx, cleanCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cleanCancel()
 	if !stoppedAutoRemoved {
-		u.finalCleanup(ctx, uctx)
+		u.finalCleanup(cleanCtx, uctx)
 	} else {
 		// --rm 容器已由 daemon 自动删除，仅尝试清理不再被使用的旧镜像
 		if uctx.oldInfo.Image != "" {
-			_ = u.docker.SafeRemoveImage(ctx, uctx.oldInfo.Image)
+			_ = u.docker.SafeRemoveImage(cleanCtx, uctx.oldInfo.Image)
 		}
 	}
 
@@ -170,6 +170,25 @@ func (u *Updater) pullImage(ctx context.Context, imageRef string) error {
 	return nil
 }
 
+func (u *Updater) restartOldIfStopped(ctx context.Context, uctx *updateContext) {
+	if !uctx.wasRunning {
+		return
+	}
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	info, err := u.docker.InspectContainer(rbCtx, uctx.containerID)
+	if err != nil {
+		return
+	}
+	if info.State == nil || !info.State.Running {
+		if sErr := u.docker.StartContainer(rbCtx, uctx.containerID); sErr != nil {
+			logger.Logger.Error("prepare 失败后恢复启动旧容器失败", zap.String("containerID", uctx.containerID), zap.Error(sErr))
+		} else {
+			logger.Logger.Info("prepare 失败后已恢复启动旧容器", zap.String("containerID", uctx.containerID))
+		}
+	}
+}
+
 // prepareOldContainer 读取信息、在停止前保存旧名称（兼容 --rm 容器）、停止并重命名旧容器。
 func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) (autoRemoved bool, err error) {
 	oldInfo, err := u.docker.InspectContainer(ctx, uctx.containerID)
@@ -193,24 +212,42 @@ func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) 
 
 	if uctx.wasRunning {
 		if err = u.docker.StopContainer(ctx, uctx.containerID, 100); err != nil {
+			u.restartOldIfStopped(ctx, uctx)
 			return false, fmt.Errorf("stop: %w", err)
 		}
 		if err = u.docker.WaitContainerStopped(ctx, uctx.containerID, 30); err != nil {
+			if ctx.Err() != nil {
+				u.restartOldIfStopped(ctx, uctx)
+				return false, fmt.Errorf("stop wait: %w", err)
+			}
 			logger.Logger.Warn("等待容器停止异常，继续检查", zap.String("containerID", uctx.containerID), zap.Error(err))
 		}
 	}
 
-	// 若旧容器配置了 AutoRemove(--rm)，停止后会被 daemon 自动移除，此时直接进入重建流程
-	if _, err := u.docker.InspectContainer(ctx, uctx.containerID); err != nil {
-		logger.Logger.Info("旧容器停止后已不存在（可能为 --rm 自动移除），直接按保存配置重建",
-			zap.String("containerID", uctx.containerID),
-			zap.String("oldName", uctx.oldName))
-		return true, nil
+	if err := ctx.Err(); err != nil {
+		u.restartOldIfStopped(ctx, uctx)
+		return false, err
 	}
 
-	uctx.backupName = fmt.Sprintf("%s-old-%d", uctx.oldName, time.Now().Unix())
+	// 使用脱离调用方 ctx 的检查上下文，仅确认 errdefs.IsNotFound 时才判定为 --rm 自动移除
+	checkCtx, checkCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	_, inspErr := u.docker.InspectContainer(checkCtx, uctx.containerID)
+	checkCancel()
+	if inspErr != nil {
+		if errdefs.IsNotFound(inspErr) {
+			logger.Logger.Info("旧容器停止后已不存在（可能为 --rm 自动移除），直接按保存配置重建",
+				zap.String("containerID", uctx.containerID),
+				zap.String("oldName", uctx.oldName))
+			return true, nil
+		}
+		u.restartOldIfStopped(ctx, uctx)
+		return false, fmt.Errorf("post-stop inspect: %w", inspErr)
+	}
+
+	uctx.backupName = fmt.Sprintf("%s-old-%d", uctx.oldName, time.Now().UnixNano())
 	if uctx.oldName != "" {
 		if err = u.docker.RenameContainer(ctx, uctx.containerID, uctx.backupName); err != nil {
+			u.restartOldIfStopped(ctx, uctx)
 			return false, fmt.Errorf("重命名旧容器失败: %w", err)
 		}
 	}
@@ -218,20 +255,58 @@ func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) 
 	return false, nil
 }
 
+func splitBindSourceAndTarget(bind string) (source, target string) {
+	parts := strings.Split(bind, ":")
+	if len(parts) < 2 {
+		return "", ""
+	}
+	// 兼容 Windows 宿主机盘符路径 (e.g. C:\data:/app[:ro])
+	if len(parts[0]) == 1 && len(parts) >= 3 && (strings.HasPrefix(parts[1], "\\") || strings.HasPrefix(parts[1], "/")) {
+		return parts[0] + ":" + parts[1], parts[2]
+	}
+	return parts[0], parts[1]
+}
+
+func cloneExposedPorts(src network.PortSet) network.PortSet {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(network.PortSet, len(src))
+	for p := range src {
+		out[p] = struct{}{}
+	}
+	return out
+}
+
 func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, map[string]*network.EndpointSettings) {
 	// 1. 克隆并清洗 Container Config，剥离与旧镜像默认值完全相同的字段
 	var newCfg container.Config
 	if uctx.oldInfo.Config != nil {
 		newCfg = *uctx.oldInfo.Config
+		if uctx.oldInfo.Config.Labels != nil {
+			newCfg.Labels = maps.Clone(uctx.oldInfo.Config.Labels)
+		}
+		newCfg.ExposedPorts = cloneExposedPorts(uctx.oldInfo.Config.ExposedPorts)
 	}
 	newCfg.Image = uctx.imageRef
 
+	var imgExposed map[string]struct{}
 	if uctx.oldImage != nil && uctx.oldImage.Config != nil {
 		imgCfg := uctx.oldImage.Config
-		if reflect.DeepEqual(newCfg.Entrypoint, imgCfg.Entrypoint) {
+		imgExposed = imgCfg.ExposedPorts
+
+		// 保留用户显式 --entrypoint "" 对镜像默认 Entrypoint 的清空覆盖
+		entryOverridden := false
+		if len(imgCfg.Entrypoint) > 0 && len(newCfg.Entrypoint) == 0 {
+			newCfg.Entrypoint = []string{""}
+			entryOverridden = true
+		} else if reflect.DeepEqual(newCfg.Entrypoint, imgCfg.Entrypoint) {
 			newCfg.Entrypoint = nil
+		} else if len(newCfg.Entrypoint) > 0 {
+			entryOverridden = true
 		}
-		if reflect.DeepEqual(newCfg.Cmd, imgCfg.Cmd) {
+
+		if !entryOverridden && reflect.DeepEqual(newCfg.Cmd, imgCfg.Cmd) {
 			newCfg.Cmd = nil
 		}
 		if newCfg.WorkingDir == imgCfg.WorkingDir {
@@ -256,6 +331,17 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 			}
 			newCfg.Env = filteredEnv
 		}
+		// 剥离与旧镜像完全相同的 LABEL，避免覆盖新镜像版本元信息
+		if len(imgCfg.Labels) > 0 && len(newCfg.Labels) > 0 {
+			for k, v := range newCfg.Labels {
+				if strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "watchdocker.") {
+					continue
+				}
+				if imgVal, ok := imgCfg.Labels[k]; ok && imgVal == v {
+					delete(newCfg.Labels, k)
+				}
+			}
+		}
 	}
 
 	// 2. 克隆 HostConfig 并显式迁移匿名卷挂载，确保数据不丢失
@@ -264,86 +350,145 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 		newHostCfg = *uctx.oldInfo.HostConfig
 		newHostCfg.Mounts = append([]mount.Mount(nil), uctx.oldInfo.HostConfig.Mounts...)
 		newHostCfg.Binds = append([]string(nil), uctx.oldInfo.HostConfig.Binds...)
+		if uctx.oldInfo.HostConfig.PortBindings != nil {
+			newHostCfg.PortBindings = maps.Clone(uctx.oldInfo.HostConfig.PortBindings)
+		}
 	}
 
 	existingTargets := make(map[string]struct{})
+	existingSources := make(map[string]struct{})
 	for _, m := range newHostCfg.Mounts {
 		if m.Target != "" {
 			existingTargets[m.Target] = struct{}{}
 		}
+		if m.Source != "" {
+			existingSources[m.Source] = struct{}{}
+		}
 	}
 	for _, b := range newHostCfg.Binds {
-		parts := strings.Split(b, ":")
-		if len(parts) >= 2 && parts[1] != "" {
-			existingTargets[parts[1]] = struct{}{}
+		src, tgt := splitBindSourceAndTarget(b)
+		if tgt != "" {
+			existingTargets[tgt] = struct{}{}
+		}
+		if src != "" {
+			existingSources[src] = struct{}{}
 		}
 	}
 
-	for _, m := range uctx.oldInfo.Mounts {
-		if m.Type == mount.TypeVolume && m.Name != "" && m.Destination != "" {
-			if _, ok := existingTargets[m.Destination]; !ok {
-				newHostCfg.Mounts = append(newHostCfg.Mounts, mount.Mount{
-					Type:     mount.TypeVolume,
-					Source:   m.Name,
-					Target:   m.Destination,
-					ReadOnly: !m.RW,
-				})
-				existingTargets[m.Destination] = struct{}{}
+	if !newHostCfg.AutoRemove && len(newHostCfg.VolumesFrom) == 0 {
+		for _, m := range uctx.oldInfo.Mounts {
+			if m.Type == mount.TypeVolume && m.Name != "" && m.Destination != "" {
+				_, hasTarget := existingTargets[m.Destination]
+				_, hasSource := existingSources[m.Name]
+				if !hasTarget && !hasSource {
+					newHostCfg.Mounts = append(newHostCfg.Mounts, mount.Mount{
+						Type:     mount.TypeVolume,
+						Source:   m.Name,
+						Target:   m.Destination,
+						ReadOnly: !m.RW,
+					})
+					existingTargets[m.Destination] = struct{}{}
+					existingSources[m.Name] = struct{}{}
+				}
 			}
 		}
 	}
 
-	// 3. 构造干净的网络配置：处理 host/none/container:<id> 及多网络附加
+	// 3. 构造干净的网络配置：处理 container:<id>/none/host 端口冲突、保留原主网络与 bridge 约束
 	var netCfg *network.NetworkingConfig
 	var extraNetworks map[string]*network.EndpointSettings
 
 	netMode := newHostCfg.NetworkMode
-	if netMode.IsContainer() {
-		newCfg.Hostname = ""
-		newCfg.Domainname = ""
-	} else if !netMode.IsHost() && !netMode.IsNone() && uctx.oldInfo.NetworkSettings != nil && len(uctx.oldInfo.NetworkSettings.Networks) > 0 {
-		shortOld := uctx.containerID
-		if len(shortOld) > 12 {
-			shortOld = shortOld[:12]
+	if netMode.IsContainer() || netMode.IsNone() {
+		newCfg.ExposedPorts = nil
+		newHostCfg.PortBindings = nil
+		newHostCfg.PublishAllPorts = false
+		if netMode.IsContainer() {
+			newCfg.Hostname = ""
+			newCfg.Domainname = ""
 		}
-
-		netNames := make([]string, 0, len(uctx.oldInfo.NetworkSettings.Networks))
-		for name := range uctx.oldInfo.NetworkSettings.Networks {
-			netNames = append(netNames, name)
-		}
-		sort.Strings(netNames)
-
-		sanitizeEndpoint := func(ep *network.EndpointSettings) *network.EndpointSettings {
-			if ep == nil {
-				return &network.EndpointSettings{}
-			}
-			cleanEp := &network.EndpointSettings{
-				Links:      append([]string(nil), ep.Links...),
-				DriverOpts: ep.DriverOpts,
-				GwPriority: ep.GwPriority,
-			}
-			if ep.IPAMConfig != nil {
-				cleanEp.IPAMConfig = ep.IPAMConfig.Copy()
-			}
-			for _, alias := range ep.Aliases {
-				if alias != "" && alias != shortOld && alias != uctx.containerID {
-					cleanEp.Aliases = append(cleanEp.Aliases, alias)
+	} else {
+		// 仅保留用户在 PortBindings 引用的端口或镜像本身未声明的额外 EXPOSE 端口
+		if len(imgExposed) > 0 && len(newCfg.ExposedPorts) > 0 {
+			for rawPort := range imgExposed {
+				portSpec := rawPort
+				if !strings.Contains(portSpec, "/") {
+					portSpec += "/tcp"
+				}
+				if p, err := network.ParsePort(portSpec); err == nil {
+					if _, bound := newHostCfg.PortBindings[p]; !bound {
+						delete(newCfg.ExposedPorts, p)
+					}
 				}
 			}
-			return cleanEp
+			if len(newCfg.ExposedPorts) == 0 {
+				newCfg.ExposedPorts = nil
+			}
 		}
 
-		primaryName := netNames[0]
-		newHostCfg.NetworkMode = container.NetworkMode(primaryName)
-		netCfg = &network.NetworkingConfig{
-			EndpointsConfig: map[string]*network.EndpointSettings{
-				primaryName: sanitizeEndpoint(uctx.oldInfo.NetworkSettings.Networks[primaryName]),
-			},
-		}
-		if len(netNames) > 1 {
-			extraNetworks = make(map[string]*network.EndpointSettings, len(netNames)-1)
-			for _, name := range netNames[1:] {
-				extraNetworks[name] = sanitizeEndpoint(uctx.oldInfo.NetworkSettings.Networks[name])
+		if !netMode.IsHost() && uctx.oldInfo.NetworkSettings != nil && len(uctx.oldInfo.NetworkSettings.Networks) > 0 {
+			shortOld := uctx.containerID
+			if len(shortOld) > 12 {
+				shortOld = shortOld[:12]
+			}
+
+			netNames := make([]string, 0, len(uctx.oldInfo.NetworkSettings.Networks))
+			for name := range uctx.oldInfo.NetworkSettings.Networks {
+				netNames = append(netNames, name)
+			}
+			sort.Strings(netNames)
+
+			origPrimary := strings.TrimSpace(string(netMode))
+			if origPrimary == "" || origPrimary == "default" {
+				if _, hasBridge := uctx.oldInfo.NetworkSettings.Networks["bridge"]; hasBridge {
+					origPrimary = "bridge"
+				}
+			}
+			primaryName := netNames[0]
+			if _, ok := uctx.oldInfo.NetworkSettings.Networks[origPrimary]; ok {
+				primaryName = origPrimary
+			}
+			newHostCfg.NetworkMode = container.NetworkMode(primaryName)
+
+			sanitizeEndpoint := func(netName string, ep *network.EndpointSettings) *network.EndpointSettings {
+				if ep == nil {
+					return &network.EndpointSettings{}
+				}
+				if netName == "bridge" {
+					// Docker 26+ 禁止默认 bridge 网络携带 Aliases/IPAMConfig/Links
+					return &network.EndpointSettings{
+						DriverOpts: maps.Clone(ep.DriverOpts),
+					}
+				}
+				cleanEp := &network.EndpointSettings{
+					Links:      append([]string(nil), ep.Links...),
+					DriverOpts: maps.Clone(ep.DriverOpts),
+					GwPriority: ep.GwPriority,
+				}
+				if ep.IPAMConfig != nil {
+					cleanEp.IPAMConfig = ep.IPAMConfig.Copy()
+				}
+				for _, alias := range ep.Aliases {
+					if alias != "" && alias != shortOld && alias != uctx.containerID {
+						cleanEp.Aliases = append(cleanEp.Aliases, alias)
+					}
+				}
+				return cleanEp
+			}
+
+			netCfg = &network.NetworkingConfig{
+				EndpointsConfig: map[string]*network.EndpointSettings{
+					primaryName: sanitizeEndpoint(primaryName, uctx.oldInfo.NetworkSettings.Networks[primaryName]),
+				},
+			}
+			if len(netNames) > 1 {
+				extraNetworks = make(map[string]*network.EndpointSettings, len(netNames)-1)
+				for _, name := range netNames {
+					if name == primaryName {
+						continue
+					}
+					extraNetworks[name] = sanitizeEndpoint(name, uctx.oldInfo.NetworkSettings.Networks[name])
+				}
 			}
 		}
 	}
@@ -392,17 +537,24 @@ func (u *Updater) createContainerWithRetry(ctx context.Context, uctx *updateCont
 		return fmt.Errorf("create: 创建新容器多次重试后仍失败: %w", createErr)
 	}
 
-	for netName, ep := range uctx.extraNetworks {
-		if err := u.docker.ConnectContainerToNetwork(ctx, netName, uctx.newID, ep); err != nil {
-			logger.Logger.Error("附加额外网络失败",
-				zap.String("network", netName),
-				zap.String("newContainerID", uctx.newID),
-				zap.Error(err))
-			// 清理未完整创建的新容器，交由外层回滚
-			rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-			_ = u.docker.RemoveContainer(rbCtx, uctx.newID, true)
-			cancel()
-			return fmt.Errorf("create: 连接附加网络 %s 失败: %w", netName, err)
+	if len(uctx.extraNetworks) > 0 {
+		extraNames := make([]string, 0, len(uctx.extraNetworks))
+		for netName := range uctx.extraNetworks {
+			extraNames = append(extraNames, netName)
+		}
+		sort.Strings(extraNames)
+		for _, netName := range extraNames {
+			if err := u.docker.ConnectContainerToNetwork(ctx, netName, uctx.newID, uctx.extraNetworks[netName]); err != nil {
+				logger.Logger.Error("附加额外网络失败",
+					zap.String("network", netName),
+					zap.String("newContainerID", uctx.newID),
+					zap.Error(err))
+				// 清理未完整创建的新容器，交由外层回滚
+				rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+				_ = u.docker.RemoveContainer(rbCtx, uctx.newID, true)
+				cancel()
+				return fmt.Errorf("create: 连接附加网络 %s 失败: %w", netName, err)
+			}
 		}
 	}
 

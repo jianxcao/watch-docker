@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseShellArgs,
+  transformEnvForm,
+  transformLabelForm,
   transformNetworkForm,
   transformPortForm,
   transformRuntimeResourceForm,
+  transformVolumeForm,
 } from './transformer'
 
 describe('parseShellArgs', () => {
@@ -110,5 +113,93 @@ describe('transformRuntimeResourceForm', () => {
     })
     expect(res.autoRemove).toBe(true)
     expect(res.restartPolicy).toEqual({ name: '', maximumRetryCount: 0 })
+  })
+})
+
+describe('transformEnvForm / transformVolumeForm / transformLabelForm', () => {
+  it('derives env from envList, skips empty keys, and preserves value whitespace', () => {
+    const res = transformEnvForm({
+      env: ['STALE=ignored'],
+      envList: [
+        { key: '  GREETING ', value: '  hello world  ' },
+        { key: '   ', value: 'skip' },
+      ],
+      envText: '',
+    })
+    expect(res.env).toEqual(['GREETING=  hello world  '])
+  })
+
+  it('derives binds from volumeList without waiting for blur', () => {
+    const res = transformVolumeForm({
+      binds: [],
+      volumeList: [
+        { source: '/data/app ', target: ' /app', readonly: true },
+        { source: '', target: '/skip', readonly: false },
+      ],
+      volumeText: '',
+    })
+    expect(res.binds).toEqual(['/data/app:/app:ro'])
+  })
+
+  it('derives labels from labelList without waiting for blur', () => {
+    const res = transformLabelForm({
+      labelList: [
+        { key: ' env ', value: 'prod' },
+        { key: '', value: 'ignored' },
+      ],
+      labels: {},
+    })
+    expect(res.labels).toEqual({ env: 'prod' })
+  })
+})
+
+describe('transformNetworkForm host/none/bridge handling', () => {
+  it('sets networkMode and clears publishAllPorts and networkConfig for host mode', () => {
+    const res = transformNetworkForm(
+      {
+        configMode: 'custom',
+        publishAllPorts: true,
+        dns: [],
+        dnsSearch: [],
+        dnsOptions: [],
+        extraHosts: [],
+        customNetworks: [
+          {
+            name: 'host',
+            exists: true,
+          },
+        ],
+      },
+      true,
+      'host-app',
+    )
+    expect(res.networkMode).toBe('host')
+    expect(res.publishAllPorts).toBe(false)
+    expect(res.networksToCreate).toBeUndefined()
+    expect(res.networkConfig).toBeUndefined()
+  })
+
+  it('omits aliases when connecting directly to default bridge network in custom mode', () => {
+    const res = transformNetworkForm(
+      {
+        configMode: 'custom',
+        publishAllPorts: false,
+        dns: [],
+        dnsSearch: [],
+        dnsOptions: [],
+        extraHosts: [],
+        customNetworks: [
+          {
+            name: 'bridge',
+            exists: true,
+            aliases: ['ignored-alias'],
+          },
+        ],
+      },
+      false,
+      'bridge-app',
+    )
+    expect(res.networkMode).toBe('bridge')
+    expect(res.networkConfig?.endpointsConfig?.bridge?.aliases).toBeUndefined()
   })
 })

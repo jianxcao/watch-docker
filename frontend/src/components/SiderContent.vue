@@ -21,7 +21,7 @@
       <n-space align="center" justify="space-between">
         <n-space align="center" size="small">
           <n-avatar size="small" :style="{ backgroundColor: '#18a058' }">
-            {{ authStore.username.charAt(0).toUpperCase() }}
+            {{ (authStore.username || '?').charAt(0).toUpperCase() }}
           </n-avatar>
           <n-text>{{ authStore.username }}</n-text>
         </n-space>
@@ -38,7 +38,16 @@
     <!-- 底部状态 -->
     <div class="sider-footer">
       <div class="flex items-center justify-center gap-2">
-        <n-tag :type="healthStatus === 'healthy' ? 'success' : 'error'" size="small">
+        <n-tag
+          :type="
+            healthStatus === 'healthy'
+              ? 'success'
+              : healthStatus === 'unhealthy'
+                ? 'error'
+                : 'warning'
+          "
+          size="small"
+        >
           {{ healthText }}
         </n-tag>
         <n-text depth="3" style="font-size: 12px">
@@ -80,6 +89,9 @@ import { useAppStore } from '@/store/app'
 import { useAuthStore } from '@/store/auth'
 import { useContainerStore } from '@/store/container'
 import { useImageStore } from '@/store/image'
+import { useComposeStore } from '@/store/compose'
+import { useVolumeStore } from '@/store/volume'
+import { useNetworkStore } from '@/store/network'
 import { useSettingStore } from '@/store/setting'
 import type { MenuOption } from 'naive-ui'
 import { useMessage } from 'naive-ui'
@@ -114,10 +126,13 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const containerStore = useContainerStore()
 const imageStore = useImageStore()
+const composeStore = useComposeStore()
+const volumeStore = useVolumeStore()
+const networkStore = useNetworkStore()
 const settingStore = useSettingStore()
 
 // 版本信息
-const version = computed(() => settingStore.systemInfo?.version.version)
+const version = computed(() => settingStore.systemInfo?.version?.version || '')
 // 当前活跃的菜单项
 const activeKey = computed(() => {
   const path = route.path
@@ -259,13 +274,22 @@ const handleMenuSelect = (key: string) => {
 const handleRefresh = async () => {
   appStore.setGlobalLoading(true)
   try {
+    await appStore.checkHealth()
     // 根据当前页面刷新相应数据
     if (activeKey.value === 'containers') {
       await containerStore.fetchContainers(false, true)
     } else if (activeKey.value === 'images') {
       await imageStore.fetchImages()
+    } else if (activeKey.value === 'compose') {
+      await composeStore.fetchProjects(true)
+    } else if (activeKey.value === 'volumes') {
+      await volumeStore.fetchVolumes()
+    } else if (activeKey.value === 'networks') {
+      await networkStore.fetchNetworks()
+    } else if (activeKey.value === 'settings') {
+      await settingStore.fetchSystemInfo(true)
     } else {
-      // 首页刷新所有数据
+      // 首页等页面刷新核心数据
       await Promise.all([containerStore.fetchContainers(false, true), imageStore.fetchImages()])
     }
     appStore.updateRefreshTime()

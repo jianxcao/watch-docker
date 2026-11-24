@@ -27,6 +27,9 @@
         />
       </div>
 
+      <!-- 全局错误提示 -->
+      <n-alert v-if="globalError" type="error" :title="globalError" />
+
       <!-- 容器列表 -->
       <div class="container-list" v-if="containerList.length > 0">
         <div
@@ -103,6 +106,7 @@ import { ref, computed, reactive, watch } from 'vue'
 import { useWebSocket } from '@vueuse/core'
 import { useSettingStore } from '@/store/setting'
 import { useContainerStore } from '@/store/container'
+import { formatBytes } from '@/common/utils'
 import { CheckmarkCircleOutline, CloseCircleOutline } from '@vicons/ionicons5'
 
 interface ContainerUpdateItem {
@@ -127,7 +131,23 @@ const totalContainers = ref(0)
 const isStarted = ref(false)
 const isConnecting = ref(false)
 const isAllDone = ref(false)
+const globalError = ref('')
 const phase = ref<'idle' | 'scanning' | 'updating' | 'done'>('idle')
+
+const markInFlightFailed = (errMsg: string) => {
+  if (!globalError.value) {
+    globalError.value = errMsg
+  }
+  for (const item of containerList) {
+    if (item.status === 'updating') {
+      item.status = 'error'
+      item.error = item.error || errMsg
+      item.stepMessage = undefined
+    }
+  }
+  isAllDone.value = true
+  phase.value = 'done'
+}
 
 const wsUrl = computed(() => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -155,15 +175,13 @@ const { open, close: wsClose } = useWebSocket(wsUrl, {
   onError() {
     isConnecting.value = false
     if (isStarted.value && !isAllDone.value) {
-      isAllDone.value = true
-      phase.value = 'done'
+      markInFlightFailed('WebSocket 连接错误')
     }
   },
   onDisconnected() {
     isConnecting.value = false
     if (isStarted.value && !isAllDone.value) {
-      isAllDone.value = true
-      phase.value = 'done'
+      markInFlightFailed('更新连接意外断开')
     }
   },
 })
@@ -181,6 +199,9 @@ const overallPercent = computed(() => {
 
 const overallStatus = computed(() => {
   if (isAllDone.value) {
+    if (globalError.value) {
+      return 'error'
+    }
     return containerList.some((c) => c.status === 'error') ? 'warning' : 'success'
   }
   return 'default'
@@ -190,7 +211,7 @@ const canClose = computed(() => !isStarted.value || isAllDone.value)
 
 const modalTitle = computed(() => {
   if (isAllDone.value) {
-    return '批量更新完成'
+    return globalError.value ? '批量更新失败' : '批量更新完成'
   }
   if (phase.value === 'scanning') {
     return '批量更新 - 扫描中'
@@ -209,6 +230,9 @@ const progressLabel = computed(() => {
     return '更新进度'
   }
   if (isAllDone.value) {
+    if (globalError.value) {
+      return `更新中断：${globalError.value}`
+    }
     const successCount = containerList.filter((c) => c.status === 'success').length
     const failCount = containerList.filter((c) => c.status === 'error').length
     if (failCount > 0) {
@@ -301,13 +325,13 @@ function handleMessage(msg: any) {
       break
 
     case 'error':
-      isAllDone.value = true
-      phase.value = 'done'
+      markInFlightFailed(msg.message || msg.error || '批量更新失败')
       break
   }
 }
 
 function startUpdate() {
+  globalError.value = ''
   isStarted.value = true
   isConnecting.value = true
   open()
@@ -315,16 +339,6 @@ function startUpdate() {
 
 function handleClose() {
   modalVisible.value = false
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) {
-    return '0 B'
-  }
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
 function getTagType(status: string) {
@@ -363,6 +377,7 @@ watch(modalVisible, (val) => {
     isStarted.value = false
     isConnecting.value = false
     isAllDone.value = false
+    globalError.value = ''
     phase.value = 'idle'
   } else {
     wsClose()

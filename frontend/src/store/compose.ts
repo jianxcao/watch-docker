@@ -185,22 +185,6 @@ export const useComposeStore = defineStore('compose', () => {
     }
   }
 
-  // 获取项目日志
-  const getProjectLogs = async (projectName: string, lines = 100) => {
-    try {
-      const response = await composeApi.getProjectLogs(projectName, lines)
-      if (response.code === 0) {
-        return response.data.logs || ''
-      } else {
-        throw new Error(response.msg || '获取日志失败')
-      }
-    } catch (error) {
-      console.error('获取项目日志失败:', error)
-      message.error(`获取项目日志失败: ${(error as Error).message}`)
-      throw error
-    }
-  }
-
   // 获取项目的 YAML 内容
   const getProjectYaml = async (projectName: string, composeFile: string) => {
     try {
@@ -226,6 +210,7 @@ export const useComposeStore = defineStore('compose', () => {
   const clearAll = () => {
     projects.value = []
     operationLoading.value = {}
+    operationStates.clear()
     loading.value = false
   }
 
@@ -256,7 +241,6 @@ export const useComposeStore = defineStore('compose', () => {
     deleteProject,
     createProject,
     saveNewProject,
-    getProjectLogs,
     getProjectYaml,
     clearAll,
   }

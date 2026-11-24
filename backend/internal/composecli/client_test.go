@@ -143,17 +143,21 @@ func TestComposePathTraversalBlocked(t *testing.T) {
 	if _, err := c.GetProjectYaml(outsideCompose); err == nil {
 		t.Fatalf("expected GetProjectYaml outside APP_PATH to fail")
 	}
-	if err := c.DeleteProject(context.Background(), outsideCompose, StatusDraft); err == nil {
+	if err := c.DeleteProject(context.Background(), "", outsideCompose, StatusDraft); err == nil {
 		t.Fatalf("expected DeleteProject outside APP_PATH to fail")
 	}
 	if _, err := os.Stat(outsideCompose); err != nil {
 		t.Fatalf("expected outside compose directory to remain intact, stat err=%v", err)
 	}
 
-	// 3. Root APP_PATH itself cannot be deleted via compose.yaml inside root
+	// 3. Root APP_PATH and nested depth-2 subdirs cannot be used/deleted
 	rootCompose := filepath.Join(appDir, "docker-compose.yaml")
 	if _, _, err := ValidateComposeFilePath(rootCompose); err == nil {
 		t.Fatalf("expected compose file directly under APP_PATH root to be rejected")
+	}
+	nestedCompose := filepath.Join(appDir, "a", "b", "docker-compose.yaml")
+	if _, _, err := ValidateComposeFilePath(nestedCompose); err == nil {
+		t.Fatalf("expected nested depth-2 compose path under APP_PATH to be rejected")
 	}
 
 	// 4. Valid project subdir succeeds
@@ -163,5 +167,31 @@ func TestComposePathTraversalBlocked(t *testing.T) {
 	}
 	if _, _, err := ValidateComposeFilePath(saved); err != nil {
 		t.Fatalf("expected ValidateComposeFilePath(%q) to succeed, got %v", saved, err)
+	}
+
+	// 5. Symlinked compose file and symlinked project dir are rejected
+	symDir := filepath.Join(appDir, "sym-proj")
+	if err := os.MkdirAll(symDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	symCompose := filepath.Join(symDir, "docker-compose.yaml")
+	if err := os.Symlink(outsideCompose, symCompose); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ValidateComposeFilePath(symCompose); err == nil {
+		t.Fatalf("expected symlink compose file to be rejected")
+	}
+	if _, err := c.GetProjectYaml(symCompose); err == nil {
+		t.Fatalf("expected GetProjectYaml on symlink compose file to fail")
+	}
+	if err := c.DeleteProject(context.Background(), "sym-proj", symCompose, StatusDraft); err == nil {
+		t.Fatalf("expected DeleteProject(StatusDraft) on symlink compose file to fail")
+	}
+	symProjDir := filepath.Join(appDir, "sym-dir-link")
+	if err := os.Symlink(outsideDir, symProjDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateProjectDir(symProjDir); err == nil {
+		t.Fatalf("expected symlink project directory to be rejected")
 	}
 }

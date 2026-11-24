@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -138,4 +139,96 @@ func TestUpdateAtomicPermissionsAndConcurrency(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestConfigLoadPortOverrideEmptyYAMLAndViperEnv(t *testing.T) {
+	cfgPath := setupTempConfigEnv(t)
+
+	// 写入 0 字节文件与旧 addr 测试
+	if err := os.WriteFile(cfgPath, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PORT", "19090")
+	t.Setenv("WATCH_SCAN_CONCURRENCY", "7")
+
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load on empty YAML failed: %v", err)
+	}
+	if loaded.Server.Addr != ":19090" {
+		t.Fatalf("expected Server.Addr=:19090 from PORT, got %q", loaded.Server.Addr)
+	}
+	if loaded.Scan.Concurrency != 7 {
+		t.Fatalf("expected Scan.Concurrency=7 from env on empty YAML, got %d", loaded.Scan.Concurrency)
+	}
+	// 验证再次重启带新 PORT 时能覆盖已写入的 server.addr
+	t.Setenv("PORT", "28080")
+	loaded2, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("second Load with new PORT failed: %v", err)
+	}
+	if loaded2.Server.Addr != ":28080" {
+		t.Fatalf("expected new PORT=:28080 to override persisted addr, got %q", loaded2.Server.Addr)
+	}
+}
+
+func TestMergeMaskedSecretsStrictMatchingAndValidate(t *testing.T) {
+	prev := defaults()
+	prev.Proxy.URL = "http://alice:proxy-pass@127.0.0.1:7890"
+	prev.Notify.URL = "https://user:notify-pass@notify.example.com/hook"
+	prev.Registry.Auth = []RegistryAuth{
+		{Host: "ghcr.io", Username: "alice", Token: "secret-a"},
+	}
+
+	masked := prev.MaskedCopy()
+	if masked.Notify.URL == prev.Notify.URL || !strings.Contains(masked.Notify.URL, "user:") {
+		t.Fatalf("expected Notify.URL password masked while keeping username, got %q", masked.Notify.URL)
+	}
+
+	// 修改 Proxy 主机名时不应恢复旧密码，且 Validate 必须拦截占位符
+	changedProxy := masked.Clone()
+	changedProxy.Proxy.URL = "http://alice:" + MaskedSecretPlaceholder + "@evil.example:7890"
+	MergeMaskedSecrets(changedProxy, prev)
+	if !strings.Contains(changedProxy.Proxy.URL, MaskedSecretPlaceholder) && !strings.Contains(changedProxy.Proxy.URL, "%2A%2A%2A%2A%2A%2A") {
+		// unchanged placeholder should not become "proxy-pass"
+	}
+	if strings.Contains(changedProxy.Proxy.URL, "proxy-pass") {
+		t.Fatalf("must not restore proxy password when host changed: %q", changedProxy.Proxy.URL)
+	}
+	if err := Validate(changedProxy); err == nil {
+		t.Fatalf("expected Validate to reject un-updated masked proxy password")
+	}
+
+	// 修改 Registry.Auth 用户名时不能按切片索引误恢复旧 Token
+	changedReg := masked.Clone()
+	changedReg.Registry.Auth[0].Username = "bob"
+	MergeMaskedSecrets(changedReg, prev)
+	if changedReg.Registry.Auth[0].Token == "secret-a" {
+		t.Fatalf("must not restore registry token across different username")
+	}
+	if err := Validate(changedReg); err == nil {
+		t.Fatalf("expected Validate to reject un-updated masked registry token")
+	}
+
+	// Cron 与 URL scheme 校验
+	badCron := defaults()
+	badCron.Scan.Cron = "not-a-cron"
+	if err := Validate(badCron); err == nil {
+		t.Fatalf("expected Validate to reject invalid cron expression")
+	}
+	goodCron6 := defaults()
+	goodCron6.Scan.Cron = "0 */5 * * * *"
+	if err := Validate(goodCron6); err != nil {
+		t.Fatalf("expected 6-field cron to validate, got %v", err)
+	}
+	badProxyScheme := defaults()
+	badProxyScheme.Proxy.URL = "file:///etc/passwd"
+	if err := Validate(badProxyScheme); err == nil {
+		t.Fatalf("expected Validate to reject file:// proxy scheme")
+	}
+	goodSocksProxy := defaults()
+	goodSocksProxy.Proxy.URL = "socks5://127.0.0.1:1080"
+	if err := Validate(goodSocksProxy); err != nil {
+		t.Fatalf("expected socks5 proxy to validate, got %v", err)
+	}
 }

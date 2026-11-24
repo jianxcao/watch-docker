@@ -61,7 +61,11 @@ if [ -S /var/run/docker.sock ]; then
         SOCK_GRP=$(awk -F: -v gid="$SOCK_GID" '$3 == gid { print $1; exit }' /etc/group)
         if [ -z "$SOCK_GRP" ]; then
             SOCK_GRP="dockersock"
-            groupadd -g "$SOCK_GID" "$SOCK_GRP"
+            if getent group "$SOCK_GRP" >/dev/null 2>&1; then
+                groupmod -o -g "$SOCK_GID" "$SOCK_GRP"
+            else
+                groupadd -o -g "$SOCK_GID" "$SOCK_GRP"
+            fi
         fi
         usermod -aG "$SOCK_GRP" watch-docker
     fi

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -55,8 +56,32 @@ func cleanContainerPath(rawPath string) (string, error) {
 	return cleaned, nil
 }
 
-// ExecContainer 在容器中执行命令并返回 stdout 输出
+var errExecOutputLimit = errors.New("exec output exceeds limit")
+
+type limitedWriter struct {
+	buf      *bytes.Buffer
+	limit    int64
+	exceeded bool
+	onLimit  func()
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	if w.limit > 0 && int64(w.buf.Len())+int64(len(p)) > w.limit {
+		w.exceeded = true
+		if w.onLimit != nil {
+			w.onLimit()
+		}
+		return 0, errExecOutputLimit
+	}
+	return w.buf.Write(p)
+}
+
+// ExecContainer 在容器中执行命令并返回 stdout 输出（限制最大缓冲 16MB 防止异常输出触发 OOM）
 func (c *Client) ExecContainer(ctx context.Context, containerID string, cmd []string) (string, error) {
+	return c.execContainerWithLimit(ctx, containerID, cmd, 16*1024*1024)
+}
+
+func (c *Client) execContainerWithLimit(ctx context.Context, containerID string, cmd []string, maxStdoutBytes int64) (string, error) {
 	execConfig := client.ExecCreateOptions{
 		AttachStdin:  false,
 		AttachStdout: true,
@@ -89,8 +114,21 @@ func (c *Client) ExecContainer(ctx context.Context, containerID string, cmd []st
 		}
 	}()
 
-	var stdout, stderr bytes.Buffer
-	if _, err := stdcopy.StdCopy(&stdout, &stderr, attachResp.Reader); err != nil {
+	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutW := &limitedWriter{
+		buf:     &stdoutBuf,
+		limit:   maxStdoutBytes,
+		onLimit: attachResp.Close,
+	}
+	stderrW := &limitedWriter{
+		buf:     &stderrBuf,
+		limit:   1024 * 1024,
+		onLimit: attachResp.Close,
+	}
+	if _, err := stdcopy.StdCopy(stdoutW, stderrW, attachResp.Reader); err != nil {
+		if stdoutW.exceeded || errors.Is(err, errExecOutputLimit) {
+			return "", errExecOutputLimit
+		}
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
@@ -104,21 +142,21 @@ func (c *Client) ExecContainer(ctx context.Context, containerID string, cmd []st
 			zap.Strings("cmd", cmd),
 			zap.Error(err))
 	} else if inspectResp.ExitCode != 0 {
-		stderrStr := strings.TrimSpace(stderr.String())
+		stderrStr := strings.TrimSpace(stderrBuf.String())
 		if stderrStr == "" {
 			stderrStr = fmt.Sprintf("exit code %d", inspectResp.ExitCode)
 		}
 		return "", fmt.Errorf("command exited with code %d: %s", inspectResp.ExitCode, stderrStr)
 	}
 
-	if stderr.Len() > 0 {
+	if stderrBuf.Len() > 0 {
 		logger.Logger.Debug("exec command stderr",
 			zap.String("container", containerID),
 			zap.Strings("cmd", cmd),
-			zap.String("stderr", stderr.String()))
+			zap.String("stderr", stderrBuf.String()))
 	}
 
-	return stdout.String(), nil
+	return stdoutBuf.String(), nil
 }
 
 // parseLsOutput 解析 ls -la 命令输出
@@ -354,15 +392,27 @@ func (c *Client) listContainerDirectoryFromArchive(ctx context.Context, containe
 			return nil, fmt.Errorf("read tar entry failed: %w", err)
 		}
 
-		name := strings.TrimSuffix(header.Name, "/")
-		parts := strings.Split(name, "/")
-		if len(parts) <= 1 || len(parts) > 2 {
+		name := strings.Trim(strings.TrimPrefix(header.Name, "./"), "/")
+		if name == "" || name == "." || name == ".." {
 			continue
 		}
 
-		childName := parts[1]
-		if childName == "" || childName == "." || childName == ".." {
-			continue
+		var childName string
+		if safePath == "/" {
+			if strings.Contains(name, "/") {
+				continue
+			}
+			childName = name
+		} else {
+			prefix := path.Base(safePath) + "/"
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			rel := strings.TrimPrefix(name, prefix)
+			if rel == "" || rel == "." || rel == ".." || strings.Contains(rel, "/") {
+				continue
+			}
+			childName = rel
 		}
 
 		fileType := "other"
@@ -443,12 +493,12 @@ func (c *Client) ReadContainerFile(ctx context.Context, containerID, rawPath str
 	}
 
 	cmd := []string{"cat", safePath}
-	output, err := c.ExecContainer(ctx, containerID, cmd)
+	output, err := c.execContainerWithLimit(ctx, containerID, cmd, MaxEditableFileSize)
 	if err != nil {
+		if errors.Is(err, errExecOutputLimit) {
+			return "", fmt.Errorf("文件过大（超过 %d MB 在线编辑限制），请使用下载功能", MaxEditableFileSize/(1024*1024))
+		}
 		return "", fmt.Errorf("failed to read file: %w", err)
-	}
-	if int64(len(output)) > MaxEditableFileSize {
-		return "", fmt.Errorf("文件过大（超过 %d MB 在线编辑限制），请使用下载功能", MaxEditableFileSize/(1024*1024))
 	}
 
 	return output, nil

@@ -63,7 +63,7 @@ func main() {
 	sch := scheduler.New(log, sc, upd, notificationManager)
 	sch.Start()
 
-	r := api.NewRouter(log, dockerClient, reg, sc, sch, upd)
+	r, closeStreams := api.NewRouterWithLifecycle(log, dockerClient, reg, sc, sch, upd)
 
 	srv := &http.Server{
 		Addr:              cfg.Server.Addr,
@@ -83,13 +83,17 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	logger.Logger.Info("shutting down http server")
 	// stop scheduler and wait for running cron jobs
 	sch.StopCron()
 	// close notification manager (flush pending notifications)
 	notificationManager.Close()
+	// actively close long-lived SSE and WebSocket streams so srv.Shutdown completes immediately
+	if closeStreams != nil {
+		closeStreams()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Logger.Error("server shutdown error", logger.ZapErr(err))
 	}
