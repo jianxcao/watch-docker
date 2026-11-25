@@ -8,23 +8,84 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 )
 
-// EnabledMirrorHosts 返回当前启用的 Docker Hub mirror 主机列表（已规范化、按数组顺序）。
-// 仅返回 enabled=true 且 url 非空的条目。
-func EnabledMirrorHosts() []string {
+// MirrorEndpoint 表示规范化后的 mirror 服务端点（保留 http/https 协议与可选路径前缀）。
+type MirrorEndpoint struct {
+	Scheme     string
+	Host       string
+	PathPrefix string
+}
+
+func (e MirrorEndpoint) BaseURL() string {
+	return e.Scheme + "://" + e.Host
+}
+
+func (e MirrorEndpoint) HostWithPrefix() string {
+	if e.PathPrefix != "" {
+		return e.Host + "/" + e.PathPrefix
+	}
+	return e.Host
+}
+
+func (e MirrorEndpoint) RepoPath(repo string) string {
+	trimmed := strings.TrimPrefix(repo, "/")
+	if e.PathPrefix != "" {
+		return e.PathPrefix + "/" + trimmed
+	}
+	return trimmed
+}
+
+// ParseMirrorEndpoint 解析 mirror URL，保留 http/https 协议与路径前缀。
+func ParseMirrorEndpoint(rawURL string) (MirrorEndpoint, bool) {
+	s := strings.TrimSpace(rawURL)
+	if s == "" {
+		return MirrorEndpoint{}, false
+	}
+	scheme := "https"
+	if strings.HasPrefix(strings.ToLower(s), "http://") {
+		scheme = "http"
+	}
+	if !strings.Contains(s, "://") {
+		s = scheme + "://" + strings.TrimPrefix(s, "//")
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return MirrorEndpoint{}, false
+	}
+	if u.Scheme != "" {
+		scheme = strings.ToLower(u.Scheme)
+	}
+	return MirrorEndpoint{
+		Scheme:     scheme,
+		Host:       u.Host,
+		PathPrefix: strings.Trim(u.Path, "/"),
+	}, true
+}
+
+// EnabledMirrorEndpoints 返回当前启用的 Docker Hub mirror 端点列表（按配置顺序）。
+func EnabledMirrorEndpoints() []MirrorEndpoint {
 	cfg := config.Get()
 	if cfg == nil {
 		return nil
 	}
-	hosts := make([]string, 0, len(cfg.Registry.Mirrors))
+	endpoints := make([]MirrorEndpoint, 0, len(cfg.Registry.Mirrors))
 	for _, m := range cfg.Registry.Mirrors {
 		if !m.Enabled {
 			continue
 		}
-		host := NormalizeMirrorURL(m.URL)
-		if host == "" {
-			continue
+		if ep, ok := ParseMirrorEndpoint(m.URL); ok {
+			endpoints = append(endpoints, ep)
 		}
-		hosts = append(hosts, host)
+	}
+	return endpoints
+}
+
+// EnabledMirrorHosts 返回当前启用的 Docker Hub mirror 主机列表（已规范化、按数组顺序）。
+// 仅返回 enabled=true 且 url 非空的条目。
+func EnabledMirrorHosts() []string {
+	endpoints := EnabledMirrorEndpoints()
+	hosts := make([]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		hosts = append(hosts, ep.HostWithPrefix())
 	}
 	return hosts
 }
