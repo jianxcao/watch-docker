@@ -362,4 +362,30 @@ func TestMirrorManifestSizeLimitAndJSONValidation(t *testing.T) {
 	if _, _, _, err := parseWWWAuthenticate(`Basic realm="https://bad.example.com/"`); err == nil {
 		t.Fatalf("expected Basic Www-Authenticate scheme rejected")
 	}
+
+	// 8. RFC 7235 逗号合并 Www-Authenticate（Basic 在前、Basic 在后，以及带逗号引号 scope）
+	combined1 := http.Header{}
+	combined1.Add("Www-Authenticate", `Basic realm="Registry", Bearer realm="https://auth.example.com/token",service="mirror",scope="repository:library/alpine:pull,push"`)
+	r1, s1, sc1, err1 := parseWWWAuthenticate(selectBearerWWWAuthenticate(combined1))
+	if err1 != nil || r1 != "https://auth.example.com/token" || s1 != "mirror" || sc1 != "repository:library/alpine:pull,push" {
+		t.Fatalf("combined Basic+Bearer parse failed: r=%q s=%q sc=%q err=%v", r1, s1, sc1, err1)
+	}
+
+	combined2 := http.Header{}
+	combined2.Add("Www-Authenticate", `Bearer realm="https://auth.docker.io/token",service="registry.docker.io", Basic realm="Fallback"`)
+	r2, s2, sc2, err2 := parseWWWAuthenticate(selectBearerWWWAuthenticate(combined2))
+	if err2 != nil || r2 != "https://auth.docker.io/token" || s2 != "registry.docker.io" || sc2 != "" {
+		t.Fatalf("combined Bearer+Basic parse failed (realm overwritten?): r=%q s=%q sc=%q err=%v", r2, s2, sc2, err2)
+	}
+
+	// 9. digest-referenced 镜像查询必须校检响应体哈希与请求 digest 一致，不匹配则拒绝并回退 mirror2
+	m1WrongDigestBody := []byte(baseManifest)
+	m1Payload.Store(m1WrongDigestBody)
+	m1DigestHdr.Store("")
+	pinnedRef := "alpine@" + m2Digest
+	qPinned := DigestQuery{ImageRef: pinnedRef, OS: "linux", Arch: "amd64", NeedConfigDigest: false}
+	res = c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qPinned}, false, false, 1)[qPinned.Key()]
+	if res.Error != nil || res.IndexDigest != m2Digest {
+		t.Fatalf("digest mismatch on mirror1 should fallback to mirror2 %q, got %#v", m2Digest, res)
+	}
 }

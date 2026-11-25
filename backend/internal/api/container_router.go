@@ -241,6 +241,7 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 		}
 
 		// 验证必填字段
+		req.Image = strings.TrimSpace(req.Image)
 		if req.Image == "" {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "镜像名称不能为空"))
 			return
@@ -732,6 +733,7 @@ func (s *Server) handleUpdateContainer() gin.HandlerFunc {
 		id := c.Param("id")
 		var body reqBody
 		_ = c.ShouldBindJSON(&body)
+		body.Image = strings.TrimSpace(body.Image)
 		if body.Image == "" {
 			// try inspect to get current image
 			info, err := s.docker.InspectContainer(c.Request.Context(), id)
@@ -740,7 +742,9 @@ func (s *Server) handleUpdateContainer() gin.HandlerFunc {
 				c.JSON(http.StatusOK, NewErrorResCode(CodeImageRequired, "image required"))
 				return
 			}
-			body.Image = info.Config.Image
+			if info.Config != nil {
+				body.Image = strings.TrimSpace(info.Config.Image)
+			}
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Minute)
 		defer cancel()

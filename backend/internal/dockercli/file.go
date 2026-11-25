@@ -612,6 +612,12 @@ func formatPermissions(mode os.FileMode, tarType byte) string {
 	return string(buf[:])
 }
 
+var (
+	errArchiveSymlink       = errors.New("archive entry is a symlink")
+	errNonRegularFile       = errors.New("path is not a regular file")
+	errEditableFileTooLarge = errors.New("file exceeds online editable limit")
+)
+
 // ReadContainerFile 读取容器文件内容
 func (c *Client) ReadContainerFile(ctx context.Context, containerID, rawPath string) (string, error) {
 	safePath, err := cleanContainerPath(rawPath)
@@ -619,7 +625,11 @@ func (c *Client) ReadContainerFile(ctx context.Context, containerID, rawPath str
 		return "", err
 	}
 
-	cmd := []string{"cat", safePath}
+	cmd := []string{
+		"sh", "-c",
+		`if [ -p "$1" ] || [ -d "$1" ] || [ -b "$1" ] || [ -c "$1" ] || [ -S "$1" ]; then echo "path is not a regular file" >&2; exit 1; fi; exec cat -- "$1"`,
+		"sh", safePath,
+	}
 	output, err := c.execContainerWithLimit(ctx, containerID, cmd, MaxEditableFileSize)
 	if err != nil {
 		if errors.Is(err, errExecOutputLimit) {
@@ -652,13 +662,16 @@ func (c *Client) ReadContainerFileFromArchive(ctx context.Context, containerID, 
 	}
 
 	if header.Typeflag == tar.TypeDir {
-		return "", fmt.Errorf("path is a directory, not a file")
+		return "", fmt.Errorf("%w: path is a directory, not a file", errNonRegularFile)
+	}
+	if header.Typeflag == tar.TypeSymlink {
+		return "", fmt.Errorf("%w: %s", errArchiveSymlink, safePath)
 	}
 	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
-		return "", fmt.Errorf("path is not a regular file (type=%c)", header.Typeflag)
+		return "", fmt.Errorf("%w (type=%c)", errNonRegularFile, header.Typeflag)
 	}
 	if header.Size > MaxEditableFileSize {
-		return "", fmt.Errorf("文件过大（超过 %d MB 在线编辑限制），请使用下载功能", MaxEditableFileSize/(1024*1024))
+		return "", fmt.Errorf("%w: 文件过大（超过 %d MB 在线编辑限制），请使用下载功能", errEditableFileTooLarge, MaxEditableFileSize/(1024*1024))
 	}
 
 	limited := io.LimitReader(tarReader, MaxEditableFileSize+1)
@@ -667,7 +680,7 @@ func (c *Client) ReadContainerFileFromArchive(ctx context.Context, containerID, 
 		return "", fmt.Errorf("failed to read file content: %w", err)
 	}
 	if int64(len(content)) > MaxEditableFileSize {
-		return "", fmt.Errorf("文件过大（超过 %d MB 在线编辑限制），请使用下载功能", MaxEditableFileSize/(1024*1024))
+		return "", fmt.Errorf("%w: 文件过大（超过 %d MB 在线编辑限制），请使用下载功能", errEditableFileTooLarge, MaxEditableFileSize/(1024*1024))
 	}
 
 	return string(content), nil
@@ -691,8 +704,8 @@ func (c *Client) ReadContainerFileAuto(ctx context.Context, containerID, rawPath
 		return content, nil
 	}
 
-	// 若明确是文件过大限制，直接返回错误，避免再降级 cat 读入内存
-	if strings.Contains(err.Error(), "在线编辑限制") {
+	// 若已确认是非普通文件（FIFO/目录/设备等）或超过大小限制，直接返回错误，避免降级 cat 阻塞或 OOM
+	if errors.Is(err, errNonRegularFile) || errors.Is(err, errEditableFileTooLarge) {
 		return "", err
 	}
 

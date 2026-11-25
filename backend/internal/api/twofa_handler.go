@@ -135,19 +135,12 @@ func extractHostNameOnly(host string) string {
 	return host
 }
 
-// extractValidatedRPIDAndOrigin 从请求提取并校验 RPID 和 Origin，防止子域 Origin 绕过或反代 Host 误覆盖。
+// extractValidatedRPIDAndOrigin 从请求提取并校验 RPID 和 Origin，防止子域 Origin 绕过、端口越界或未受信任反代 Host 伪造。
 func extractValidatedRPIDAndOrigin(c *gin.Context) (rpid string, origin string, ok bool) {
 	originHdr := strings.TrimSpace(c.GetHeader("Origin"))
-	host := strings.TrimSpace(c.Request.Host)
-	if host == "" {
-		host = strings.TrimSpace(c.GetHeader("Host"))
-	}
-	host = strings.TrimPrefix(host, "http://")
-	host = strings.TrimPrefix(host, "https://")
-	if idx := strings.Index(host, "/"); idx >= 0 {
-		host = host[:idx]
-	}
+	host := auth.EffectiveRequestHost(c.Request)
 	reqHostOnly := extractHostNameOnly(host)
+	allowedDomains := strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS)
 
 	if originHdr != "" {
 		u, err := url.Parse(originHdr)
@@ -160,39 +153,28 @@ func extractValidatedRPIDAndOrigin(c *gin.Context) (rpid string, origin string, 
 		}
 		originHostOnly := u.Hostname()
 		normalizedOrigin := scheme + "://" + u.Host
-		if reqHostOnly == "" || strings.EqualFold(originHostOnly, reqHostOnly) ||
-			(strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS) != "" && isAllowedOriginHost(u.Host, originHostOnly)) {
+		if allowedDomains != "" {
+			if auth.MatchAllowedDomain(allowedDomains, u.Host, originHostOnly, scheme) {
+				return originHostOnly, normalizedOrigin, true
+			}
+			return reqHostOnly, "", false
+		}
+		if reqHostOnly == "" || strings.EqualFold(originHostOnly, reqHostOnly) {
 			return originHostOnly, normalizedOrigin, true
 		}
 		return reqHostOnly, "", false
 	}
 
-	if strings.TrimSpace(conf.EnvCfg.TRUSTED_PROXIES) != "" {
-		if xfh := strings.TrimSpace(c.GetHeader("X-Forwarded-Host")); xfh != "" {
-			first := strings.TrimSpace(strings.Split(xfh, ",")[0])
-			first = strings.TrimPrefix(first, "http://")
-			first = strings.TrimPrefix(first, "https://")
-			if idx := strings.Index(first, "/"); idx >= 0 {
-				first = first[:idx]
-			}
-			xfhHostOnly := extractHostNameOnly(first)
-			if xfhHostOnly != "" && (strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS) == "" || isAllowedOriginHost(first, xfhHostOnly)) {
-				host = first
-				reqHostOnly = xfhHostOnly
-			}
-		}
-	}
-
 	if reqHostOnly == "" {
 		return "", "", false
 	}
-	scheme := "http"
-	if c.Request.TLS != nil || (strings.TrimSpace(conf.EnvCfg.TRUSTED_PROXIES) != "" && strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")) {
-		scheme = "https"
-	}
+	scheme := auth.EffectiveRequestScheme(c.Request)
 	originHost := host
 	if _, _, err := net.SplitHostPort(host); err != nil && strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		originHost = "[" + host + "]"
+	}
+	if allowedDomains != "" && !auth.MatchAllowedDomain(allowedDomains, originHost, reqHostOnly, scheme) {
+		return reqHostOnly, "", false
 	}
 	return reqHostOnly, scheme + "://" + originHost, true
 }
@@ -201,29 +183,6 @@ func extractValidatedRPIDAndOrigin(c *gin.Context) (rpid string, origin string, 
 func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
 	rpid, origin, _ = extractValidatedRPIDAndOrigin(c)
 	return rpid, origin
-}
-
-func isAllowedOriginHost(hostWithPort, hostOnly string) bool {
-	allowedDomainsStr := conf.EnvCfg.TWOFA_ALLOWED_DOMAINS
-	if allowedDomainsStr == "" {
-		return true
-	}
-	for _, allowed := range strings.Split(allowedDomainsStr, ",") {
-		entry := strings.TrimSpace(allowed)
-		if entry == "" {
-			continue
-		}
-		if _, _, err := net.SplitHostPort(entry); err == nil {
-			if hostWithPort != "" && strings.EqualFold(entry, hostWithPort) {
-				return true
-			}
-			continue
-		}
-		if strings.EqualFold(extractHostNameOnly(entry), hostOnly) {
-			return true
-		}
-	}
-	return false
 }
 
 func isAllowedDomain(domain string) bool {

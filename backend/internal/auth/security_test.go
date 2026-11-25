@@ -65,6 +65,30 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 	if CheckWebSocketOrigin(makeReq("localhost:8080", "https://evil.example.com")) {
 		t.Fatal("untrusted origin should be rejected")
 	}
+
+	// 受信任代理转发 X-Forwarded-Host（且 TWOFA_ALLOWED_DOMAINS 为空时）应放行，非受信任来源必须拒绝
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = ""
+	conf.EnvCfg.TRUSTED_PROXIES = "127.0.0.1"
+	trustedWSReq := makeReq("127.0.0.1:8080", "https://docker.example.com:8443")
+	trustedWSReq.RemoteAddr = "127.0.0.1:50000"
+	trustedWSReq.Header.Set("X-Forwarded-Host", "docker.example.com:8443")
+	if !CheckWebSocketOrigin(trustedWSReq) {
+		t.Fatal("trusted proxy X-Forwarded-Host should be accepted by CheckWebSocketOrigin")
+	}
+
+	untrustedWSReq := makeReq("127.0.0.1:8080", "https://docker.example.com:8443")
+	untrustedWSReq.RemoteAddr = "198.51.100.42:54321"
+	untrustedWSReq.Header.Set("X-Forwarded-Host", "docker.example.com:8443")
+	if CheckWebSocketOrigin(untrustedWSReq) {
+		t.Fatal("untrusted peer X-Forwarded-Host must be rejected")
+	}
+
+	// 带方括号 IPv6 白名单应匹配同主机加端口的 Origin
+	conf.EnvCfg.TRUSTED_PROXIES = ""
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = "[::1]"
+	if !CheckWebSocketOrigin(makeReq("127.0.0.1:8080", "http://[::1]:8080")) {
+		t.Fatal("bracketed IPv6 in TWOFA_ALLOWED_DOMAINS should allow http://[::1]:8080")
+	}
 }
 
 func TestLoginRateLimiterKeepsActiveLockoutAcrossWindowBoundary(t *testing.T) {

@@ -78,6 +78,7 @@ func canonicalRegistryHost(host string) string {
 
 // registryAuthForRef 根据镜像引用匹配全局配置中的仓库认证并编码为 X-Registry-Auth。
 func registryAuthForRef(ref string) string {
+	ref = strings.TrimSpace(ref)
 	cfg := config.Get()
 	if cfg == nil || len(cfg.Registry.Auth) == 0 {
 		return ""
@@ -125,6 +126,7 @@ func isDigestedImageRef(ref string) bool {
 
 // pullWithMirrorFallback 核心拉取逻辑：mirror 顺序尝试 + 官方 fallback + 自动 retag。
 func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
+	ref = strings.TrimSpace(ref)
 	mirrors := EnabledMirrorHosts()
 	canUseMirror := IsDockerHubImage(ref) && !isDigestedImageRef(ref) && len(mirrors) > 0
 
@@ -195,6 +197,7 @@ func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platfor
 
 // pullSingleAttempt 执行单次 pull，并解析流中的 errorDetail。
 func (c *Client) pullSingleAttempt(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
+	ref = strings.TrimSpace(ref)
 	opts := client.ImagePullOptions{
 		RegistryAuth: registryAuthForRef(ref),
 	}
@@ -232,6 +235,7 @@ func (c *Client) pullSingleAttempt(ctx context.Context, ref string, platform *oc
 
 // ImageInspect 检查镜像是否存在，如果存在返回镜像信息，不存在返回错误
 func (c *Client) ImageInspect(ctx context.Context, ref string) (*image.InspectResponse, error) {
+	ref = strings.TrimSpace(ref)
 	res, err := c.docker.ImageInspect(ctx, ref)
 	if err != nil {
 		return nil, err

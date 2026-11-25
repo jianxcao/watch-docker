@@ -83,11 +83,11 @@ func (u *Updater) UpdateContainerWithProgress(ctx context.Context, containerID, 
 
 	uctx := &updateContext{
 		containerID:    lockedInfo.ID,
-		imageRef:       imageRef,
+		imageRef:       strings.TrimSpace(imageRef),
 		targetPlatform: targetPlatform,
 	}
 	if uctx.imageRef == "" && lockedInfo.Config != nil {
-		uctx.imageRef = lockedInfo.Config.Image
+		uctx.imageRef = strings.TrimSpace(lockedInfo.Config.Image)
 	}
 
 	// 1. 拉取镜像（保留原容器平台架构）
@@ -274,24 +274,31 @@ func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) 
 	return false, nil
 }
 
-func isWindowsAbsPath(p string) bool {
-	if len(p) < 3 {
+func isASCIIAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func isWindowsDrivePath(p string) bool {
+	if len(p) < 2 || !isASCIIAlpha(p[0]) || p[1] != ':' {
 		return false
 	}
-	drive := p[0]
-	if !((drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z')) {
+	return len(p) == 2 || p[2] == '\\' || p[2] == '/'
+}
+
+func isWindowsDriveTargetPrefix(p string) bool {
+	if len(p) < 2 || !isASCIIAlpha(p[0]) || p[1] != ':' {
 		return false
 	}
-	return p[1] == ':' && (p[2] == '\\' || p[2] == '/')
+	return len(p) == 2 || p[2] == '\\' || p[2] == '/' || p[2] == ':'
 }
 
 func mountTargetKey(target string) string {
 	if path.IsAbs(target) {
 		return path.Clean(target)
 	}
-	if isWindowsAbsPath(target) {
+	if isWindowsDrivePath(target) {
 		cleaned := path.Clean("/" + strings.ReplaceAll(target[2:], "\\", "/"))
-		return strings.ToLower(target[:2]) + cleaned
+		return strings.ToLower(target[:2] + cleaned)
 	}
 	return target
 }
@@ -300,7 +307,7 @@ func isDestinationOnlyBind(bind string) bool {
 	if bind == "" {
 		return false
 	}
-	if isWindowsAbsPath(bind) {
+	if isWindowsDrivePath(bind) {
 		return !strings.Contains(bind[2:], ":")
 	}
 	return !strings.Contains(bind, ":")
@@ -311,7 +318,7 @@ func splitBindSourceAndTarget(bind string) (source, target string) {
 		return "", bind
 	}
 	var rest string
-	if isWindowsAbsPath(bind) {
+	if isWindowsDrivePath(bind) {
 		sep := strings.IndexByte(bind[2:], ':')
 		if sep < 0 {
 			return "", bind
@@ -330,7 +337,7 @@ func splitBindSourceAndTarget(bind string) (source, target string) {
 	if rest == "" {
 		return "", ""
 	}
-	if isWindowsAbsPath(rest) {
+	if isWindowsDriveTargetPrefix(rest) {
 		if sep := strings.IndexByte(rest[2:], ':'); sep >= 0 {
 			target = rest[:sep+2]
 		} else {
@@ -479,12 +486,14 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 
 	existingTargets := make(map[string]struct{})
 	existingSources := make(map[string]struct{})
+	existingSourcesLower := make(map[string]struct{})
 	for _, m := range newHostCfg.Mounts {
 		if tgtKey := mountTargetKey(m.Target); tgtKey != "" {
 			existingTargets[tgtKey] = struct{}{}
 		}
 		if m.Source != "" {
 			existingSources[m.Source] = struct{}{}
+			existingSourcesLower[strings.ToLower(m.Source)] = struct{}{}
 		}
 	}
 	for _, b := range newHostCfg.Binds {
@@ -494,6 +503,7 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 		}
 		if src != "" {
 			existingSources[src] = struct{}{}
+			existingSourcesLower[strings.ToLower(src)] = struct{}{}
 		}
 	}
 
@@ -504,6 +514,9 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 			if volName != "" && destKey != "" {
 				_, hasTarget := existingTargets[destKey]
 				_, hasSource := existingSources[volName]
+				if !hasSource && isWindowsDrivePath(m.Destination) {
+					_, hasSource = existingSourcesLower[strings.ToLower(volName)]
+				}
 				if !hasTarget && !hasSource {
 					newHostCfg.Mounts = append(newHostCfg.Mounts, mount.Mount{
 						Type:     mount.TypeVolume,
@@ -513,6 +526,7 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 					})
 					existingTargets[destKey] = struct{}{}
 					existingSources[volName] = struct{}{}
+					existingSourcesLower[strings.ToLower(volName)] = struct{}{}
 				}
 			}
 		}

@@ -245,6 +245,7 @@ func TestExtractValidatedRPIDAndOriginSecurityAndProxy(t *testing.T) {
 	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = "docker.example.com:8443"
 	getCtx := makeCtx("127.0.0.1:8080", "")
 	getCtx.Request.Method = http.MethodGet
+	getCtx.Request.RemoteAddr = "127.0.0.1:12345"
 	getCtx.Request.Header.Set("X-Forwarded-Host", "docker.example.com:8443")
 	getCtx.Request.Header.Set("X-Forwarded-Proto", "https")
 	rpid, origin, ok = extractValidatedRPIDAndOrigin(getCtx)
@@ -256,5 +257,40 @@ func TestExtractValidatedRPIDAndOriginSecurityAndProxy(t *testing.T) {
 	}
 	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("127.0.0.1:8080", "https://docker.example.com:9443")); ok {
 		t.Fatalf("expected mismatched port origin rejected by host:port whitelist")
+	}
+
+	// 5. 未受信任来源 IP 不得伪造 X-Forwarded-Host / X-Forwarded-Proto
+	conf.EnvCfg.TRUSTED_PROXIES = "127.0.0.1"
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = ""
+	untrustedCtx := makeCtx("watch.corp.com", "")
+	untrustedCtx.Request.Method = http.MethodGet
+	untrustedCtx.Request.RemoteAddr = "198.51.100.42:54321"
+	untrustedCtx.Request.Header.Set("X-Forwarded-Host", "spoofed.example.com")
+	untrustedCtx.Request.Header.Set("X-Forwarded-Proto", "https")
+	rpid, origin, ok = extractValidatedRPIDAndOrigin(untrustedCtx)
+	if !ok || rpid != "watch.corp.com" || origin != "http://watch.corp.com" {
+		t.Fatalf("expected untrusted peer X-Forwarded-* ignored, got (%q, %q, ok=%v)", rpid, origin, ok)
+	}
+
+	// 6. 受信任代理 POST WebAuthn 且 TWOFA_ALLOWED_DOMAINS 为空时应优先采信 X-Forwarded-Host 匹配 Origin
+	trustedPostCtx := makeCtx("127.0.0.1:8080", "https://docker.example.com:8443")
+	trustedPostCtx.Request.RemoteAddr = "127.0.0.1:50000"
+	trustedPostCtx.Request.Header.Set("X-Forwarded-Host", "docker.example.com:8443")
+	trustedPostCtx.Request.Header.Set("X-Forwarded-Proto", "https")
+	rpid, origin, ok = extractValidatedRPIDAndOrigin(trustedPostCtx)
+	if !ok || rpid != "docker.example.com" || origin != "https://docker.example.com:8443" {
+		t.Fatalf("expected trusted proxy POST Origin accepted via X-Forwarded-Host, got (%q, %q, ok=%v)", rpid, origin, ok)
+	}
+
+	// 7. 含端口的 TWOFA_ALLOWED_DOMAINS 不可因 Host 与 Origin hostname 相同而绕过端口限制（含空 Origin）
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = "docker.example.com:8443"
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("docker.example.com:8443", "http://docker.example.com:3000")); ok {
+		t.Fatalf("expected cross-port Origin on same hostname rejected by host:port whitelist")
+	}
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("docker.example.com:9443", "https://docker.example.com:9443")); ok {
+		t.Fatalf("expected disallowed port on same Host+Origin rejected by host:port whitelist")
+	}
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("docker.example.com:9443", "")); ok {
+		t.Fatalf("expected disallowed port with empty Origin rejected by host:port whitelist")
 	}
 }

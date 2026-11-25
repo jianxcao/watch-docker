@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -491,5 +492,66 @@ func TestReadContainerFileAutoFallsBackForSymlink(t *testing.T) {
 	}
 	if content != "NAME=\"Alpine Linux\"\n" {
 		t.Fatalf("expected symlink fallback cat content, got %q", content)
+	}
+}
+
+func TestReadContainerFileAutoRejectsNonRegularWithoutExec(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name     string
+		typeflag byte
+		path     string
+	}{
+		{name: "fifo", typeflag: tar.TypeFifo, path: "/tmp/events"},
+		{name: "directory", typeflag: tar.TypeDir, path: "/tmp/dir"},
+		{name: "char device", typeflag: tar.TypeChar, path: "/tmp/chardev"},
+		{name: "block device", typeflag: tar.TypeBlock, path: "/tmp/blkdev"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var tarBuf bytes.Buffer
+			tw := tar.NewWriter(&tarBuf)
+			_ = tw.WriteHeader(&tar.Header{
+				Name:     strings.TrimPrefix(tc.path, "/tmp/"),
+				Typeflag: tc.typeflag,
+				Mode:     0644,
+			})
+			_ = tw.Close()
+
+			var execHits atomic.Int32
+			baseName := strings.TrimPrefix(tc.path, "/tmp/")
+			statJSON, _ := json.Marshal(map[string]any{"name": baseName, "mode": 0o644})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/archive"):
+					w.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString(statJSON))
+					w.Header().Set("Content-Type", "application/x-tar")
+					_, _ = w.Write(tarBuf.Bytes())
+				case strings.Contains(r.URL.Path, "/exec"):
+					execHits.Add(1)
+					http.Error(w, "should not exec", http.StatusInternalServerError)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			dockerCli, err := client.New(client.WithHost("tcp://" + srv.Listener.Addr().String()))
+			if err != nil {
+				t.Fatalf("create docker client: %v", err)
+			}
+			defer dockerCli.Close()
+			cli := &Client{docker: dockerCli}
+
+			_, err = cli.ReadContainerFileAuto(ctx, "cid-nonreg", tc.path)
+			if err == nil {
+				t.Fatalf("expected error for non-regular file %s", tc.name)
+			}
+			if execHits.Load() != 0 {
+				t.Fatalf("expected zero exec fallback calls for %s, got %d", tc.name, execHits.Load())
+			}
+		})
 	}
 }

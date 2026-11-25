@@ -374,7 +374,7 @@ const {
 } = useContextMenu(() => props.canEdit)
 
 // 文件交互
-const { handleEntryClick, handleDoubleClick } = useFileInteraction()
+const { handleEntryClick, handleDoubleClick, openEntry } = useFileInteraction()
 
 // 文件操作（创建、重命名）
 const { createPath, renamePath } = useFileActions(() => props.containerId)
@@ -458,7 +458,7 @@ const handleContextMenuSelect = (key: string, entry: typeof contextMenu.value.en
       openFileEditor(entry, currentPath.value, false)
       break
     case 'open':
-      handleEntryClick(
+      openEntry(
         entry,
         currentPath.value,
         {

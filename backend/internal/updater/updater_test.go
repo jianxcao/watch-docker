@@ -338,23 +338,26 @@ func TestBuildNewContainerConfigsDestinationOnlyBind(t *testing.T) {
 			Config: &container.Config{},
 			HostConfig: &container.HostConfig{
 				Binds: []string{
-					`C:\data`,
+					`C:\ProgramData`,
 					`C:\host:D:\app:ro`,
-					`myvol:E:\svc:ro`,
+					`MyVol:E:\AppData:ro`,
+					`D:`,
+					`C:\Host:F::ro`,
 				},
 			},
 			Mounts: []container.MountPoint{
-				{Type: mount.TypeVolume, Name: "win_anon", Destination: `c:\data`, RW: true},
-				{Type: mount.TypeVolume, Name: "myvol", Destination: `e:\svc`, RW: false},
+				{Type: mount.TypeVolume, Name: "win_anon", Destination: `c:\programdata`, RW: true},
+				{Type: mount.TypeVolume, Name: "myvol", Destination: `e:\appdata`, RW: false},
+				{Type: mount.TypeVolume, Name: "drive_anon", Destination: `d:`, RW: true},
 			},
 		}}
 
 		_, newHostCfg, _, _, _ := u.buildNewContainerConfigs(uctx)
-		if len(newHostCfg.Binds) != 3 || newHostCfg.Binds[0] != `win_anon:c:\data` {
-			t.Fatalf("expected Windows dest bind rewritten to win_anon:c:\\data, got %#v", newHostCfg.Binds)
+		if len(newHostCfg.Binds) != 5 || newHostCfg.Binds[0] != `win_anon:c:\programdata` || newHostCfg.Binds[3] != `drive_anon:d:` {
+			t.Fatalf("expected Windows dest binds rewritten cleanly, got %#v", newHostCfg.Binds)
 		}
 		if len(newHostCfg.Mounts) != 0 {
-			t.Fatalf("expected zero duplicate Mounts for Windows binds, got %#v", newHostCfg.Mounts)
+			t.Fatalf("expected zero duplicate Mounts for mixed-case/drive-only Windows binds, got %#v", newHostCfg.Mounts)
 		}
 	})
 }

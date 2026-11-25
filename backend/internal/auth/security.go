@@ -150,6 +150,149 @@ func (l *LoginRateLimiter) cleanup() {
 	}
 }
 
+// SanitizeHostHeader 规范化 Host / X-Forwarded-Host 值，去除协议前缀与路径后缀。
+func SanitizeHostHeader(raw string) string {
+	host := strings.TrimSpace(raw)
+	lower := strings.ToLower(host)
+	if strings.HasPrefix(lower, "http://") {
+		host = host[len("http://"):]
+	} else if strings.HasPrefix(lower, "https://") {
+		host = host[len("https://"):]
+	}
+	if idx := strings.IndexByte(host, '/'); idx >= 0 {
+		host = host[:idx]
+	}
+	return strings.TrimSpace(host)
+}
+
+func parseRemoteAddrIP(remoteAddr string) net.IP {
+	raw := strings.TrimSpace(remoteAddr)
+	if raw == "" {
+		return nil
+	}
+	host := raw
+	if h, _, err := net.SplitHostPort(raw); err == nil {
+		host = h
+	} else {
+		host = strings.Trim(raw, "[]")
+	}
+	if idx := strings.IndexByte(host, '%'); idx >= 0 {
+		host = host[:idx]
+	}
+	return net.ParseIP(host)
+}
+
+// IsTrustedProxyRequest 判断请求直接来源 IP 是否命中 TRUSTED_PROXIES 配置的 IP/CIDR。
+func IsTrustedProxyRequest(r *http.Request) bool {
+	if r == nil || strings.TrimSpace(conf.EnvCfg.TRUSTED_PROXIES) == "" {
+		return false
+	}
+	peerIP := parseRemoteAddrIP(r.RemoteAddr)
+	if peerIP == nil {
+		return false
+	}
+	for _, raw := range strings.Split(conf.EnvCfg.TRUSTED_PROXIES, ",") {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			if _, ipNet, err := net.ParseCIDR(entry); err == nil && ipNet.Contains(peerIP) {
+				return true
+			}
+			continue
+		}
+		if trustedIP := net.ParseIP(strings.Trim(entry, "[]")); trustedIP != nil && trustedIP.Equal(peerIP) {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveRequestHost 解析请求有效 Host（仅对来自 TRUSTED_PROXIES 的请求采信 X-Forwarded-Host）。
+func EffectiveRequestHost(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	host := SanitizeHostHeader(r.Host)
+	if host == "" {
+		host = SanitizeHostHeader(r.Header.Get("Host"))
+	}
+	if IsTrustedProxyRequest(r) {
+		if xfh := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); xfh != "" {
+			first := SanitizeHostHeader(strings.Split(xfh, ",")[0])
+			if h, _ := splitRequestHostPort(first); h != "" {
+				host = first
+			}
+		}
+	}
+	return host
+}
+
+// EffectiveRequestScheme 解析请求有效协议（仅对来自 TRUSTED_PROXIES 的请求采信 X-Forwarded-Proto）。
+func EffectiveRequestScheme(r *http.Request) string {
+	if r != nil && r.TLS != nil {
+		return "https"
+	}
+	if IsTrustedProxyRequest(r) {
+		xfp := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
+		if strings.EqualFold(xfp, "https") {
+			return "https"
+		}
+		if strings.EqualFold(xfp, "http") {
+			return "http"
+		}
+	}
+	return "http"
+}
+
+// MatchAllowedDomain 按 host、host:port 或 scheme://host[:port] 规则匹配 TWOFA_ALLOWED_DOMAINS 白名单。
+func MatchAllowedDomain(allowedDomainsStr, candidateHostWithPort, candidateHostOnly, scheme string) bool {
+	if strings.TrimSpace(allowedDomainsStr) == "" {
+		return true
+	}
+	if candidateHostOnly == "" {
+		return false
+	}
+	_, candPort := splitRequestHostPort(candidateHostWithPort)
+	normCandPort := normalizeSchemePort(candPort, strings.ToLower(scheme))
+
+	for _, raw := range strings.Split(allowedDomainsStr, ",") {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "://") {
+			if eu, err := url.Parse(entry); err == nil && eu != nil && eu.Hostname() != "" {
+				if scheme != "" && !strings.EqualFold(eu.Scheme, scheme) {
+					continue
+				}
+				if eu.Port() != "" {
+					if strings.EqualFold(eu.Hostname(), candidateHostOnly) && eu.Port() == normCandPort {
+						return true
+					}
+					continue
+				}
+				if strings.EqualFold(eu.Hostname(), candidateHostOnly) {
+					return true
+				}
+			}
+			continue
+		}
+		if entryHost, entryPort, err := net.SplitHostPort(entry); err == nil {
+			if strings.EqualFold(entryHost, candidateHostOnly) && normCandPort != "" && entryPort == normCandPort {
+				return true
+			}
+			continue
+		}
+		entryHost, _ := splitRequestHostPort(entry)
+		if entryHost != "" && strings.EqualFold(entryHost, candidateHostOnly) {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckWebSocketOrigin 验证 WebSocket 请求的 Origin 头，防御 CSWSH 攻击
 func CheckWebSocketOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
@@ -171,10 +314,7 @@ func CheckWebSocketOrigin(r *http.Request) bool {
 		return false
 	}
 
-	reqHost := strings.TrimSpace(r.Host)
-	if reqHost == "" {
-		reqHost = strings.TrimSpace(r.Header.Get("Host"))
-	}
+	reqHost := EffectiveRequestHost(r)
 	if reqHost == "" {
 		return false
 	}
@@ -192,14 +332,8 @@ func CheckWebSocketOrigin(r *http.Request) bool {
 	}
 
 	if allowedDomains := strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS); allowedDomains != "" {
-		for _, allowed := range strings.Split(allowedDomains, ",") {
-			candidate := strings.TrimSpace(allowed)
-			if candidate == "" {
-				continue
-			}
-			if strings.EqualFold(candidate, originHost) || strings.EqualFold(candidate, u.Host) {
-				return true
-			}
+		if MatchAllowedDomain(allowedDomains, u.Host, originHost, scheme) {
+			return true
 		}
 	}
 

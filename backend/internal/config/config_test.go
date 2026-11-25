@@ -555,3 +555,33 @@ func TestConfigLoadFailsClosedAndReadOnlyDirFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestWhitespacePaddedProxyURLMasksSecretAndRoundTrips(t *testing.T) {
+	_ = setupTempConfigEnv(t)
+
+	rawProxy := defaults()
+	rawProxy.Proxy.URL = " http://user:secret123@127.0.0.1:7890 "
+
+	// 即使在 Validate 之前调用 MaskedCopy，也不能明文泄露密码
+	maskedBeforeValidate := rawProxy.MaskedCopy()
+	if strings.Contains(maskedBeforeValidate.Proxy.URL, "secret123") || !hasMaskedURLPassword(maskedBeforeValidate.Proxy.URL) {
+		t.Fatalf("expected whitespace-padded Proxy.URL masked before Validate, got %q", maskedBeforeValidate.Proxy.URL)
+	}
+
+	if err := Validate(rawProxy); err != nil {
+		t.Fatalf("expected padded Proxy.URL to validate, got %v", err)
+	}
+	if rawProxy.Proxy.URL != "http://user:secret123@127.0.0.1:7890" {
+		t.Fatalf("expected Validate to trim Proxy.URL, got %q", rawProxy.Proxy.URL)
+	}
+
+	incoming := rawProxy.MaskedCopy()
+	incoming.Logging.Level = "debug"
+	MergeMaskedSecrets(incoming, rawProxy)
+	if err := Validate(incoming); err != nil {
+		t.Fatalf("expected round-tripped Proxy.URL to validate, got %v", err)
+	}
+	if incoming.Proxy.URL != "http://user:secret123@127.0.0.1:7890" {
+		t.Fatalf("expected restored Proxy.URL secret, got %q", incoming.Proxy.URL)
+	}
+}

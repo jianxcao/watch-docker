@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
@@ -37,16 +36,165 @@ type mirrorTokenResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-var wwwAuthParamRe = regexp.MustCompile(`(\w+)="([^"]*)"`)
+func parseBearerFromWWWAuthenticate(header string) (realm, service, scope string, hasBearer, ok bool) {
+	trimmed := strings.TrimSpace(header)
+	if trimmed == "" {
+		return "", "", "", false, false
+	}
 
-func selectBearerWWWAuthenticate(headers http.Header) string {
-	for _, h := range headers.Values("Www-Authenticate") {
-		trimmed := strings.TrimSpace(h)
-		if len(trimmed) >= 7 && strings.EqualFold(trimmed[:7], "bearer ") {
-			return trimmed
+	i := 0
+	n := len(trimmed)
+	expectChallenge := true
+	currentScheme := ""
+	curRealm, curService, curScope := "", "", ""
+
+	skipWS := func() {
+		for i < n && (trimmed[i] == ' ' || trimmed[i] == '\t') {
+			i++
 		}
 	}
-	return ""
+
+	for i < n {
+		skipWS()
+		for i < n && trimmed[i] == ',' {
+			i++
+			skipWS()
+			expectChallenge = true
+		}
+		if i >= n {
+			break
+		}
+
+		// 读取 token（scheme 名或参数 key，或 token68）
+		start := i
+		for i < n && trimmed[i] != ' ' && trimmed[i] != '\t' && trimmed[i] != '=' && trimmed[i] != ',' && trimmed[i] != '"' {
+			i++
+		}
+		tok := trimmed[start:i]
+		if tok == "" {
+			if i < n && trimmed[i] == '"' {
+				// 跳过意外引号值
+				i++
+				for i < n && trimmed[i] != '"' {
+					if trimmed[i] == '\\' && i+1 < n {
+						i += 2
+						continue
+					}
+					i++
+				}
+				if i < n {
+					i++
+				}
+			} else {
+				i++
+			}
+			expectChallenge = false
+			continue
+		}
+
+		skipWS()
+		if i < n && trimmed[i] == '=' {
+			// key=value 参数
+			i++
+			skipWS()
+			var val string
+			if i < n && trimmed[i] == '"' {
+				i++
+				var b strings.Builder
+				for i < n && trimmed[i] != '"' {
+					if trimmed[i] == '\\' && i+1 < n {
+						b.WriteByte(trimmed[i+1])
+						i += 2
+						continue
+					}
+					b.WriteByte(trimmed[i])
+					i++
+				}
+				if i < n && trimmed[i] == '"' {
+					i++
+				}
+				val = b.String()
+			} else {
+				valStart := i
+				for i < n && trimmed[i] != ' ' && trimmed[i] != '\t' && trimmed[i] != ',' {
+					i++
+				}
+				val = trimmed[valStart:i]
+			}
+			if currentScheme == "bearer" {
+				switch strings.ToLower(tok) {
+				case "realm":
+					curRealm = val
+				case "service":
+					curService = val
+				case "scope":
+					curScope = val
+				}
+			}
+			skipWS()
+			if i < n && trimmed[i] == ',' {
+				i++
+				expectChallenge = true
+			} else {
+				expectChallenge = false
+			}
+			continue
+		}
+
+		// 若非 '=' 且处于新 challenge 边界（或上一个 challenge 刚结束），按 RFC 7235 判定为新 auth-scheme
+		if expectChallenge || currentScheme == "" {
+			if currentScheme == "bearer" && curRealm != "" {
+				return curRealm, curService, curScope, true, true
+			}
+			currentScheme = strings.ToLower(tok)
+			if currentScheme == "bearer" {
+				hasBearer = true
+			}
+			curRealm, curService, curScope = "", "", ""
+			expectChallenge = false
+			continue
+		}
+
+		// 既非 '=' 也非新边界（例如 Basic/Negotiate 等后面的 token68），跳至下一个逗号
+		for i < n && trimmed[i] != ',' {
+			if trimmed[i] == '"' {
+				i++
+				for i < n && trimmed[i] != '"' {
+					if trimmed[i] == '\\' && i+1 < n {
+						i += 2
+						continue
+					}
+					i++
+				}
+				if i < n {
+					i++
+				}
+				continue
+			}
+			i++
+		}
+		if i < n && trimmed[i] == ',' {
+			i++
+			expectChallenge = true
+		}
+	}
+
+	if currentScheme == "bearer" && curRealm != "" {
+		return curRealm, curService, curScope, true, true
+	}
+	return "", "", "", hasBearer, false
+}
+
+func selectBearerWWWAuthenticate(headers http.Header) string {
+	fallbackBearer := ""
+	for _, h := range headers.Values("Www-Authenticate") {
+		if _, _, _, hasBearer, ok := parseBearerFromWWWAuthenticate(h); ok {
+			return strings.TrimSpace(h)
+		} else if hasBearer && fallbackBearer == "" {
+			fallbackBearer = strings.TrimSpace(h)
+		}
+	}
+	return fallbackBearer
 }
 
 func parseWWWAuthenticate(header string) (realm, service, scope string, err error) {
@@ -54,24 +202,11 @@ func parseWWWAuthenticate(header string) (realm, service, scope string, err erro
 	if trimmed == "" {
 		return "", "", "", fmt.Errorf("empty Www-Authenticate header")
 	}
-	if len(trimmed) < 7 || !strings.EqualFold(trimmed[:7], "bearer ") {
+	realm, service, scope, hasBearer, ok := parseBearerFromWWWAuthenticate(trimmed)
+	if !hasBearer {
 		return "", "", "", fmt.Errorf("unsupported Www-Authenticate scheme: %s", header)
 	}
-	matches := wwwAuthParamRe.FindAllStringSubmatch(trimmed, -1)
-	for _, m := range matches {
-		if len(m) < 3 {
-			continue
-		}
-		switch strings.ToLower(m[1]) {
-		case "realm":
-			realm = m[2]
-		case "service":
-			service = m[2]
-		case "scope":
-			scope = m[2]
-		}
-	}
-	if realm == "" {
+	if !ok {
 		return "", "", "", fmt.Errorf("missing realm in Www-Authenticate: %s", header)
 	}
 	return realm, service, scope, nil
@@ -157,9 +292,21 @@ func (c *Client) fetchManifestFromMirror(ctx context.Context, ep dockercli.Mirro
 		return nil, "", "", "", fmt.Errorf("获取 manifest 失败 (状态码: %d): %s", status, truncate(string(body), 200))
 	}
 
-	digest, err = computeAndVerifyManifestDigest(body, headers.Get("Docker-Content-Digest"))
-	if err != nil {
-		return nil, "", "", "", fmt.Errorf("mirror %s %w", ep.HostWithPrefix(), err)
+	if strings.Contains(tag, ":") {
+		digest, err = computeAndVerifyManifestDigest(body, tag)
+		if err != nil {
+			return nil, "", "", "", fmt.Errorf("mirror %s %w", ep.HostWithPrefix(), err)
+		}
+		if hdr := strings.TrimSpace(headers.Get("Docker-Content-Digest")); hdr != "" {
+			if _, herr := computeAndVerifyManifestDigest(body, hdr); herr != nil {
+				return nil, "", "", "", fmt.Errorf("mirror %s %w", ep.HostWithPrefix(), herr)
+			}
+		}
+	} else {
+		digest, err = computeAndVerifyManifestDigest(body, headers.Get("Docker-Content-Digest"))
+		if err != nil {
+			return nil, "", "", "", fmt.Errorf("mirror %s %w", ep.HostWithPrefix(), err)
+		}
 	}
 	return body, digest, bearer, mirrorRepoPath, nil
 }

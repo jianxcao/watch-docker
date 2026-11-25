@@ -243,54 +243,58 @@ func replaceURLUserPassword(rawURL, username, password string) string {
 }
 
 func maskURLPassword(rawURL string) string {
-	if strings.TrimSpace(rawURL) == "" {
-		return rawURL
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
 	}
-	u, err := url.Parse(rawURL)
+	u, err := url.Parse(trimmed)
 	if err != nil || u.User == nil {
-		return rawURL
+		return trimmed
 	}
 	pass, hasPass := u.User.Password()
 	if !hasPass || pass == "" {
-		return rawURL
+		return trimmed
 	}
-	return replaceURLUserPassword(rawURL, u.User.Username(), MaskedSecretPlaceholder)
+	return replaceURLUserPassword(trimmed, u.User.Username(), MaskedSecretPlaceholder)
 }
 
 func restoreMaskedURLPassword(nextURL, prevURL string) string {
-	if strings.TrimSpace(nextURL) == "" {
-		return nextURL
+	nextTrimmed := strings.TrimSpace(nextURL)
+	if nextTrimmed == "" {
+		return ""
 	}
-	u, err := url.Parse(nextURL)
+	u, err := url.Parse(nextTrimmed)
 	if err != nil || u.User == nil {
-		return nextURL
+		return nextTrimmed
 	}
 	pass, hasPass := u.User.Password()
 	if !hasPass || pass != MaskedSecretPlaceholder {
-		return nextURL
+		return nextTrimmed
 	}
-	if strings.TrimSpace(prevURL) == "" {
-		return nextURL
+	prevTrimmed := strings.TrimSpace(prevURL)
+	if prevTrimmed == "" {
+		return nextTrimmed
 	}
-	prevU, err := url.Parse(prevURL)
+	prevU, err := url.Parse(prevTrimmed)
 	if err != nil || prevU.User == nil {
-		return nextURL
+		return nextTrimmed
 	}
 	// 仅在 host 与 username 未变化时才还原旧密码，防止修改主机时把旧密码外泄到新目标
 	if !strings.EqualFold(u.Host, prevU.Host) || u.User.Username() != prevU.User.Username() {
-		return nextURL
+		return nextTrimmed
 	}
 	if oldPass, ok := prevU.User.Password(); ok && oldPass != "" {
-		return replaceURLUserPassword(nextURL, u.User.Username(), oldPass)
+		return replaceURLUserPassword(nextTrimmed, u.User.Username(), oldPass)
 	}
-	return nextURL
+	return nextTrimmed
 }
 
 func hasMaskedURLPassword(rawURL string) bool {
-	if strings.TrimSpace(rawURL) == "" {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
 		return false
 	}
-	u, err := url.Parse(rawURL)
+	u, err := url.Parse(trimmed)
 	if err != nil || u.User == nil {
 		return false
 	}
@@ -635,7 +639,9 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("notify.url host or username changed: please re-enter password")
 		}
 	}
-	if proxyURL := strings.TrimSpace(cfg.Proxy.URL); proxyURL != "" {
+	proxyURL := strings.TrimSpace(cfg.Proxy.URL)
+	cfg.Proxy.URL = proxyURL
+	if proxyURL != "" {
 		u, err := url.Parse(proxyURL)
 		if err != nil || u == nil || u.Host == "" {
 			return fmt.Errorf("invalid proxy.url")
