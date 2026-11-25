@@ -398,9 +398,8 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 		if newCfg.WorkingDir == imgCfg.WorkingDir {
 			newCfg.WorkingDir = ""
 		}
-		if newCfg.User == imgCfg.User {
-			newCfg.User = ""
-		}
+		// 保留旧容器的非空 User：Docker inspect 无法区分镜像默认 USER 与用户显式指定的 --user，
+		// 若按字符串相等清空，新镜像改成默认 root 时会导致容器更新后静默提权；空字符串仍交由新镜像决定。
 		if imgCfg.Healthcheck != nil && reflect.DeepEqual(newCfg.Healthcheck, imgCfg.Healthcheck) {
 			newCfg.Healthcheck = nil
 		}

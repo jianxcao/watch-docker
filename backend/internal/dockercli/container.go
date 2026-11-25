@@ -62,29 +62,55 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 		}
 	}
 
-	// 读取镜像列表补充 ParentID（用于准确判断本地构建镜像）
-	imageParentMap := make(map[string]string)
-	if imgListRes, lerr := c.docker.ImageList(ctx, client.ImageListOptions{All: true}); lerr == nil {
-		for _, im := range imgListRes.Items {
-			imageParentMap[im.ID] = im.ParentID
-		}
-	}
-
-	imageTags := make(map[string][]string)
-	imageDigests := make(map[string][]string)
-	imageLocalFlags := make(map[string]bool)
-	imagePlatforms := make(map[string][3]string)
+	// 先按需逐个 inspect 并用已有元数据分类，仅在确实需要 ParentID 时才回查镜像列表
+	imageTags := make(map[string][]string, len(imageIDSet))
+	imageDigests := make(map[string][]string, len(imageIDSet))
+	imageLocalFlags := make(map[string]bool, len(imageIDSet))
+	imagePlatforms := make(map[string][3]string, len(imageIDSet))
+	pendingParent := make(map[string]time.Time)
 	for imageID := range imageIDSet {
-		img, err := c.inspectImage(ctx, imageID)
-		if err != nil {
+		meta, ierr := c.inspectImageMeta(ctx, imageID)
+		if ierr != nil {
 			continue
 		}
+		img := meta.Inspect
 		imageTags[imageID] = img.RepoTags
 		if digests := comparableRepoDigests(img); len(digests) > 0 {
 			imageDigests[imageID] = digests
 		}
-		imageLocalFlags[imageID] = isLocalImage(img, imageParentMap[imageID], imageDigests[imageID])
 		imagePlatforms[imageID] = [3]string{img.Os, img.Architecture, img.Variant}
+
+		local, needsParent := classifyLocalImage(img, imageDigests[imageID])
+		if !needsParent {
+			imageLocalFlags[imageID] = local
+			continue
+		}
+		if meta.ParentKnown {
+			imageLocalFlags[imageID] = strings.TrimSpace(meta.ParentID) != ""
+			continue
+		}
+		pendingParent[imageID] = meta.FetchedAt
+	}
+
+	if len(pendingParent) > 0 {
+		parentMap := make(map[string]string, len(pendingParent))
+		if imgListRes, lerr := c.docker.ImageList(ctx, client.ImageListOptions{All: true}); lerr == nil {
+			for _, im := range imgListRes.Items {
+				parentMap[im.ID] = im.ParentID
+			}
+			for imageID, fetchedAt := range pendingParent {
+				if parentID, ok := parentMap[imageID]; ok {
+					c.setCachedImageParent(imageID, fetchedAt, parentID)
+					imageLocalFlags[imageID] = strings.TrimSpace(parentID) != ""
+				} else {
+					imageLocalFlags[imageID] = false
+				}
+			}
+		} else {
+			for imageID := range pendingParent {
+				imageLocalFlags[imageID] = false
+			}
+		}
 	}
 
 	// 清理已消失容器的 startedAt 缓存
@@ -154,23 +180,29 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 }
 
 func (c *Client) inspectImage(ctx context.Context, imageID string) (image.InspectResponse, error) {
-	if cached, ok := c.getCachedImageInspect(imageID); ok {
+	meta, err := c.inspectImageMeta(ctx, imageID)
+	if err != nil {
+		return image.InspectResponse{}, err
+	}
+	return meta.Inspect, nil
+}
+
+func (c *Client) inspectImageMeta(ctx context.Context, imageID string) (cachedImageMeta, error) {
+	if cached, ok := c.getCachedImageMeta(imageID); ok {
 		return cached, nil
 	}
 
 	res, err := c.docker.ImageInspect(ctx, imageID, client.ImageInspectWithManifests(true))
 	if err == nil {
-		c.setCachedImageInspect(imageID, res.InspectResponse)
-		return res.InspectResponse, nil
+		return c.setCachedImageInspect(imageID, res.InspectResponse), nil
 	}
 
 	// 旧 daemon 不支持 manifests 查询时退回基础 inspect。
 	res, err = c.docker.ImageInspect(ctx, imageID)
 	if err != nil {
-		return image.InspectResponse{}, err
+		return cachedImageMeta{}, err
 	}
-	c.setCachedImageInspect(imageID, res.InspectResponse)
-	return res.InspectResponse, nil
+	return c.setCachedImageInspect(imageID, res.InspectResponse), nil
 }
 
 func comparableRepoDigests(img image.InspectResponse) []string {
@@ -203,20 +235,28 @@ func comparableRepoDigests(img image.InspectResponse) []string {
 	return digests
 }
 
-func isLocalImage(img image.InspectResponse, parentID string, comparableDigests []string) bool {
+func classifyLocalImage(img image.InspectResponse, comparableDigests []string) (local bool, needsParent bool) {
 	if len(img.RepoDigests) > 0 {
-		return false
+		return false, false
 	}
 	if img.Identity != nil && len(img.Identity.Build) > 0 && len(img.Identity.Pull) == 0 {
-		return true
+		return true, false
 	}
 	if len(comparableDigests) > 0 {
-		return false
+		return false, false
 	}
-	if strings.TrimSpace(parentID) != "" {
-		return true
+	if !hasNamedRepoTag(img.RepoTags) {
+		return true, false
 	}
-	return !hasNamedRepoTag(img.RepoTags)
+	return false, true
+}
+
+func isLocalImage(img image.InspectResponse, parentID string, comparableDigests []string) bool {
+	local, needsParent := classifyLocalImage(img, comparableDigests)
+	if !needsParent {
+		return local
+	}
+	return strings.TrimSpace(parentID) != ""
 }
 
 func hasNamedRepoTag(tags []string) bool {

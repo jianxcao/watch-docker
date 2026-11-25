@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -396,5 +397,155 @@ func TestMirrorManifestSizeLimitAndJSONValidation(t *testing.T) {
 	res = c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qMissingDescDigest}, false, false, 1)[qMissingDescDigest.Key()]
 	if res.Error != nil || res.IndexDigest != m2Digest || res.ChildDigest == ":" {
 		t.Fatalf("index manifest missing child digest should fallback to mirror2 %q, got %#v", m2Digest, res)
+	}
+}
+
+type recordedRegistryReq struct {
+	Scheme     string
+	Host       string
+	Path       string
+	DialedAddr string
+}
+
+type recordingRegistryTransport struct {
+	base       *http.Transport
+	targetAddr string
+	mu         sync.Mutex
+	reqs       []recordedRegistryReq
+	dialed     []string
+}
+
+func (rt *recordingRegistryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	rt.reqs = append(rt.reqs, recordedRegistryReq{
+		Scheme: req.URL.Scheme,
+		Host:   req.URL.Host,
+		Path:   req.URL.Path,
+	})
+	rt.mu.Unlock()
+	return rt.base.RoundTrip(req)
+}
+
+func (rt *recordingRegistryTransport) snapshot() ([]recordedRegistryReq, []string) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]recordedRegistryReq(nil), rt.reqs...), append([]string(nil), rt.dialed...)
+}
+
+func TestFetchDigestExplicitHTTPAndPortScoping(t *testing.T) {
+	origEnv := conf.EnvCfg
+	origCfg := config.Get()
+	t.Cleanup(func() {
+		conf.EnvCfg = origEnv
+		if origCfg != nil {
+			config.SetGlobal(origCfg)
+		}
+	})
+
+	const manifestBody = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`
+	sum := sha256.Sum256([]byte(manifestBody))
+	wantDigest := "sha256:" + hex.EncodeToString(sum[:])
+
+	mockReg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/" || r.URL.Path == "/v2":
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/v2/team/app/manifests/"):
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", wantDigest)
+			_, _ = w.Write([]byte(manifestBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockReg.Close()
+
+	newTestClient := func(t *testing.T, authYAML string) (*Client, *recordingRegistryTransport) {
+		t.Helper()
+		dir := t.TempDir()
+		conf.EnvCfg.CONFIG_PATH = dir
+		conf.EnvCfg.CONFIG_FILE = "config.yaml"
+		cfgPath := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(cfgPath, []byte(authYAML), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.Load(cfgPath); err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+
+		rt := &recordingRegistryTransport{targetAddr: mockReg.Listener.Addr().String()}
+		dialer := &net.Dialer{Timeout: 2 * time.Second}
+		rt.base = &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				rt.mu.Lock()
+				rt.dialed = append(rt.dialed, addr)
+				rt.mu.Unlock()
+				return dialer.DialContext(ctx, "tcp", rt.targetAddr)
+			},
+		}
+
+		c := New()
+		c.roundTripper = rt
+		return c, rt
+	}
+
+	// 1. 显式 HTTP 域名无端口按 tag 查询：首次即走 HTTP 默认 80 端口并返回摘要
+	c1, rt1 := newTestClient(t, "registry:\n  auth:\n    - host: http://registry.example.com\n      username: u\n      token: p\n")
+	q1 := DigestQuery{ImageRef: "registry.example.com/team/app:v1", OS: "linux", Arch: "amd64"}
+	res1 := c1.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q1}, false, false, 1)[q1.Key()]
+	if res1.Error != nil || res1.IndexDigest != wantDigest {
+		t.Fatalf("explicit http without port failed: %#v", res1)
+	}
+	reqs1, dialed1 := rt1.snapshot()
+	if len(reqs1) == 0 || reqs1[0].Scheme != "http" {
+		t.Fatalf("expected first request over http, got %#v", reqs1)
+	}
+	if len(dialed1) == 0 || dialed1[0] != "registry.example.com:80" {
+		t.Fatalf("expected dialed addr registry.example.com:80, got %#v", dialed1)
+	}
+
+	// 2. 显式 HTTP 域名带 :5000 按 digest 查询：首次即走 HTTP 发往 :5000
+	c2, rt2 := newTestClient(t, "registry:\n  auth:\n    - host: http://registry.example.com:5000\n")
+	q2 := DigestQuery{ImageRef: "registry.example.com:5000/team/app@" + wantDigest, OS: "linux", Arch: "amd64"}
+	res2 := c2.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q2}, false, false, 1)[q2.Key()]
+	if res2.Error != nil || res2.IndexDigest != wantDigest {
+		t.Fatalf("explicit http :5000 by digest failed: %#v", res2)
+	}
+	reqs2, dialed2 := rt2.snapshot()
+	if len(reqs2) == 0 || reqs2[0].Scheme != "http" {
+		t.Fatalf("expected first request over http, got %#v", reqs2)
+	}
+	if len(dialed2) == 0 || dialed2[0] != "registry.example.com:5000" {
+		t.Fatalf("expected dialed addr registry.example.com:5000, got %#v", dialed2)
+	}
+
+	// 3. 同名域名 HTTP 配置只匹配 :5000 时，查询其他端口或默认端口仍走默认 HTTPS
+	c3, rt3 := newTestClient(t, "registry:\n  auth:\n    - host: http://registry.example.com:5000\n")
+	for _, ref := range []string{"registry.example.com:5443/team/app:v1", "registry.example.com/team/app:v1"} {
+		q := DigestQuery{ImageRef: ref, OS: "linux", Arch: "amd64"}
+		_ = c3.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q}, false, false, 1)
+	}
+	reqs3, _ := rt3.snapshot()
+	if len(reqs3) < 2 {
+		t.Fatalf("expected >= 2 requests, got %#v", reqs3)
+	}
+	for _, req := range reqs3 {
+		if req.Scheme != "https" {
+			t.Fatalf("expected unmatched port on same domain to use https, got %#v", reqs3)
+		}
+	}
+
+	// 4. 普通公网域名无 HTTP 配置时 TLS 失败，且绝不降级发 HTTP 请求
+	c4, rt4 := newTestClient(t, "logging:\n  level: info\n")
+	q4 := DigestQuery{ImageRef: "registry.example.com/team/app:v1", OS: "linux", Arch: "amd64"}
+	res4 := c4.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q4}, false, false, 1)[q4.Key()]
+	if res4.Error == nil {
+		t.Fatalf("expected TLS error for plain-HTTP mock without explicit HTTP config, got %#v", res4)
+	}
+	reqs4, _ := rt4.snapshot()
+	for _, req := range reqs4 {
+		if req.Scheme == "http" {
+			t.Fatalf("expected zero http requests for unconfigured public domain, got %#v", reqs4)
+		}
 	}
 }

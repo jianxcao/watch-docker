@@ -1,5 +1,6 @@
 import dayjs from 'dayjs'
 import { h } from 'vue'
+import { LineCounter, isSeq, parseDocument } from 'yaml'
 import { NIcon, type IconProps, type MessageApi } from 'naive-ui'
 
 export const sleep = (ms: number) => {
@@ -228,96 +229,66 @@ export interface YamlValidationResult {
  */
 export const validateComposeYaml = (yamlContent: string): YamlValidationResult => {
   try {
-    const yaml = yamlContent.trim()
-
-    // 检查是否为空
-    if (!yaml) {
+    if (!yamlContent || !yamlContent.trim()) {
       return {
         isValid: false,
         errorMessage: '请输入 YAML 配置',
       }
     }
 
-    // 检查是否存在顶级或缩进的 services: 键（忽略注释行与块标量内容）
-    const lines = yaml.split('\n')
-    let hasServicesKey = false
-    let blockBaseIndent: number | null = null
+    const lineCounter = new LineCounter()
+    const doc = parseDocument(yamlContent, {
+      lineCounter,
+      merge: true,
+      prettyErrors: false,
+    })
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-      const trimmed = line.trim()
-      const indent = line.length - line.trimStart().length
-
-      if (blockBaseIndent !== null) {
-        if (!trimmed || indent > blockBaseIndent) {
-          continue
-        }
-        blockBaseIndent = null
-      }
-
-      if (!trimmed || trimmed.startsWith('#')) {
-        continue
-      }
-
-      if (/^services\s*:/.test(trimmed)) {
-        hasServicesKey = true
-      }
-
-      // 在忽略非引号注释和转义引号的前提下检查引号是否闭合
-      let quoteChar: '"' | "'" | null = null
-      let escaped = false
-      let commentStartIndex = -1
-      for (let j = 0; j < line.length; j++) {
-        const ch = line[j]
-        if (quoteChar === '"') {
-          if (escaped) {
-            escaped = false
-            continue
-          }
-          if (ch === '\\') {
-            escaped = true
-            continue
-          }
-          if (ch === '"') {
-            quoteChar = null
-          }
-        } else if (quoteChar === "'") {
-          if (ch === "'") {
-            if (line[j + 1] === "'") {
-              j += 1
-              continue
-            }
-            quoteChar = null
-          }
-        } else {
-          if (ch === '#' && (j === 0 || /\s/.test(line[j - 1]))) {
-            commentStartIndex = j
-            break
-          }
-          if ((ch === '"' || ch === "'") && (j === 0 || !/[A-Za-z0-9_]/.test(line[j - 1]))) {
-            quoteChar = ch
-          }
-        }
-      }
-
-      if (quoteChar !== null) {
-        return {
-          isValid: false,
-          errorMessage: `第 ${i + 1} 行：引号未闭合`,
-        }
-      }
-
-      const contentWithoutComment =
-        commentStartIndex >= 0 ? line.slice(0, commentStartIndex).trim() : trimmed
-      if (/(?:^-\s*|:\s*)[|>](?:[+-]?\d+|\d+[+-])?$/.test(contentWithoutComment)) {
-        blockBaseIndent = indent
+    if (doc.errors.length > 0) {
+      const firstErr = doc.errors[0]
+      const pos =
+        firstErr.linePos?.[0] ?? (firstErr.pos ? lineCounter.linePos(firstErr.pos[0]) : undefined)
+      const loc = pos ? `（第 ${pos.line} 行，第 ${pos.col} 列）` : ''
+      const detail = firstErr.message.split('\n')[0] || '语法无效'
+      return {
+        isValid: false,
+        errorMessage: `YAML 语法错误${loc}：${detail}`,
       }
     }
 
-    if (!hasServicesKey) {
+    if (doc.contents === null || doc.contents === undefined) {
       return {
         isValid: false,
-        errorMessage: '缺少 services 配置',
+        errorMessage: '缺少顶层 services 配置',
+      }
+    }
+
+    if (isSeq(doc.contents)) {
+      return {
+        isValid: false,
+        errorMessage: 'Compose 配置根节点必须为映射',
+      }
+    }
+
+    const root = doc.toJS({ mapAsMap: true, maxAliasCount: 100 })
+    if (!(root instanceof Map)) {
+      return {
+        isValid: false,
+        errorMessage: 'Compose 配置根节点必须为映射',
+      }
+    }
+
+    if (!root.has('services')) {
+      return {
+        isValid: false,
+        errorMessage: '缺少顶层 services 配置',
+      }
+    }
+
+    const services = root.get('services')
+    if (!(services instanceof Map)) {
+      return {
+        isValid: false,
+        errorMessage: '顶层 services 必须为映射',
       }
     }
 
@@ -328,7 +299,7 @@ export const validateComposeYaml = (yamlContent: string): YamlValidationResult =
   } catch (error) {
     return {
       isValid: false,
-      errorMessage: `YAML 格式错误: ${(error as Error).message}`,
+      errorMessage: `YAML 解析失败：${(error as Error).message}`,
     }
   }
 }

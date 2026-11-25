@@ -105,6 +105,7 @@
 <script setup lang="ts">
 import type { ImageInfo } from '@/common/types'
 import { renderIcon } from '@/common/utils'
+import { loadImagesViewOnMount } from './imagesViewMount'
 import ImageCard from '@/components/ImageCard.vue'
 import ImageImportModal from '@/components/ImageImportModal.vue'
 import { useImage } from '@/hooks/useImage'
@@ -289,13 +290,12 @@ const handleImportSuccess = async () => {
 
 // 页面初始化
 onMounted(async () => {
-  if (!imageStore.loading && imageStore.images.length === 0) {
-    await imageStore.fetchImages()
-  }
-  // 加载容器数据以便检查镜像使用情况
-  if (!containerStore.loading && containerStore.containers.length === 0) {
-    await containerStore.fetchContainers()
-  }
+  await loadImagesViewOnMount({
+    fetchImages: () => imageStore.fetchImages(),
+    fetchContainers: () => containerStore.fetchContainers(),
+    hasContainerWork: () => !containerStore.loading && containerStore.containers.length === 0,
+    onImagesError: (errMsg) => message.error(`获取镜像列表失败：${errMsg}`),
+  })
 })
 </script>
 

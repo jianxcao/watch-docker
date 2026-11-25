@@ -87,6 +87,7 @@ type Client struct {
 	transportMu    sync.Mutex
 	transportProxy string
 	httpTransport  *http.Transport
+	roundTripper   http.RoundTripper // 仅测试注入
 
 	sf singleflight.Group
 }
@@ -139,6 +140,33 @@ func (c *Client) getTransport() *http.Transport {
 	c.httpTransport = tr
 	c.transportProxy = proxyStr
 	return tr
+}
+
+func (c *Client) remoteTransport(explicitHTTP bool, targetHost string) http.RoundTripper {
+	var base http.RoundTripper = c.getTransport()
+	if c.roundTripper != nil {
+		base = c.roundTripper
+	}
+	if explicitHTTP {
+		return &explicitHTTPPingTransport{
+			targetHost: canonicalHost(targetHost),
+			base:       base,
+		}
+	}
+	return base
+}
+
+// explicitHTTPPingTransport 阻止 go-containerregistry pingParallel 对显式 http:// 配置的仓库发起前置 HTTPS /v2/ 探测。
+type explicitHTTPPingTransport struct {
+	targetHost string
+	base       http.RoundTripper
+}
+
+func (t *explicitHTTPPingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req != nil && req.URL != nil && strings.EqualFold(req.URL.Scheme, "https") && req.URL.Path == "/v2/" && canonicalHost(req.URL.Host) == t.targetHost {
+		return nil, fmt.Errorf("registry %s configured as explicit http://, skipping https /v2/ probe", t.targetHost)
+	}
+	return t.base.RoundTrip(req)
 }
 
 func (c *Client) getCache(key string) (CacheEntry, bool) {
@@ -587,10 +615,15 @@ func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, 
 	}
 
 	// 2. 使用 go-containerregistry 查询官方/私有仓库
-	ref, err := name.ParseReference(normalizedRef)
+	explicitHTTP := c.isHostExplicitHTTP(host)
+	var nameOpts []name.Option
+	if explicitHTTP {
+		nameOpts = append(nameOpts, name.Insecure)
+	}
+	ref, err := name.ParseReference(normalizedRef, nameOpts...)
 	if err != nil {
 		// 对非 HTTPS 私有仓库（如 http:// 或局域网自建）可保留原始引用重试
-		ref, err = name.ParseReference(q.ImageRef)
+		ref, err = name.ParseReference(q.ImageRef, nameOpts...)
 		if err != nil {
 			return DigestResult{Error: fmt.Errorf("解析镜像引用失败: %w", err), ErrType: ErrorTypeGeneral}
 		}
@@ -598,7 +631,7 @@ func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, 
 
 	opts := []remote.Option{
 		remote.WithContext(ctx),
-		remote.WithTransport(c.getTransport()),
+		remote.WithTransport(c.remoteTransport(explicitHTTP, host)),
 		remote.WithPlatform(v1.Platform{
 			OS:           targetOS,
 			Architecture: targetArch,
@@ -612,7 +645,7 @@ func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, 
 	desc, err := remote.Get(ref, opts...)
 	if err != nil {
 		// 兼容未配置 TLS 的局域网私有仓库或显式 http:// 配置的仓库（禁止对公网域名静默降级明文传输凭据）
-		if strings.Contains(host, ":") && c.allowInsecureFallback(host) && strings.Contains(strings.ToLower(err.Error()), "http: server gave http response to https client") {
+		if !explicitHTTP && strings.Contains(host, ":") && c.allowInsecureFallback(host) && strings.Contains(strings.ToLower(err.Error()), "http: server gave http response to https client") {
 			if insecRef, rerr := name.ParseReference(normalizedRef, name.Insecure); rerr == nil {
 				desc, err = remote.Get(insecRef, opts...)
 			}

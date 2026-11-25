@@ -65,6 +65,74 @@ services:
 `
     expect(validateComposeYaml(yaml)).toEqual({ isValid: true, errorMessage: '' })
   })
+
+  it('accepts flow mappings, quoted services key, empty services map, anchors/aliases, root merges, and compose tags', () => {
+    expect(validateComposeYaml('{services: {web: {image: nginx}}}')).toEqual({
+      isValid: true,
+      errorMessage: '',
+    })
+    expect(validateComposeYaml('"services":\n  web:\n    image: nginx\n')).toEqual({
+      isValid: true,
+      errorMessage: '',
+    })
+    expect(validateComposeYaml('services: {}\n')).toEqual({
+      isValid: true,
+      errorMessage: '',
+    })
+    expect(
+      validateComposeYaml('x-def: &defs\n  web:\n    image: nginx\nservices: *defs\n'),
+    ).toEqual({
+      isValid: true,
+      errorMessage: '',
+    })
+    expect(
+      validateComposeYaml('x-base: &base\n  services:\n    web:\n      image: nginx\n<<: *base\n'),
+    ).toEqual({
+      isValid: true,
+      errorMessage: '',
+    })
+    expect(
+      validateComposeYaml(
+        'services:\n  web:\n    image: nginx\n    ports: !reset []\n    volumes: !override\n      - /a:/b\n',
+      ),
+    ).toEqual({
+      isValid: true,
+      errorMessage: '',
+    })
+  })
+
+  it('rejects missing top-level services, non-mapping root/services, and syntax errors with line info', () => {
+    expect(validateComposeYaml('   \n')).toEqual({
+      isValid: false,
+      errorMessage: '请输入 YAML 配置',
+    })
+
+    for (const nested of [
+      'x-template: {services: {}}\n',
+      '# services:\nname: demo\n',
+      'x-doc:\n  text: |\n    services:\n      web:\n        image: nginx\n',
+    ]) {
+      const res = validateComposeYaml(nested)
+      expect(res.isValid).toBe(false)
+      expect(res.errorMessage).toContain('services')
+    }
+
+    for (const badStruct of ['- web\n', 'services: null\n', 'services: []\n', 'services: text\n']) {
+      const res = validateComposeYaml(badStruct)
+      expect(res.isValid).toBe(false)
+      expect(res.errorMessage).toContain('映射')
+    }
+
+    for (const badSyntax of [
+      'services:\n  web:\n    image: "nginx\n',
+      '{services: {web: {image: nginx}}\n',
+    ]) {
+      const res = validateComposeYaml(badSyntax)
+      expect(res.isValid).toBe(false)
+      expect(res.errorMessage).toContain('语法错误')
+      expect(res.errorMessage).toMatch(/第 \d+ 行/)
+    }
+  })
 })
 
 describe('imageRef (:port-aware matching)', () => {

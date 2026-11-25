@@ -13,8 +13,10 @@ import (
 )
 
 type cachedImageMeta struct {
-	Inspect   image.InspectResponse
-	FetchedAt time.Time
+	Inspect     image.InspectResponse
+	FetchedAt   time.Time
+	ParentID    string
+	ParentKnown bool
 }
 
 type cachedStartMeta struct {
@@ -230,23 +232,47 @@ func (c *Client) getContainerStartedAt(ctx context.Context, id string, state str
 	return startedAt
 }
 
-func (c *Client) getCachedImageInspect(imageID string) (image.InspectResponse, bool) {
+func (c *Client) getCachedImageMeta(imageID string) (cachedImageMeta, bool) {
 	const cacheTTL = 5 * time.Minute
 	c.cacheMu.RLock()
 	defer c.cacheMu.RUnlock()
 	if cached, ok := c.imageCache[imageID]; ok && time.Since(cached.FetchedAt) < cacheTTL {
+		return cached, true
+	}
+	return cachedImageMeta{}, false
+}
+
+func (c *Client) getCachedImageInspect(imageID string) (image.InspectResponse, bool) {
+	if cached, ok := c.getCachedImageMeta(imageID); ok {
 		return cached.Inspect, true
 	}
 	return image.InspectResponse{}, false
 }
 
-func (c *Client) setCachedImageInspect(imageID string, resp image.InspectResponse) {
+func (c *Client) setCachedImageInspect(imageID string, resp image.InspectResponse) cachedImageMeta {
 	c.cacheMu.Lock()
-	c.imageCache[imageID] = cachedImageMeta{
-		Inspect:   resp,
-		FetchedAt: time.Now(),
+	defer c.cacheMu.Unlock()
+	now := time.Now()
+	if prev, ok := c.imageCache[imageID]; ok && !now.After(prev.FetchedAt) {
+		now = prev.FetchedAt.Add(time.Nanosecond)
 	}
-	c.cacheMu.Unlock()
+	meta := cachedImageMeta{
+		Inspect:   resp,
+		FetchedAt: now,
+	}
+	c.imageCache[imageID] = meta
+	return meta
+}
+
+// setCachedImageParent 在未失效且 inspect 版本未变更的前提下回写父镜像 ID（保留原 FetchedAt）。
+func (c *Client) setCachedImageParent(imageID string, fetchedAt time.Time, parentID string) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if cur, ok := c.imageCache[imageID]; ok && cur.FetchedAt.Equal(fetchedAt) {
+		cur.ParentID = parentID
+		cur.ParentKnown = true
+		c.imageCache[imageID] = cur
+	}
 }
 
 // containerSummaryStateString 将 container.ContainerState 转为小写字符串

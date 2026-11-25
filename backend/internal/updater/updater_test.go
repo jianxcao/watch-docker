@@ -361,3 +361,65 @@ func TestBuildNewContainerConfigsDestinationOnlyBind(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildNewContainerConfigsPreservesUser(t *testing.T) {
+	u := &Updater{}
+	cases := []struct {
+		name          string
+		containerUser string
+		imageUser     string
+		wantUser      string
+	}{
+		{
+			name:          "numeric uid:gid matching image user is preserved",
+			containerUser: "1000:1000",
+			imageUser:     "1000:1000",
+			wantUser:      "1000:1000",
+		},
+		{
+			name:          "named user matching image user is preserved",
+			containerUser: "app",
+			imageUser:     "app",
+			wantUser:      "app",
+		},
+		{
+			name:          "different container user is preserved",
+			containerUser: "2000",
+			imageUser:     "1000",
+			wantUser:      "2000",
+		},
+		{
+			name:          "empty user delegates default to new image",
+			containerUser: "",
+			imageUser:     "",
+			wantUser:      "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uctx := &updateContext{
+				imageRef: "example/app:v2",
+				oldImage: &image.InspectResponse{
+					Config: &dockerimage.DockerOCIImageConfig{
+						ImageConfig: ocispec.ImageConfig{
+							User: tc.imageUser,
+						},
+					},
+				},
+				oldInfo: container.InspectResponse{
+					Config: &container.Config{
+						Image: "example/app:v1",
+						User:  tc.containerUser,
+					},
+				},
+			}
+
+			newCfg, _, _, _, _ := u.buildNewContainerConfigs(uctx)
+			if newCfg.User != tc.wantUser {
+				t.Fatalf("containerUser=%q imageUser=%q: got newCfg.User=%q, want %q",
+					tc.containerUser, tc.imageUser, newCfg.User, tc.wantUser)
+			}
+		})
+	}
+}
