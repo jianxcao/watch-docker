@@ -8,7 +8,6 @@ import (
 
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 	"go.uber.org/zap"
 )
@@ -96,8 +95,8 @@ func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
 	volumeRefCount := make(map[string]int)
 	for _, ctr := range containers {
 		for _, m := range ctr.Mounts {
-			if m.Type == mount.TypeVolume && m.Name != "" {
-				volumeRefCount[m.Name]++
+			if volName := ResolveMountVolumeName(m); volName != "" {
+				volumeRefCount[volName]++
 			}
 		}
 	}
@@ -203,7 +202,7 @@ func (c *Client) GetVolumeContainers(ctx context.Context, volumeName string) ([]
 	var refs []ContainerRef
 	for _, ctr := range ctrListRes.Items {
 		for _, m := range ctr.Mounts {
-			if m.Type == mount.TypeVolume && m.Name == volumeName {
+			if ResolveMountVolumeName(m) == volumeName {
 				containerName := ""
 				if len(ctr.Names) > 0 {
 					containerName = strings.TrimPrefix(ctr.Names[0], "/")

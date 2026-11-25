@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
@@ -37,10 +39,23 @@ type mirrorTokenResponse struct {
 
 var wwwAuthParamRe = regexp.MustCompile(`(\w+)="([^"]*)"`)
 
+func selectBearerWWWAuthenticate(headers http.Header) string {
+	for _, h := range headers.Values("Www-Authenticate") {
+		trimmed := strings.TrimSpace(h)
+		if len(trimmed) >= 7 && strings.EqualFold(trimmed[:7], "bearer ") {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func parseWWWAuthenticate(header string) (realm, service, scope string, err error) {
 	trimmed := strings.TrimSpace(header)
 	if trimmed == "" {
 		return "", "", "", fmt.Errorf("empty Www-Authenticate header")
+	}
+	if len(trimmed) < 7 || !strings.EqualFold(trimmed[:7], "bearer ") {
+		return "", "", "", fmt.Errorf("unsupported Www-Authenticate scheme: %s", header)
 	}
 	matches := wwwAuthParamRe.FindAllStringSubmatch(trimmed, -1)
 	for _, m := range matches {
@@ -69,6 +84,36 @@ func (c *Client) mirrorHTTPClient() *http.Client {
 	}
 }
 
+func computeAndVerifyManifestDigest(body []byte, expectedDigest string) (string, error) {
+	expected := strings.Trim(strings.TrimSpace(expectedDigest), `"`)
+	if expected == "" {
+		sum := sha256.Sum256(body)
+		return "sha256:" + hex.EncodeToString(sum[:]), nil
+	}
+	alg, wantHex, ok := strings.Cut(expected, ":")
+	if !ok || wantHex == "" {
+		return "", fmt.Errorf("无效的 manifest digest 格式: %s", expectedDigest)
+	}
+	algLower := strings.ToLower(strings.TrimSpace(alg))
+	var h hash.Hash
+	switch algLower {
+	case "sha256":
+		h = sha256.New()
+	case "sha384":
+		h = sha512.New384()
+	case "sha512":
+		h = sha512.New()
+	default:
+		return "", fmt.Errorf("不支持的 manifest digest 算法: %s", alg)
+	}
+	_, _ = h.Write(body)
+	got := algLower + ":" + hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(got, algLower+":"+strings.TrimSpace(wantHex)) {
+		return "", fmt.Errorf("manifest digest 校验和不匹配: got %s want %s", got, expected)
+	}
+	return got, nil
+}
+
 // fetchManifestFromMirror 通过指定的 mirror 端点查询 docker.io 镜像的 manifest 与 digest
 func (c *Client) fetchManifestFromMirror(ctx context.Context, ep dockercli.MirrorEndpoint, imageRef string) (manifest []byte, digest string, bearer string, mirrorRepoPath string, err error) {
 	if ep.Host == "" {
@@ -93,9 +138,9 @@ func (c *Client) fetchManifestFromMirror(ctx context.Context, ep dockercli.Mirro
 	}
 
 	if status == http.StatusUnauthorized {
-		wwwAuth := headers.Get("Www-Authenticate")
+		wwwAuth := selectBearerWWWAuthenticate(headers)
 		if wwwAuth == "" {
-			return nil, "", "", "", fmt.Errorf("mirror %s 返回 401 但未携带 Www-Authenticate", ep.HostWithPrefix())
+			return nil, "", "", "", fmt.Errorf("mirror %s 返回 401 但未携带 Bearer Www-Authenticate", ep.HostWithPrefix())
 		}
 		token, terr := c.acquireMirrorToken(ctx, wwwAuth, mirrorRepoPath)
 		if terr != nil {
@@ -112,12 +157,10 @@ func (c *Client) fetchManifestFromMirror(ctx context.Context, ep dockercli.Mirro
 		return nil, "", "", "", fmt.Errorf("获取 manifest 失败 (状态码: %d): %s", status, truncate(string(body), 200))
 	}
 
-	sum := sha256.Sum256(body)
-	bodyDigest := "sha256:" + hex.EncodeToString(sum[:])
-	if hdrDigest := strings.TrimSpace(headers.Get("Docker-Content-Digest")); hdrDigest != "" && !strings.EqualFold(hdrDigest, bodyDigest) {
-		return nil, "", "", "", fmt.Errorf("mirror %s 返回的 Docker-Content-Digest (%s) 与响应体校验和不匹配 (%s)", ep.HostWithPrefix(), hdrDigest, bodyDigest)
+	digest, err = computeAndVerifyManifestDigest(body, headers.Get("Docker-Content-Digest"))
+	if err != nil {
+		return nil, "", "", "", fmt.Errorf("mirror %s %w", ep.HostWithPrefix(), err)
 	}
-	digest = bodyDigest
 	return body, digest, bearer, mirrorRepoPath, nil
 }
 
@@ -128,14 +171,22 @@ func (c *Client) fetchChildManifestConfigDigest(ctx context.Context, ep dockercl
 	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/%s", ep.BaseURL(), mirrorRepoPath, childDigest)
 	body, headers, status, err := c.requestManifest(ctx, manifestURL, bearer)
 	if err == nil && status == http.StatusUnauthorized {
-		if wwwAuth := headers.Get("Www-Authenticate"); wwwAuth != "" {
+		if wwwAuth := selectBearerWWWAuthenticate(headers); wwwAuth != "" {
 			if tok, terr := c.acquireMirrorToken(ctx, wwwAuth, mirrorRepoPath); terr == nil {
-				body, _, status, err = c.requestManifest(ctx, manifestURL, tok)
+				body, headers, status, err = c.requestManifest(ctx, manifestURL, tok)
 			}
 		}
 	}
 	if err != nil || status != http.StatusOK {
 		return ""
+	}
+	if _, err := computeAndVerifyManifestDigest(body, childDigest); err != nil {
+		return ""
+	}
+	if hdr := headers.Get("Docker-Content-Digest"); hdr != "" {
+		if _, err := computeAndVerifyManifestDigest(body, hdr); err != nil {
+			return ""
+		}
 	}
 	var m struct {
 		Config struct {
@@ -291,6 +342,19 @@ func (c *Client) queryDigestViaMirrors(ctx context.Context, imageRef string, mir
 					zap.Error(err))
 				continue
 			}
+			hasValidDesc := false
+			for _, desc := range im.Manifests {
+				if desc.Digest.String() != "" {
+					hasValidDesc = true
+					break
+				}
+			}
+			if !hasValidDesc {
+				logger.Logger.Debug("mirror index manifest 缺少有效子摘要，尝试下一个",
+					zap.String("image", imageRef),
+					zap.String("mirror", ep.HostWithPrefix()))
+				continue
+			}
 			childDig, _ := parseManifest(body, targetOS, targetArch, targetVariant)
 			var cfgDig string
 			if needConfig {
@@ -311,8 +375,8 @@ func (c *Client) queryDigestViaMirrors(ctx context.Context, imageRef string, mir
 			return dig, childDig, cfgDig, true
 		}
 
-		if needConfig && m.Config.Digest == "" {
-			logger.Logger.Debug("mirror manifest 缺少 config digest，尝试下一个或回退",
+		if strings.TrimSpace(m.Config.Digest) == "" {
+			logger.Logger.Debug("mirror manifest 缺少 config.digest（可能为非 manifest JSON），尝试下一个或回退",
 				zap.String("image", imageRef),
 				zap.String("mirror", ep.HostWithPrefix()))
 			continue

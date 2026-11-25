@@ -114,10 +114,19 @@ func registryAuthForRef(ref string) string {
 	return ""
 }
 
+func isDigestedImageRef(ref string) bool {
+	named, err := reference.ParseNormalizedNamed(strings.TrimSpace(ref))
+	if err != nil {
+		return false
+	}
+	_, ok := named.(reference.Digested)
+	return ok
+}
+
 // pullWithMirrorFallback 核心拉取逻辑：mirror 顺序尝试 + 官方 fallback + 自动 retag。
 func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
 	mirrors := EnabledMirrorHosts()
-	canUseMirror := IsDockerHubImage(ref) && len(mirrors) > 0
+	canUseMirror := IsDockerHubImage(ref) && !isDigestedImageRef(ref) && len(mirrors) > 0
 
 	if !canUseMirror {
 		return c.pullSingleAttempt(ctx, ref, platform, onProgress)

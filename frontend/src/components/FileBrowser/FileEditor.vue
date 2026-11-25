@@ -119,7 +119,7 @@ const readOnlyConf = new Compartment()
 
 // 按需懒加载 CodeMirror 语言扩展，避免将所有语法包打入初始包
 const loadLanguageSupport = async (filename: string): Promise<Extension> => {
-  const ext = filename.split('.').pop()?.toLowerCase() || ''
+  const ext = filename.trimEnd().split('.').pop()?.toLowerCase() || ''
   switch (ext) {
     case 'js':
     case 'mjs':
@@ -243,7 +243,7 @@ const isBinaryFile = (filename: string): boolean => {
     'mov',
     'wav',
   ]
-  const ext = filename.split('.').pop()?.toLowerCase() || ''
+  const ext = filename.trimEnd().split('.').pop()?.toLowerCase() || ''
   return binaryExts.includes(ext)
 }
 

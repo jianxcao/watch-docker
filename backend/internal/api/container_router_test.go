@@ -415,4 +415,46 @@ func TestHandleCreateContainerRespectsPrimaryNetwork(t *testing.T) {
 	if res.Code != 0 || lastCreate.HostConfig.NetworkMode != "host" || len(lastCreate.NetworkingConfig.EndpointsConfig) != 0 || len(connects) != 0 {
 		t.Fatalf("host mode mismatch: res=%+v create=%#v connects=%#v", res, lastCreate, connects)
 	}
+
+	// 7. networkMode: "default" 且含 "bridge" 端点时应归一化到 bridge 而非重复 Connect
+	res = doReq(map[string]any{
+		"image":       "alpine:latest",
+		"networkMode": "default",
+		"networkConfig": map[string]any{
+			"endpointsConfig": map[string]any{
+				"bridge": map[string]any{"macAddress": "02:42:ac:11:00:05"},
+			},
+		},
+	})
+	if res.Code != 0 || lastCreate.HostConfig.NetworkMode != "bridge" || len(lastCreate.NetworkingConfig.EndpointsConfig) != 1 || len(connects) != 0 {
+		t.Fatalf("default->bridge mismatch: res=%+v create=%#v connects=%#v", res, lastCreate, connects)
+	}
+
+	// 8. 短名称或非十六进制主网络名（如 "db"）不被当作 NetworkID 前缀劫持
+	res = doReq(map[string]any{
+		"image":       "alpine:latest",
+		"networkMode": "db",
+		"networkConfig": map[string]any{
+			"endpointsConfig": map[string]any{
+				"app_net": map[string]any{"networkID": "db8a9f1234567890abcdef1234567890abcdef1234567890abcdef1234567890", "aliases": []string{"app"}},
+			},
+		},
+	})
+	if res.Code != 0 || lastCreate.HostConfig.NetworkMode != "db" || len(lastCreate.NetworkingConfig.EndpointsConfig) != 0 || len(connects) != 1 || connects[0].Network != "app_net" {
+		t.Fatalf("short hex network name db mismatch: res=%+v create=%#v connects=%#v", res, lastCreate, connects)
+	}
+
+	// 9. 首尾带空格的特殊模式 " host " 应先规范化再识别为 host 模式
+	res = doReq(map[string]any{
+		"image":       "alpine:latest",
+		"networkMode": " host ",
+		"networkConfig": map[string]any{
+			"endpointsConfig": map[string]any{
+				"a_extra": map[string]any{},
+			},
+		},
+	})
+	if res.Code != 0 || lastCreate.HostConfig.NetworkMode != "host" || len(connects) != 0 {
+		t.Fatalf("padded host mode mismatch: res=%+v create=%#v connects=%#v", res, lastCreate, connects)
+	}
 }

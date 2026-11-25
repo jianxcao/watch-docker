@@ -274,23 +274,76 @@ func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) 
 	return false, nil
 }
 
+func isWindowsAbsPath(p string) bool {
+	if len(p) < 3 {
+		return false
+	}
+	drive := p[0]
+	if !((drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z')) {
+		return false
+	}
+	return p[1] == ':' && (p[2] == '\\' || p[2] == '/')
+}
+
 func mountTargetKey(target string) string {
 	if path.IsAbs(target) {
 		return path.Clean(target)
 	}
+	if isWindowsAbsPath(target) {
+		cleaned := path.Clean("/" + strings.ReplaceAll(target[2:], "\\", "/"))
+		return strings.ToLower(target[:2]) + cleaned
+	}
 	return target
 }
 
+func isDestinationOnlyBind(bind string) bool {
+	if bind == "" {
+		return false
+	}
+	if isWindowsAbsPath(bind) {
+		return !strings.Contains(bind[2:], ":")
+	}
+	return !strings.Contains(bind, ":")
+}
+
 func splitBindSourceAndTarget(bind string) (source, target string) {
-	parts := strings.Split(bind, ":")
-	if len(parts) < 2 {
+	if isDestinationOnlyBind(bind) {
+		return "", bind
+	}
+	var rest string
+	if isWindowsAbsPath(bind) {
+		sep := strings.IndexByte(bind[2:], ':')
+		if sep < 0 {
+			return "", bind
+		}
+		sep += 2
+		source = bind[:sep]
+		rest = bind[sep+1:]
+	} else {
+		sep := strings.IndexByte(bind, ':')
+		if sep < 0 {
+			return "", ""
+		}
+		source = bind[:sep]
+		rest = bind[sep+1:]
+	}
+	if rest == "" {
 		return "", ""
 	}
-	// 兼容 Windows 宿主机盘符路径 (e.g. C:\data:/app[:ro])
-	if len(parts[0]) == 1 && len(parts) >= 3 && (strings.HasPrefix(parts[1], "\\") || strings.HasPrefix(parts[1], "/")) {
-		return parts[0] + ":" + parts[1], parts[2]
+	if isWindowsAbsPath(rest) {
+		if sep := strings.IndexByte(rest[2:], ':'); sep >= 0 {
+			target = rest[:sep+2]
+		} else {
+			target = rest
+		}
+		return source, target
 	}
-	return parts[0], parts[1]
+	if sep := strings.IndexByte(rest, ':'); sep >= 0 {
+		target = rest[:sep]
+	} else {
+		target = rest
+	}
+	return source, target
 }
 
 func cloneExposedPorts(src network.PortSet) network.PortSet {
@@ -381,7 +434,7 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 		}
 	}
 
-	if !newHostCfg.AutoRemove && len(newHostCfg.VolumesFrom) == 0 && len(newHostCfg.Binds) > 0 {
+	if !newHostCfg.AutoRemove && len(newHostCfg.VolumesFrom) == 0 && (len(newHostCfg.Binds) > 0 || len(newHostCfg.Mounts) > 0) {
 		volByDest := make(map[string]struct {
 			name string
 			rw   bool
@@ -398,8 +451,18 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 				}{name: volName, rw: m.RW, dest: m.Destination}
 			}
 		}
+		for i := range newHostCfg.Mounts {
+			if newHostCfg.Mounts[i].Type == mount.TypeVolume && newHostCfg.Mounts[i].Source == "" {
+				if v, ok := volByDest[mountTargetKey(newHostCfg.Mounts[i].Target)]; ok {
+					newHostCfg.Mounts[i].Source = v.name
+					if !v.rw {
+						newHostCfg.Mounts[i].ReadOnly = true
+					}
+				}
+			}
+		}
 		for i, b := range newHostCfg.Binds {
-			if strings.Contains(b, ":") {
+			if !isDestinationOnlyBind(b) {
 				continue
 			}
 			v, ok := volByDest[mountTargetKey(b)]

@@ -46,6 +46,8 @@ export function parseShellArgs(input: string): string[] {
           i++
         } else if (next === '\n') {
           i++
+        } else if (next === '\r' && input[i + 2] === '\n') {
+          i += 2
         } else {
           current += ch
         }
@@ -58,6 +60,18 @@ export function parseShellArgs(input: string): string[] {
       continue
     }
     if (ch === '\\') {
+      const next = input[i + 1]
+      if (next === undefined) {
+        continue
+      }
+      if (next === '\n') {
+        i++
+        continue
+      }
+      if (next === '\r' && input[i + 2] === '\n') {
+        i += 2
+        continue
+      }
       escaped = true
       hasToken = true
     } else if (ch === '"' || ch === "'") {
@@ -95,12 +109,12 @@ export function transformBasicForm(form: BasicFormValue): Partial<ContainerCreat
 
   // 转换 entrypointString 为数组（支持引号与转义）
   if (form.entrypointString && form.entrypointString.trim()) {
-    data.entrypoint = parseShellArgs(form.entrypointString.trim())
+    data.entrypoint = parseShellArgs(form.entrypointString)
   }
 
   // 转换 cmdString 为数组（支持引号与转义）
   if (form.cmdString && form.cmdString.trim()) {
-    data.cmd = parseShellArgs(form.cmdString.trim())
+    data.cmd = parseShellArgs(form.cmdString)
   }
 
   if (form.workingDir) {

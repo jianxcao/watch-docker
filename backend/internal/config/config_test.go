@@ -469,3 +469,89 @@ func TestUpdatePreservesConfigSymlink(t *testing.T) {
 		t.Fatalf("expected failed loop Update not to publish error level, got %q", Get().Logging.Level)
 	}
 }
+
+func TestConfigLoadFailsClosedAndReadOnlyDirFallback(t *testing.T) {
+	cfgPath := setupTempConfigEnv(t)
+
+	// 1. 先加载有效配置并设置 2FA，确保后续 Load 失败不会静默清零全局 2FA 状态
+	if err := os.WriteFile(cfgPath, []byte("logging:\n  level: debug\ntwofaConfig:\n  users:\n    admin:\n      method: otp\n      otpSecret: SECRET123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(cfgPath); err != nil {
+		t.Fatalf("initial Load failed: %v", err)
+	}
+
+	// 悬空软链
+	dangling := filepath.Join(t.TempDir(), "dangling.yaml")
+	_ = os.Symlink("missing.yaml", dangling)
+	if _, err := Load(dangling); err == nil || !strings.Contains(err.Error(), dangling) {
+		t.Fatalf("expected dangling Load error containing %q, got %v", dangling, err)
+	}
+
+	// 目录伪装成 config.yaml
+	dirCfg := filepath.Join(t.TempDir(), "dir.yaml")
+	if err := os.MkdirAll(dirCfg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dirCfg); err == nil || !strings.Contains(err.Error(), dirCfg) {
+		t.Fatalf("expected dir Load error containing %q, got %v", dirCfg, err)
+	}
+
+	// 验证失败的 Load 未破坏内存中的 TwoFAConfig
+	if sec := Get().TwoFAConfig.Users["admin"].OTPSecret; sec != "SECRET123" {
+		t.Fatalf("expected existing TwoFAConfig preserved on failed Load, got %q", sec)
+	}
+
+	// 2. 空密码 user:@host 与 @https://... 在 MaskedCopy -> MergeMaskedSecrets -> Validate 全流程保持有效
+	emptyPassCfg := defaults()
+	emptyPassCfg.Notify.URL = "https://api_token:@notify.example.com/hook?title={title}"
+	emptyPassCfg.Proxy.URL = "http://user:@127.0.0.1:7890"
+	masked := emptyPassCfg.MaskedCopy()
+	if masked.Notify.URL != emptyPassCfg.Notify.URL || masked.Proxy.URL != emptyPassCfg.Proxy.URL {
+		t.Fatalf("expected empty-password userinfo unmasked, got notify=%q proxy=%q", masked.Notify.URL, masked.Proxy.URL)
+	}
+	incoming := masked.Clone()
+	incoming.Logging.Level = "warn"
+	MergeMaskedSecrets(incoming, emptyPassCfg)
+	if err := Validate(incoming); err != nil {
+		t.Fatalf("expected empty-password URL roundtrip valid, got %v", err)
+	}
+
+	rawNotify := defaults()
+	rawNotify.Notify.URL = "@https://user:secret@notify.example.com/hook"
+	if maskedRaw := rawNotify.MaskedCopy(); strings.Contains(maskedRaw.Notify.URL, "secret") {
+		t.Fatalf("expected @https notify password masked in MaskedCopy, got %q", maskedRaw.Notify.URL)
+	}
+
+	// 3. 单文件挂载（父目录 0555 不可写但 config.yaml 本身 0600 可写）走原地覆写成功
+	if os.Geteuid() != 0 {
+		roDir := filepath.Join(t.TempDir(), "rodir")
+		if err := os.MkdirAll(roDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		roCfg := filepath.Join(roDir, "config.yaml")
+		if err := os.WriteFile(roCfg, []byte("logging:\n  level: info\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(roDir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(roDir, 0o755) })
+
+		conf.EnvCfg.CONFIG_PATH = roDir
+		conf.EnvCfg.CONFIG_FILE = "config.yaml"
+		if _, err := Load(roCfg); err != nil {
+			t.Fatalf("Load in ro dir failed: %v", err)
+		}
+		if err := Update(func(cfg *Config) error {
+			cfg.Logging.Level = "error"
+			return nil
+		}); err != nil {
+			t.Fatalf("expected in-place save in read-only parent dir to succeed, got %v", err)
+		}
+		reloaded, err := Load(roCfg)
+		if err != nil || reloaded.Logging.Level != "error" {
+			t.Fatalf("expected updated level error, got %+v err=%v", reloaded, err)
+		}
+	}
+}

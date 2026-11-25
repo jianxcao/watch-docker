@@ -96,12 +96,16 @@ func EnabledMirrorHosts() []string {
 //   - "docker.io/nginx" / "index.docker.io/library/nginx" → true
 //   - "ghcr.io/foo/bar" / "registry.example.com/foo" / "localhost:5000/foo" → false
 func IsDockerHubImage(ref string) bool {
-	named, err := reference.ParseNormalizedNamed(ref)
+	trimmed := strings.TrimSpace(ref)
+	if trimmed == "" {
+		return false
+	}
+	named, err := reference.ParseNormalizedNamed(trimmed)
 	if err != nil {
 		return false
 	}
-	domain := reference.Domain(named)
-	return domain == "docker.io"
+	domain := strings.ToLower(reference.Domain(named))
+	return domain == "docker.io" || domain == "index.docker.io" || domain == "registry-1.docker.io"
 }
 
 // NormalizeMirrorURL 规范化 mirror URL，返回不含协议、去掉尾部斜杠的 host(+path) 部分。
@@ -141,14 +145,15 @@ func NormalizeMirrorURL(rawURL string) string {
 //   - "nginx@sha256:abc..."         → "docker.m.daocloud.io/library/nginx@sha256:abc..."
 //   - "ghcr.io/foo/bar:tag"         → 原样返回
 func RewriteRefToMirror(ref string, mirrorHost string) string {
-	if mirrorHost == "" {
+	trimmed := strings.TrimSpace(ref)
+	if mirrorHost == "" || trimmed == "" {
 		return ref
 	}
-	if !IsDockerHubImage(ref) {
+	if !IsDockerHubImage(trimmed) {
 		return ref
 	}
 
-	named, err := reference.ParseNormalizedNamed(ref)
+	named, err := reference.ParseNormalizedNamed(trimmed)
 	if err != nil {
 		return ref
 	}
@@ -178,7 +183,7 @@ func RewriteRefToMirror(ref string, mirrorHost string) string {
 //   - "nginx:1.25"       → "docker.io/library/nginx:1.25"
 //   - "ghcr.io/foo:tag"  → "ghcr.io/foo:tag"
 func NormalizeRef(ref string) string {
-	named, err := reference.ParseNormalizedNamed(ref)
+	named, err := reference.ParseNormalizedNamed(strings.TrimSpace(ref))
 	if err != nil {
 		return ref
 	}

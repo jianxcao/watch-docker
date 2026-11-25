@@ -105,6 +105,20 @@ func TestParseLsOutputPreservesSpacesAndTriggersFallbackOnAmbiguity(t *testing.T
 	if _, err := parseLsOutput(ambiguousSymlink); err == nil {
 		t.Fatalf("expected error on ambiguous symlink delimiter")
 	}
+
+	// GNU --time-style=iso 对半年以上旧文件会在 YYYY-MM-DD 后输出两个空格对齐宽度
+	isoOldOut := strings.Join([]string{
+		"-rw-r--r-- 1 root root 10 2025-01-15  old.txt",
+		"-rw-r--r-- 1 root root 10 2025-01-15   leading",
+		"-rw-r--r-- 1 root root 10 2025-01-15 single.txt",
+	}, "\n")
+	isoEntries, err := parseLsOutput(isoOldOut)
+	if err != nil {
+		t.Fatalf("parseLsOutput ISO old date failed: %v", err)
+	}
+	if len(isoEntries) != 3 || isoEntries[0].Name != "old.txt" || isoEntries[1].Name != " leading" || isoEntries[2].Name != "single.txt" {
+		t.Fatalf("unexpected ISO old date names: %#v", isoEntries)
+	}
 }
 
 func TestListContainerDirectoryArchiveFallbackPreservesSpaces(t *testing.T) {
@@ -407,5 +421,75 @@ func TestParseFileTimeAtInfersYearAndRejectsInvalidDates(t *testing.T) {
 				t.Fatalf("parseFileTimeAt(%q, %v) = (%q, %v), want (%q, nil)", tc.input, tc.now, res, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestReadContainerFileAutoFallsBackForSymlink(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var tarBuf bytes.Buffer
+	tw := tar.NewWriter(&tarBuf)
+	_ = tw.WriteHeader(&tar.Header{
+		Name:     "os-release",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "../usr/lib/os-release",
+		Mode:     0777,
+	})
+	_ = tw.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/events"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/archive"):
+			w.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString([]byte(`{"name":"os-release","mode":134218239,"linkTarget":"../usr/lib/os-release"}`)))
+			w.Header().Set("Content-Type", "application/x-tar")
+			_, _ = w.Write(tarBuf.Bytes())
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "no hijack", http.StatusInternalServerError)
+				return
+			}
+			conn, rw, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			_, _ = rw.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+			payload := []byte("NAME=\"Alpine Linux\"\n")
+			var hdr [8]byte
+			hdr[0] = 1
+			binary.BigEndian.PutUint32(hdr[4:], uint32(len(payload)))
+			_, _ = rw.Write(hdr[:])
+			_, _ = rw.Write(payload)
+			_ = rw.Flush()
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-cat"})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/") && strings.HasSuffix(r.URL.Path, "/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ExitCode": 0})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dockerCli, err := client.New(client.WithHost("tcp://" + srv.Listener.Addr().String()))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer dockerCli.Close()
+	cli := &Client{docker: dockerCli}
+
+	content, err := cli.ReadContainerFileAuto(ctx, "cid-sym", "/etc/os-release")
+	if err != nil {
+		t.Fatalf("ReadContainerFileAuto symlink failed: %v", err)
+	}
+	if content != "NAME=\"Alpine Linux\"\n" {
+		t.Fatalf("expected symlink fallback cat content, got %q", content)
 	}
 }

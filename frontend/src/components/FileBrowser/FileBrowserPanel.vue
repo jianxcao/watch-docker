@@ -813,7 +813,11 @@ onUnmounted(() => {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre;
+}
+
+.toolbar-breadcrumb :deep(.n-breadcrumb-item__link) {
+  white-space: pre;
 }
 
 .file-link-target {

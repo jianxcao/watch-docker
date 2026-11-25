@@ -161,10 +161,26 @@ func extractValidatedRPIDAndOrigin(c *gin.Context) (rpid string, origin string, 
 		originHostOnly := u.Hostname()
 		normalizedOrigin := scheme + "://" + u.Host
 		if reqHostOnly == "" || strings.EqualFold(originHostOnly, reqHostOnly) ||
-			(strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS) != "" && isAllowedDomain(originHostOnly)) {
+			(strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS) != "" && isAllowedOriginHost(u.Host, originHostOnly)) {
 			return originHostOnly, normalizedOrigin, true
 		}
 		return reqHostOnly, "", false
+	}
+
+	if strings.TrimSpace(conf.EnvCfg.TRUSTED_PROXIES) != "" {
+		if xfh := strings.TrimSpace(c.GetHeader("X-Forwarded-Host")); xfh != "" {
+			first := strings.TrimSpace(strings.Split(xfh, ",")[0])
+			first = strings.TrimPrefix(first, "http://")
+			first = strings.TrimPrefix(first, "https://")
+			if idx := strings.Index(first, "/"); idx >= 0 {
+				first = first[:idx]
+			}
+			xfhHostOnly := extractHostNameOnly(first)
+			if xfhHostOnly != "" && (strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS) == "" || isAllowedOriginHost(first, xfhHostOnly)) {
+				host = first
+				reqHostOnly = xfhHostOnly
+			}
+		}
 	}
 
 	if reqHostOnly == "" {
@@ -187,6 +203,29 @@ func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
 	return rpid, origin
 }
 
+func isAllowedOriginHost(hostWithPort, hostOnly string) bool {
+	allowedDomainsStr := conf.EnvCfg.TWOFA_ALLOWED_DOMAINS
+	if allowedDomainsStr == "" {
+		return true
+	}
+	for _, allowed := range strings.Split(allowedDomainsStr, ",") {
+		entry := strings.TrimSpace(allowed)
+		if entry == "" {
+			continue
+		}
+		if _, _, err := net.SplitHostPort(entry); err == nil {
+			if hostWithPort != "" && strings.EqualFold(entry, hostWithPort) {
+				return true
+			}
+			continue
+		}
+		if strings.EqualFold(extractHostNameOnly(entry), hostOnly) {
+			return true
+		}
+	}
+	return false
+}
+
 func isAllowedDomain(domain string) bool {
 	allowedDomainsStr := conf.EnvCfg.TWOFA_ALLOWED_DOMAINS
 	if allowedDomainsStr == "" {
@@ -195,7 +234,11 @@ func isAllowedDomain(domain string) bool {
 
 	allowedDomains := strings.Split(allowedDomainsStr, ",")
 	for _, allowed := range allowedDomains {
-		if strings.EqualFold(strings.TrimSpace(allowed), domain) {
+		entry := strings.TrimSpace(allowed)
+		if entry == "" {
+			continue
+		}
+		if strings.EqualFold(extractHostNameOnly(entry), domain) {
 			return true
 		}
 	}

@@ -239,4 +239,22 @@ func TestExtractValidatedRPIDAndOriginSecurityAndProxy(t *testing.T) {
 	if !ok || rpid != "docker.example.com" || origin != "https://docker.example.com" {
 		t.Fatalf("expected whitelisted proxy origin preserved, got (%q, %q, ok=%v)", rpid, origin, ok)
 	}
+
+	// 4. GET /2fa/status 无 Origin 时，在可信代理场景下遵循 X-Forwarded-Host 推导 RPID 与 Origin
+	conf.EnvCfg.TRUSTED_PROXIES = "127.0.0.1"
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = "docker.example.com:8443"
+	getCtx := makeCtx("127.0.0.1:8080", "")
+	getCtx.Request.Method = http.MethodGet
+	getCtx.Request.Header.Set("X-Forwarded-Host", "docker.example.com:8443")
+	getCtx.Request.Header.Set("X-Forwarded-Proto", "https")
+	rpid, origin, ok = extractValidatedRPIDAndOrigin(getCtx)
+	if !ok || rpid != "docker.example.com" || origin != "https://docker.example.com:8443" {
+		t.Fatalf("expected X-Forwarded-Host RPID/Origin with port whitelist, got (%q, %q, ok=%v)", rpid, origin, ok)
+	}
+	if !isAllowedDomain("docker.example.com") {
+		t.Fatalf("expected isAllowedDomain(rpid) to accept host from host:port whitelist")
+	}
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("127.0.0.1:8080", "https://docker.example.com:9443")); ok {
+		t.Fatalf("expected mismatched port origin rejected by host:port whitelist")
+	}
 }

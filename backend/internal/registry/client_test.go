@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"net"
 	"net/http"
@@ -326,5 +327,39 @@ func TestMirrorManifestSizeLimitAndJSONValidation(t *testing.T) {
 	}
 	if m1Hits.Load() != 4 || m2Hits.Load() != 3 {
 		t.Fatalf("corrupt JSON hits mismatch: m1=%d m2=%d", m1Hits.Load(), m2Hits.Load())
+	}
+
+	// 5. HTTP 200 JSON error body (valid JSON, no config.digest) with NeedConfigDigest=false must reject and fall back to mirror2
+	m1Payload.Store([]byte(`{"errors":[{"code":"UNAUTHORIZED","message":"denied"}]}`))
+	m1DigestHdr.Store("")
+	res = c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{
+		{ImageRef: "alpine:case5", OS: "linux", Arch: "amd64", NeedConfigDigest: false},
+	}, false, false, 1)["alpine:case5|linux/amd64/"]
+	if res.Error != nil || res.IndexDigest != m2Digest {
+		t.Fatalf("HTTP 200 error JSON: expected fallback mirror2 digest %q, got %#v", m2Digest, res)
+	}
+
+	// 6. registry-1.docker.io/library/alpine:case6 hits mirrors cleanly and verifies sha512 quoted Docker-Content-Digest
+	sha512Sum := sha512.Sum512([]byte(baseManifest))
+	sha512Digest := "sha512:" + hex.EncodeToString(sha512Sum[:])
+	m1Payload.Store([]byte(baseManifest))
+	m1DigestHdr.Store(`"` + sha512Digest + `"`)
+	q6 := DigestQuery{ImageRef: " registry-1.docker.io/library/alpine:case6 ", OS: "linux", Arch: "amd64", NeedConfigDigest: false}
+	res = c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q6}, false, false, 1)[q6.Key()]
+	if res.Error != nil || res.IndexDigest != sha512Digest {
+		t.Fatalf("registry-1.docker.io + sha512 header: expected %q, got %#v", sha512Digest, res)
+	}
+
+	// 7. selectBearerWWWAuthenticate picks Bearer challenge when Basic comes first
+	hdr := http.Header{}
+	hdr.Add("Www-Authenticate", `Basic realm="https://bad.example.com/"`)
+	hdr.Add("Www-Authenticate", `Bearer realm="https://auth.example.com/token",service="mirror",scope="repository:library/alpine:pull"`)
+	picked := selectBearerWWWAuthenticate(hdr)
+	realm, service, scope, err := parseWWWAuthenticate(picked)
+	if err != nil || realm != "https://auth.example.com/token" || service != "mirror" || scope != "repository:library/alpine:pull" {
+		t.Fatalf("unexpected Bearer challenge parse: realm=%q service=%q scope=%q err=%v", realm, service, scope, err)
+	}
+	if _, _, _, err := parseWWWAuthenticate(`Basic realm="https://bad.example.com/"`); err == nil {
+		t.Fatalf("expected Basic Www-Authenticate scheme rejected")
 	}
 }

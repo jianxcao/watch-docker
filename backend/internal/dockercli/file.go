@@ -170,7 +170,7 @@ var (
 	lsCustomTimeRe   = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}) (.+)$`)
 	lsIsoTimeRe      = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}) (.+)$`)
 	lsIsoShortTimeRe = regexp.MustCompile(`^(\d{2}-\d{2}\s+\d{2}:\d{2}) (.+)$`)
-	lsIsoDateOnlyRe  = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}) (.+)$`)
+	lsIsoDateOnlyRe  = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}) (?: (.+)|([^ ].*))$`)
 	lsTradTimeRe     = regexp.MustCompile(`^([A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?) (.+)$`)
 	lsYearTimeRe     = regexp.MustCompile(`^([A-Za-z]{3}\s+\d{1,2}\s+\d{4}) (.+)$`)
 )
@@ -221,9 +221,13 @@ func parseLsOutputAt(output string, now time.Time) ([]FileEntry, error) {
 		var dateStr, namePart string
 		matched := false
 		for _, tre := range timeRegexes {
-			if timeMatch := tre.FindStringSubmatch(remaining); len(timeMatch) == 3 {
+			if timeMatch := tre.FindStringSubmatch(remaining); len(timeMatch) >= 3 {
 				dateStr = timeMatch[1]
-				namePart = timeMatch[2]
+				if len(timeMatch) >= 4 && timeMatch[2] == "" {
+					namePart = timeMatch[3]
+				} else {
+					namePart = timeMatch[2]
+				}
 				matched = true
 				break
 			}
@@ -418,11 +422,16 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, rawPat
 		return nil, err
 	}
 
+	lsTarget := safePath
+	if lsTarget != "/" {
+		lsTarget += "/"
+	}
+
 	commands := [][]string{
-		{"ls", "-la", "--time-style=+%Y-%m-%d %H:%M:%S", safePath},
-		{"ls", "-la", "--time-style=iso", safePath},
-		{"ls", "-la", "--full-time", safePath},
-		{"ls", "-la", safePath},
+		{"ls", "-la", "--time-style=+%Y-%m-%d %H:%M:%S", lsTarget},
+		{"ls", "-la", "--time-style=iso", lsTarget},
+		{"ls", "-la", "--full-time", lsTarget},
+		{"ls", "-la", lsTarget},
 	}
 	lsEnv := []string{"TZ=UTC0", "LC_ALL=C"}
 
@@ -466,11 +475,32 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, rawPat
 
 // listContainerDirectoryFromArchive 通过 Docker Archive API (CopyFromContainer) 列出目录
 func (c *Client) listContainerDirectoryFromArchive(ctx context.Context, containerID, safePath string) (*FileListResult, error) {
-	copyRes, err := c.docker.CopyFromContainer(ctx, containerID, client.CopyFromContainerOptions{SourcePath: safePath})
+	archivePath := safePath
+	if archivePath != "/" {
+		archivePath += "/"
+	}
+	copyRes, err := c.docker.CopyFromContainer(ctx, containerID, client.CopyFromContainerOptions{SourcePath: archivePath})
 	if err != nil {
 		return nil, fmt.Errorf("archive API failed: %w", err)
 	}
 	defer copyRes.Content.Close()
+
+	if copyRes.Stat.Mode != 0 && !copyRes.Stat.Mode.IsDir() && copyRes.Stat.Mode&os.ModeSymlink == 0 {
+		return nil, fmt.Errorf("path %s is not a directory", safePath)
+	}
+
+	prefixes := []string{}
+	if safePath != "/" {
+		basePrefix := path.Base(safePath) + "/"
+		prefixes = append(prefixes, basePrefix)
+		statName := strings.Trim(strings.TrimPrefix(copyRes.Stat.Name, "./"), "/")
+		if statName != "" && statName != "." && statName != ".." {
+			statPrefix := statName + "/"
+			if statPrefix != basePrefix {
+				prefixes = append(prefixes, statPrefix)
+			}
+		}
+	}
 
 	tarReader := tar.NewReader(copyRes.Content)
 	entries := []FileEntry{}
@@ -496,15 +526,20 @@ func (c *Client) listContainerDirectoryFromArchive(ctx context.Context, containe
 			}
 			childName = name
 		} else {
-			prefix := path.Base(safePath) + "/"
-			if !strings.HasPrefix(name, prefix) {
+			matchedPrefix := false
+			for _, prefix := range prefixes {
+				if strings.HasPrefix(name, prefix) {
+					rel := strings.TrimPrefix(name, prefix)
+					if rel != "" && rel != "." && rel != ".." && !strings.Contains(rel, "/") {
+						childName = rel
+						matchedPrefix = true
+					}
+					break
+				}
+			}
+			if !matchedPrefix {
 				continue
 			}
-			rel := strings.TrimPrefix(name, prefix)
-			if rel == "" || rel == "." || rel == ".." || strings.Contains(rel, "/") {
-				continue
-			}
-			childName = rel
 		}
 
 		fileType := "other"
@@ -618,6 +653,9 @@ func (c *Client) ReadContainerFileFromArchive(ctx context.Context, containerID, 
 
 	if header.Typeflag == tar.TypeDir {
 		return "", fmt.Errorf("path is a directory, not a file")
+	}
+	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		return "", fmt.Errorf("path is not a regular file (type=%c)", header.Typeflag)
 	}
 	if header.Size > MaxEditableFileSize {
 		return "", fmt.Errorf("文件过大（超过 %d MB 在线编辑限制），请使用下载功能", MaxEditableFileSize/(1024*1024))

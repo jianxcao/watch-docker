@@ -68,6 +68,7 @@ const estimatedItemSize = 85
 let eventSource: EventSource | null = null
 let nextId = 1
 let followTail = true
+let resetOnNextBatch = false
 
 function onLogScroll(event: Event) {
   const el = event.target
@@ -94,7 +95,7 @@ const scrollToBottom = async () => {
     return
   }
   if (virtualListRef.value && logs.value.length > 0) {
-    virtualListRef.value.scrollTo({ index: logs.value.length - 1, behavior: 'auto' })
+    virtualListRef.value.scrollTo({ position: 'bottom', behavior: 'auto' })
   }
 }
 
@@ -127,6 +128,7 @@ const connectEventSource = () => {
   const url = token.value
     ? `/api/v1/logs?token=${encodeURIComponent(token.value)}`
     : '/api/v1/logs'
+  followTail = true
   const es = new EventSource(url)
   eventSource = es
 
@@ -135,6 +137,7 @@ const connectEventSource = () => {
       return
     }
     connectionError.value = ''
+    resetOnNextBatch = logs.value.length > 0
   }
   es.onmessage = (e) => {
     if (es !== eventSource) {
@@ -150,8 +153,10 @@ const connectEventSource = () => {
         logEntry._k = nextId++
       })
 
+      const base = resetOnNextBatch ? [] : logs.value
+      resetOnNextBatch = false
       const shouldScroll = followTail
-      const newLogs = [...logs.value, ...logArray]
+      const newLogs = [...base, ...logArray]
       if (newLogs.length > 500) {
         newLogs.splice(0, newLogs.length - 500)
       }

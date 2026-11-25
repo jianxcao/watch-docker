@@ -217,6 +217,19 @@ func parseOptionalAddr(raw string) (netip.Addr, error) {
 	return netip.ParseAddr(trimmed)
 }
 
+func isHexString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 // handleCreateContainer 处理容器创建
 func (s *Server) handleCreateContainer() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -284,11 +297,12 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 		}
 
 		// 构建主机配置
+		trimmedNetMode := strings.TrimSpace(req.NetworkMode)
 		hostConfig := &container.HostConfig{
 			Binds:           req.Binds,                                                                                                                                  // 数据卷绑定
 			RestartPolicy:   container.RestartPolicy{Name: container.RestartPolicyMode(req.RestartPolicy.Name), MaximumRetryCount: req.RestartPolicy.MaximumRetryCount}, // 重启策略
 			AutoRemove:      req.AutoRemove,                                                                                                                             // 容器退出时自动删除
-			NetworkMode:     container.NetworkMode(req.NetworkMode),                                                                                                     // 网络模式
+			NetworkMode:     container.NetworkMode(trimmedNetMode),                                                                                                      // 网络模式
 			Privileged:      req.Privileged,                                                                                                                             // 特权模式
 			PublishAllPorts: req.PublishAllPorts,                                                                                                                        // 发布所有端口
 			ReadonlyRootfs:  req.ReadonlyRootfs,                                                                                                                         // 只读根文件系统
@@ -439,11 +453,25 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 
 			primaryName := netNames[0]
 			hasPrimaryEndpoint := true
-			if rawMode := strings.TrimSpace(req.NetworkMode); rawMode != "" {
+			if rawMode := trimmedNetMode; rawMode != "" {
+				if rawMode == "default" {
+					if _, hasDefault := req.NetworkConfig.EndpointsConfig["default"]; !hasDefault {
+						if _, hasBridge := req.NetworkConfig.EndpointsConfig["bridge"]; hasBridge {
+							rawMode = "bridge"
+						}
+					}
+				}
 				if _, ok := req.NetworkConfig.EndpointsConfig[rawMode]; ok {
 					primaryName = rawMode
 				} else {
+					creatingNets := make(map[string]bool, len(req.NetworksToCreate))
+					for _, n := range req.NetworksToCreate {
+						if name := strings.TrimSpace(n.Name); name != "" {
+							creatingNets[name] = true
+						}
+					}
 					var exactIDMatches, prefixIDMatches []string
+					allowPrefixMatch := len(rawMode) >= 4 && isHexString(rawMode) && !creatingNets[rawMode]
 					for _, netName := range netNames {
 						ep := req.NetworkConfig.EndpointsConfig[netName]
 						if ep == nil {
@@ -455,7 +483,7 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 						}
 						if netID == rawMode {
 							exactIDMatches = append(exactIDMatches, netName)
-						} else if strings.HasPrefix(netID, rawMode) {
+						} else if allowPrefixMatch && strings.HasPrefix(netID, rawMode) {
 							prefixIDMatches = append(prefixIDMatches, netName)
 						}
 					}
@@ -966,9 +994,9 @@ func (s *Server) handleDeleteContainer() gin.HandlerFunc {
 		// 删除关联的卷
 		if removeVolumes && len(containerInfo.Mounts) > 0 {
 			var volumeNames []string
-			for _, mount := range containerInfo.Mounts {
-				if mount.Type == "volume" && mount.Name != "" {
-					volumeNames = append(volumeNames, mount.Name)
+			for _, m := range containerInfo.Mounts {
+				if volName := dockercli.ResolveMountVolumeName(m); volName != "" {
+					volumeNames = append(volumeNames, volName)
 				}
 			}
 			if len(volumeNames) > 0 {

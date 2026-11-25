@@ -35,6 +35,10 @@ describe('parseShellArgs', () => {
       '`id`',
     ])
     expect(parseShellArgs('echo "a\\\nb"')).toEqual(['echo', 'ab'])
+    expect(parseShellArgs('echo "a\\\r\nb"')).toEqual(['echo', 'ab'])
+    expect(parseShellArgs('--flag1 \\\n  --flag2')).toEqual(['--flag1', '--flag2'])
+    expect(parseShellArgs('--flag1 \\\r\n  --flag2')).toEqual(['--flag1', '--flag2'])
+    expect(parseShellArgs('cmd \\')).toEqual(['cmd'])
   })
 })
 
@@ -56,6 +60,22 @@ describe('transformBasicForm', () => {
 
     expect(res.entrypoint).toEqual(['/bin/sh', '-c', String.raw`grep "\d+"`])
     expect(res.cmd).toEqual(['printf', String.raw`\n`, String.raw`raw\narg`, 'plain space'])
+
+    const trailingEscaped = transformBasicForm({
+      name: 'demo',
+      image: 'alpine:latest',
+      entrypointString: 'cmd \\',
+      cmdString: 'echo hello\\ ',
+      workingDir: '',
+      user: '',
+      hostname: '',
+      domainname: '',
+      tty: false,
+      openStdin: false,
+      stdinOnce: false,
+    })
+    expect(trailingEscaped.entrypoint).toEqual(['cmd'])
+    expect(trailingEscaped.cmd).toEqual(['echo', 'hello '])
   })
 })
 

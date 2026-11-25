@@ -250,7 +250,8 @@ func maskURLPassword(rawURL string) string {
 	if err != nil || u.User == nil {
 		return rawURL
 	}
-	if _, hasPass := u.User.Password(); !hasPass {
+	pass, hasPass := u.User.Password()
+	if !hasPass || pass == "" {
 		return rawURL
 	}
 	return replaceURLUserPassword(rawURL, u.User.Username(), MaskedSecretPlaceholder)
@@ -333,7 +334,7 @@ func (c *Config) MaskedCopy() *Config {
 		}
 	}
 	cp.Proxy.URL = maskURLPassword(cp.Proxy.URL)
-	cp.Notify.URL = maskURLPassword(cp.Notify.URL)
+	cp.Notify.URL = maskURLPassword(NormalizeNotifyURL(cp.Notify.URL))
 	// 不向前端暴露任何用户的 OTP Secret 和 WebAuthn 凭据
 	cp.TwoFAConfig = TwoFAConfig{Users: map[string]TwoFAUserConfig{}}
 	return cp
@@ -463,8 +464,44 @@ func defaults() *Config {
 	}
 }
 
+func inspectConfigLoadPath(cfgPath string) (fileExists bool, fileNonEmpty bool, err error) {
+	if strings.TrimSpace(cfgPath) == "" || cfgPath == "." {
+		return false, false, nil
+	}
+	linfo, lerr := os.Lstat(cfgPath)
+	if lerr != nil {
+		if errors.Is(lerr, os.ErrNotExist) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("stat config path %s: %w", cfgPath, lerr)
+	}
+	if linfo.Mode()&os.ModeSymlink != 0 {
+		resolved, rerr := filepath.EvalSymlinks(cfgPath)
+		if rerr != nil {
+			return false, false, fmt.Errorf("resolve config symlink %s: %w", cfgPath, rerr)
+		}
+		tinfo, terr := os.Stat(resolved)
+		if terr != nil {
+			return false, false, fmt.Errorf("stat resolved config target %s (from %s): %w", resolved, cfgPath, terr)
+		}
+		if tinfo.IsDir() {
+			return false, false, fmt.Errorf("config symlink %s points to directory %s", cfgPath, resolved)
+		}
+		return true, tinfo.Size() > 0, nil
+	}
+	if linfo.IsDir() {
+		return false, false, fmt.Errorf("config path %s is a directory", cfgPath)
+	}
+	return true, linfo.Size() > 0, nil
+}
+
 // Load 读取配置文件（YAML）并应用 ENV 覆盖，校验后设置为全局配置。
 func Load(cfgPath string) (*Config, error) {
+	fileExists, fileNonEmpty, statErr := inspectConfigLoadPath(cfgPath)
+	if statErr != nil {
+		return nil, statErr
+	}
+
 	cfg := defaults()
 	defYAML, _ := yaml.Marshal(cfg)
 
@@ -477,12 +514,6 @@ func Load(cfgPath string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
 
-	fileExists := false
-	fileNonEmpty := false
-	if info, statErr := os.Stat(cfgPath); statErr == nil {
-		fileExists = true
-		fileNonEmpty = info.Size() > 0
-	}
 	if fileNonEmpty {
 		v.SetConfigFile(cfgPath)
 		if err := v.MergeInConfig(); err != nil {
@@ -634,6 +665,9 @@ func resolveConfigWritePath(configPath string) (string, error) {
 		return "", fmt.Errorf("stat config path %s: %w", configPath, err)
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
+		if info.IsDir() {
+			return "", fmt.Errorf("config path %s is a directory", configPath)
+		}
 		return configPath, nil
 	}
 	resolved, err := filepath.EvalSymlinks(configPath)
@@ -650,6 +684,13 @@ func resolveConfigWritePath(configPath string) (string, error) {
 	return resolved, nil
 }
 
+func isReadOnlyOrPermErr(err error) bool {
+	return errors.Is(err, os.ErrPermission) ||
+		errors.Is(err, syscall.EACCES) ||
+		errors.Is(err, syscall.EPERM) ||
+		errors.Is(err, syscall.EROFS)
+}
+
 func writeConfigAtomic(configPath string, cfg *Config) error {
 	if strings.TrimSpace(configPath) == "" || configPath == "." {
 		return nil
@@ -658,8 +699,10 @@ func writeConfigAtomic(configPath string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	_, targetStatErr := os.Stat(writePath)
+	targetExists := targetStatErr == nil
 	dir := filepath.Dir(writePath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil && !targetExists {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
@@ -670,6 +713,13 @@ func writeConfigAtomic(configPath string, cfg *Config) error {
 
 	tmpFile, err := os.CreateTemp(dir, ".config-*.yaml.tmp")
 	if err != nil {
+		if targetExists && isReadOnlyOrPermErr(err) {
+			if werr := os.WriteFile(writePath, yamlData, 0600); werr != nil {
+				return fmt.Errorf("write config file in place: %w", werr)
+			}
+			_ = os.Chmod(writePath, 0600)
+			return nil
+		}
 		return fmt.Errorf("create temp config file: %w", err)
 	}
 	tmpPath := tmpFile.Name()

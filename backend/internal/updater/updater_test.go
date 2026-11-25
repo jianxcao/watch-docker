@@ -310,4 +310,51 @@ func TestBuildNewContainerConfigsDestinationOnlyBind(t *testing.T) {
 			t.Fatalf("expected named unclean bind deduplicated, got binds=%#v mounts=%#v", namedHostCfg.Binds, namedHostCfg.Mounts)
 		}
 	})
+
+	t.Run("migrates HostConfig.Mounts anonymous volume without emptying source", func(t *testing.T) {
+		uctx := &updateContext{oldInfo: container.InspectResponse{
+			Config: &container.Config{},
+			HostConfig: &container.HostConfig{
+				Mounts: []mount.Mount{
+					{Type: mount.TypeVolume, Source: "", Target: "/data"},
+				},
+			},
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "anon_mount_vol", Destination: "/data", RW: false},
+			},
+		}}
+
+		_, newHostCfg, _, _, _ := u.buildNewContainerConfigs(uctx)
+		if len(newHostCfg.Mounts) != 1 || newHostCfg.Mounts[0].Source != "anon_mount_vol" || !newHostCfg.Mounts[0].ReadOnly {
+			t.Fatalf("expected structured mount rewritten with Source=anon_mount_vol ReadOnly=true, got %#v", newHostCfg.Mounts)
+		}
+		if uctx.oldInfo.HostConfig.Mounts[0].Source != "" {
+			t.Fatalf("expected source HostConfig.Mounts untouched, got %#v", uctx.oldInfo.HostConfig.Mounts)
+		}
+	})
+
+	t.Run("normalizes Windows destination-only binds and source:target binds", func(t *testing.T) {
+		uctx := &updateContext{oldInfo: container.InspectResponse{
+			Config: &container.Config{},
+			HostConfig: &container.HostConfig{
+				Binds: []string{
+					`C:\data`,
+					`C:\host:D:\app:ro`,
+					`myvol:E:\svc:ro`,
+				},
+			},
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "win_anon", Destination: `c:\data`, RW: true},
+				{Type: mount.TypeVolume, Name: "myvol", Destination: `e:\svc`, RW: false},
+			},
+		}}
+
+		_, newHostCfg, _, _, _ := u.buildNewContainerConfigs(uctx)
+		if len(newHostCfg.Binds) != 3 || newHostCfg.Binds[0] != `win_anon:c:\data` {
+			t.Fatalf("expected Windows dest bind rewritten to win_anon:c:\\data, got %#v", newHostCfg.Binds)
+		}
+		if len(newHostCfg.Mounts) != 0 {
+			t.Fatalf("expected zero duplicate Mounts for Windows binds, got %#v", newHostCfg.Mounts)
+		}
+	})
 }
