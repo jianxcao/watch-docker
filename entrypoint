@@ -36,10 +36,40 @@ if [ "$PUID" != "1000" ]; then
     usermod -o -u "${PUID}" watch-docker
 fi
 
+# 隔离运行用户的 HOME，避免对宿主机 /root 或只读程序目录 /app 执行递归 chown
+export HOME=/home/watch-docker
+if [ ! -d "$HOME" ]; then
+    mkdir -p "$HOME"
+fi
+
 chown -R watch-docker:watch-docker \
-    "${HOME}" \
-    /app \
-    "$CONFIG_DIR" 
+    "$HOME" \
+    "$CONFIG_DIR"
+
+# 仅授权 APP_PATH 顶层目录，避免对已有 Compose 项目数据执行递归 chown
+if [ -n "$APP_PATH" ]; then
+    if [ ! -d "$APP_PATH" ]; then
+        mkdir -p "$APP_PATH"
+    fi
+    chown watch-docker:watch-docker "$APP_PATH"
+fi
+
+# 自动将运行用户加入 docker.sock 所属宿主机组，确保非 root 用户也可访问 Docker Engine
+if [ -S /var/run/docker.sock ]; then
+    SOCK_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)
+    if [ -n "$SOCK_GID" ] && ! id -G watch-docker | tr ' ' '\n' | grep -qx "$SOCK_GID"; then
+        SOCK_GRP=$(awk -F: -v gid="$SOCK_GID" '$3 == gid { print $1; exit }' /etc/group)
+        if [ -z "$SOCK_GRP" ]; then
+            SOCK_GRP="dockersock"
+            if getent group "$SOCK_GRP" >/dev/null 2>&1; then
+                groupmod -o -g "$SOCK_GID" "$SOCK_GRP"
+            else
+                groupadd -o -g "$SOCK_GID" "$SOCK_GRP"
+            fi
+        fi
+        usermod -aG "$SOCK_GRP" watch-docker
+    fi
+fi
 
 # 设置默认umask
 : ${UMASK:=022}
@@ -48,5 +78,5 @@ umask "${UMASK}"
 echo "Starting notification service as watch-docker user (${PUID}:${PGID})"
 
 
-# 启动后端服务
-exec gosu watch-docker:watch-docker /app/watch-docker
+# 启动后端服务（仅传用户名使 gosu 通过 initgroups 保留附加组，包括 docker.sock 组）
+exec gosu watch-docker /app/watch-docker
