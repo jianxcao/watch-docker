@@ -207,6 +207,9 @@ func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
 		return
 	}
 	defer s.runMu.Unlock()
+	if stopCtx.Err() != nil {
+		return
+	}
 
 	runCtx, runCancel := context.WithCancel(ctx)
 	stopDone := make(chan struct{})
@@ -222,7 +225,7 @@ func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
 		close(stopDone)
 		runCancel()
 	}()
-	if runCtx.Err() != nil {
+	if runCtx.Err() != nil || stopCtx.Err() != nil {
 		return
 	}
 

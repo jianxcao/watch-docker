@@ -159,6 +159,24 @@ export function useRouteListState<Status extends string, SortBy extends string>(
 
   let pendingReplaceCount = 0
   let lastSyncedState: ListState<Status, SortBy> = { ...initial }
+  let externalQueryChangedWhilePending = false
+
+  const syncFromQuery = (query: LocationQuery) => {
+    const next = parse(query)
+    lastSyncedState = next
+    if (searchKeyword.value !== next.search) {
+      searchKeyword.value = next.search
+    }
+    if (statusFilter.value !== next.statusFilter) {
+      statusFilter.value = next.statusFilter
+    }
+    if (sortBy.value !== next.sortBy) {
+      sortBy.value = next.sortBy
+    }
+    if (sortOrder.value !== next.sortOrder) {
+      sortOrder.value = next.sortOrder
+    }
+  }
 
   watch([searchKeyword, statusFilter, sortBy, sortOrder], ([search, status, sort, order]) => {
     const currentState: ListState<Status, SortBy> = {
@@ -171,32 +189,37 @@ export function useRouteListState<Status extends string, SortBy extends string>(
       return
     }
     lastSyncedState = currentState
+    externalQueryChangedWhilePending = false
     pendingReplaceCount += 1
-    void router.replace({ query: build(route.query, currentState) }).finally(() => {
-      pendingReplaceCount = Math.max(0, pendingReplaceCount - 1)
-    })
+    void router
+      .replace({ query: build(route.query, currentState) })
+      .catch(() => {})
+      .finally(() => {
+        pendingReplaceCount = Math.max(0, pendingReplaceCount - 1)
+        if (pendingReplaceCount === 0) {
+          const committed = parse(route.query)
+          if (externalQueryChangedWhilePending && !isSameListState(committed, lastSyncedState)) {
+            externalQueryChangedWhilePending = false
+            syncFromQuery(route.query)
+            return
+          }
+          externalQueryChangedWhilePending = false
+          lastSyncedState = committed
+        }
+      })
   })
 
   watch(
     () => route.query,
     (newQuery) => {
       if (pendingReplaceCount > 0) {
+        const incoming = parse(newQuery)
+        if (!isSameListState(incoming, lastSyncedState)) {
+          externalQueryChangedWhilePending = true
+        }
         return
       }
-      const next = parse(newQuery)
-      lastSyncedState = next
-      if (searchKeyword.value !== next.search) {
-        searchKeyword.value = next.search
-      }
-      if (statusFilter.value !== next.statusFilter) {
-        statusFilter.value = next.statusFilter
-      }
-      if (sortBy.value !== next.sortBy) {
-        sortBy.value = next.sortBy
-      }
-      if (sortOrder.value !== next.sortOrder) {
-        sortOrder.value = next.sortOrder
-      }
+      syncFromQuery(newQuery)
     },
   )
 

@@ -491,7 +491,7 @@ func (c *Client) queryDigestViaMirrors(ctx context.Context, imageRef string, mir
 			}
 			hasValidDesc := false
 			for _, desc := range im.Manifests {
-				if desc.Digest.String() != "" {
+				if desc.Digest.Algorithm != "" && desc.Digest.Hex != "" {
 					hasValidDesc = true
 					break
 				}
@@ -522,8 +522,9 @@ func (c *Client) queryDigestViaMirrors(ctx context.Context, imageRef string, mir
 			return dig, childDig, cfgDig, true
 		}
 
-		if strings.TrimSpace(m.Config.Digest) == "" {
-			logger.Logger.Debug("mirror manifest 缺少 config.digest（可能为非 manifest JSON），尝试下一个或回退",
+		cfgAlg, cfgHex, cfgOK := strings.Cut(strings.TrimSpace(m.Config.Digest), ":")
+		if !cfgOK || cfgAlg == "" || cfgHex == "" {
+			logger.Logger.Debug("mirror manifest 缺少有效的 config.digest（可能为非 manifest JSON），尝试下一个或回退",
 				zap.String("image", imageRef),
 				zap.String("mirror", ep.HostWithPrefix()))
 			continue

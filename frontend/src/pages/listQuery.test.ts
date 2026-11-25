@@ -216,4 +216,69 @@ describe('useRouteListState', () => {
     expect(route.query).toEqual({})
     expect(searchKeyword.value).toBe('')
   })
+
+  it('swallows rejected router.replace without unhandled rejection and resets synced baseline to route.query', async () => {
+    const route = reactive<{ query: LocationQuery }>({ query: {} })
+    const replaceMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('guard error'))
+      .mockImplementation(({ query }: { query: LocationQuery }) => {
+        route.query = { ...query }
+        return Promise.resolve()
+      })
+    const router = { replace: replaceMock } as unknown as Router
+
+    const { searchKeyword } = useRouteListState({
+      route: route as any,
+      router,
+      parse: parseContainerListQuery,
+      build: buildContainerListQuery,
+    })
+
+    searchKeyword.value = 'nginx'
+    await nextTick()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(route.query).toEqual({})
+
+    searchKeyword.value = ''
+    await nextTick()
+    searchKeyword.value = 'nginx'
+    await nextTick()
+    await Promise.resolve()
+    expect(route.query).toEqual({ search: 'nginx' })
+  })
+
+  it('reconciles superseding external route.query changes that arrive while router.replace is pending', async () => {
+    const route = reactive<{ query: LocationQuery }>({ query: {} })
+    const resolvers: Array<() => void> = []
+    const replaceMock = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve)
+        }),
+    )
+    const router = { replace: replaceMock } as unknown as Router
+
+    const { searchKeyword, statusFilter } = useRouteListState({
+      route: route as any,
+      router,
+      parse: parseContainerListQuery,
+      build: buildContainerListQuery,
+    })
+
+    searchKeyword.value = 'nginx'
+    await nextTick()
+
+    // External navigation commits while router.replace is still in flight
+    route.query = { status: 'running' }
+    await nextTick()
+
+    resolvers.shift()?.()
+    await nextTick()
+    await Promise.resolve()
+
+    expect(statusFilter.value).toBe('running')
+    expect(searchKeyword.value).toBe('')
+  })
 })

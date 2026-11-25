@@ -696,7 +696,7 @@ func selectDescriptorFromIndex(im *v1.IndexManifest, targetOS, targetArch, targe
 	var archMatch *v1.Descriptor
 	for i := range im.Manifests {
 		m := &im.Manifests[i]
-		if m.Platform == nil {
+		if m.Platform == nil || m.Digest.Algorithm == "" || m.Digest.Hex == "" {
 			continue
 		}
 		pos := strings.ToLower(m.Platform.OS)

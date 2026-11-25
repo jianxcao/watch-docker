@@ -388,4 +388,13 @@ func TestMirrorManifestSizeLimitAndJSONValidation(t *testing.T) {
 	if res.Error != nil || res.IndexDigest != m2Digest {
 		t.Fatalf("digest mismatch on mirror1 should fallback to mirror2 %q, got %#v", m2Digest, res)
 	}
+
+	// 10. index manifest 缺少有效 digest 字段（零值 v1.Hash.String()==":"）时不得通过校验，应回退到 mirror2
+	m1Payload.Store([]byte(`{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}}]}`))
+	m1DigestHdr.Store("")
+	qMissingDescDigest := DigestQuery{ImageRef: "alpine:case10", OS: "linux", Arch: "amd64", NeedConfigDigest: false}
+	res = c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qMissingDescDigest}, false, false, 1)[qMissingDescDigest.Key()]
+	if res.Error != nil || res.IndexDigest != m2Digest || res.ChildDigest == ":" {
+		t.Fatalf("index manifest missing child digest should fallback to mirror2 %q, got %#v", m2Digest, res)
+	}
 }
