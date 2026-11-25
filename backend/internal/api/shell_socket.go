@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,7 +21,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// shellUpgrader WebSocket 升级器（用于 Shell）
 var shellUpgrader = websocket.Upgrader{
 	CheckOrigin:       auth.CheckWebSocketOrigin,
 	HandshakeTimeout:  10 * time.Second,
@@ -29,12 +29,11 @@ var shellUpgrader = websocket.Upgrader{
 	EnableCompression: true,
 }
 
-// TerminalMessage 终端消息结构
 type TerminalMessage struct {
 	Type string `json:"type"` // "input", "resize"
-	Data string `json:"data"` // 输入数据
-	Rows uint16 `json:"rows"` // 终端行数
-	Cols uint16 `json:"cols"` // 终端列数
+	Data string `json:"data"`
+	Rows uint16 `json:"rows"`
+	Cols uint16 `json:"cols"`
 }
 
 type webSocketMessageWriter interface {
@@ -142,7 +141,7 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		// 升级为 WebSocket 连接
+
 		conn, err := shellUpgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			logger.Logger.Error("Failed to upgrade WebSocket", zap.Error(err))
@@ -151,28 +150,27 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 		defer conn.Close()
 		writer := &synchronizedWebSocketWriter{conn: conn}
 
-		// 设置连接参数
 		conn.SetReadLimit(1024 * 1024)
-		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		conn.SetPongHandler(func(string) error {
-			conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-			return nil
+			return conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		})
 
-		// 创建上下文，用于控制 shell 会话
 		ctx, cancel := context.WithCancel(c.Request.Context())
 		defer cancel()
 
-		// 创建命令
 		cmd := exec.CommandContext(ctx, command.Path, command.Args...)
-		// 设置环境变量，支持中文显示
-		cmd.Env = append(os.Environ(),
+		env := append(os.Environ(),
 			"TERM=xterm-256color",
 			"LANG=zh_CN.UTF-8",
 			"LC_ALL=zh_CN.UTF-8",
 		)
+		if options.Target == terminalTargetHost {
+			// 容器内运行用户 HOME=/home/watch-docker，进入宿主机 root 命名空间时重置为宿主机 root 环境
+			env = append(env, "HOME=/root", "USER=root", "LOGNAME=root")
+		}
+		cmd.Env = env
 
-		// 启动 PTY
 		ptmx, err := pty.Start(cmd)
 		if err != nil {
 			logger.Logger.Error("Failed to start PTY", zap.Error(err))
@@ -183,17 +181,18 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 		defer func() {
 			cancel()
 			_ = ptmx.Close()
-			_ = cmd.Process.Kill()
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
 			_ = cmd.Wait()
 		}()
 
-		// 设置初始终端大小
-		pty.Setsize(ptmx, &pty.Winsize{
+		_ = pty.Setsize(ptmx, &pty.Winsize{
 			Rows: 24,
 			Cols: 80,
 		})
 
-		// 启动心跳检测
+		// 心跳检测
 		go func() {
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
@@ -219,7 +218,7 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 				cancel()
 				_ = conn.Close()
 			}()
-			buf := make([]byte, 1024)
+			buf := make([]byte, 4096)
 			for {
 				select {
 				case <-ctx.Done():
@@ -228,14 +227,14 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 					n, err := ptmx.Read(buf)
 					if err != nil {
 						if err != io.EOF {
-							logger.Logger.Error("Error reading from PTY", zap.Error(err))
+							logger.Logger.Debug("Error reading from PTY", zap.Error(err))
 						}
 						return
 					}
 
 					if n > 0 {
 						if err := writer.writeMessage(websocket.BinaryMessage, buf[:n]); err != nil {
-							logger.Logger.Error("Failed to write message to WebSocket", zap.Error(err))
+							logger.Logger.Debug("Failed to write message to WebSocket", zap.Error(err))
 							return
 						}
 					}
@@ -243,7 +242,7 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 			}
 		}()
 
-		// 读取 WebSocket 消息并写入 PTY
+		// 读取 WebSocket 消息：支持 JSON resize 控制帧与终端键盘输入
 		for {
 			select {
 			case <-ctx.Done():
@@ -257,16 +256,30 @@ func (s *Server) handleShellWebSocket() gin.HandlerFunc {
 					}
 					return
 				}
+				_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 
 				switch messageType {
 				case websocket.TextMessage:
-					// 处理文本消息（用户输入）
+					var msg TerminalMessage
+					if err := json.Unmarshal(message, &msg); err == nil && msg.Type == "resize" && msg.Rows > 0 && msg.Cols > 0 {
+						if resizeErr := pty.Setsize(ptmx, &pty.Winsize{
+							Rows: msg.Rows,
+							Cols: msg.Cols,
+						}); resizeErr != nil {
+							logger.Logger.Warn("Failed to resize PTY", zap.Error(resizeErr))
+						}
+						continue
+					} else if err == nil && msg.Type == "input" {
+						if _, err := ptmx.Write([]byte(msg.Data)); err != nil {
+							return
+						}
+						continue
+					}
 					if _, err := ptmx.Write(message); err != nil {
 						logger.Logger.Error("Failed to write to PTY", zap.Error(err))
 						return
 					}
 				case websocket.BinaryMessage:
-					// 处理二进制消息（也作为用户输入）
 					if _, err := ptmx.Write(message); err != nil {
 						logger.Logger.Error("Failed to write to PTY", zap.Error(err))
 						return

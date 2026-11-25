@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	Logger      *zap.Logger
-	atomicLevel zap.AtomicLevel
+	Logger      *zap.Logger = zap.NewNop()
+	atomicLevel             = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 )
 
 // customTimeEncoder 自定义时间编码器，格式为 YYYY-MM-DD HH:mm:ss
@@ -25,12 +25,12 @@ func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 func NewLogger(level string, file string) (*zap.Logger, error) {
 	// Parse log level
 	logLevel := zapcore.InfoLevel
-	switch level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":
 		logLevel = zapcore.DebugLevel
 	case "info":
 		logLevel = zapcore.InfoLevel
-	case "warn":
+	case "warn", "warning":
 		logLevel = zapcore.WarnLevel
 	case "error":
 		logLevel = zapcore.ErrorLevel
@@ -100,7 +100,7 @@ func NewLogger(level string, file string) (*zap.Logger, error) {
 // SetLogLevel 动态设置日志级别
 func SetLogLevel(level string) error {
 	var zapLevel zapcore.Level
-	switch strings.ToLower(level) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":
 		zapLevel = zapcore.DebugLevel
 	case "info":

@@ -53,21 +53,23 @@ func main() {
 	sc := scanner.New(dockerClient, reg)
 
 	// init notification system
-	notifier := notify.New(func() *config.Config { return cfg })
+	notifier := notify.New(config.Loader())
 	notificationManager := notificationmanager.New(notifier, path.Join(conf.EnvCfg.CONFIG_PATH, "notification-history.json"))
 
+	// share a single updater instance between scheduler and API router so per-container locks match
+	upd := updater.New(dockerClient)
+
 	// start scheduler
-	sch := scheduler.New(log, sc, updater.New(dockerClient), notificationManager)
+	sch := scheduler.New(log, sc, upd, notificationManager)
 	sch.Start()
 
-	r := api.NewRouter(log, dockerClient, reg, sc, sch)
+	r, closeStreams := api.NewRouterWithLifecycle(log, dockerClient, reg, sc, sch, upd)
 
 	srv := &http.Server{
-		Addr:         cfg.Server.Addr,
-		Handler:      r,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              cfg.Server.Addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
@@ -81,14 +83,21 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+	logger.Logger.Info("shutting down http server")
+	// 1. 先主动关闭长连接 SSE 与 WebSocket 流，随后关闭 HTTP 服务，阻止新请求触发调度/通知
+	if closeStreams != nil {
+		closeStreams()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	logger.Logger.Info("shutting down http server")
-	// stop scheduler
-	sch.Stop()
-	// close notification manager (flush pending notifications)
-	notificationManager.Close()
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Logger.Error("server shutdown error", logger.ZapErr(err))
+	}
+	// 2. HTTP 不再接新请求后停止调度器并等待进行中的扫描更新退出
+	sch.StopCron()
+	// 3. 调度器彻底停止后再关闭通知管理器并刷新待发送通知
+	notificationManager.Close()
+	if err := dockerClient.Close(); err != nil {
+		logger.Logger.Warn("close docker client error", logger.ZapErr(err))
 	}
 }
