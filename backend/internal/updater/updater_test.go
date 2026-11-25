@@ -72,14 +72,16 @@ func TestBuildNewContainerConfigsEntrypointLabelsVolumesAndNetworks(t *testing.T
 			NetworkSettings: &container.NetworkSettings{
 				Networks: map[string]*network.EndpointSettings{
 					"bridge": {
-						Aliases: []string{"bad-bridge-alias"},
-						Links:   []string{"db:db"},
+						Aliases:    []string{"bad-bridge-alias"},
+						Links:      []string{"db:db"},
+						MacAddress: network.HardwareAddr{0x02, 0x42, 0xac, 0x11, 0x00, 0x02},
 						IPAMConfig: &network.EndpointIPAMConfig{
 							IPv4Address: netip.MustParseAddr("172.17.0.5"),
 						},
 					},
 					"app_net": {
-						Aliases: []string{"web", "0123456789ab"},
+						Aliases:    []string{"web", "0123456789ab"},
+						MacAddress: network.HardwareAddr{0x02, 0x42, 0xac, 0x1e, 0x00, 0x0a},
 						IPAMConfig: &network.EndpointIPAMConfig{
 							IPv4Address: netip.MustParseAddr("172.30.0.10"),
 						},
@@ -115,12 +117,24 @@ func TestBuildNewContainerConfigsEntrypointLabelsVolumesAndNetworks(t *testing.T
 	if string(newHostCfg.NetworkMode) != "app_net" {
 		t.Fatalf("expected primary NetworkMode app_net preserved, got %q", newHostCfg.NetworkMode)
 	}
-	if _, ok := netCfg.EndpointsConfig["app_net"]; !ok {
+	appEp := netCfg.EndpointsConfig["app_net"]
+	if appEp == nil {
 		t.Fatalf("expected app_net in primary EndpointsConfig")
+	}
+	if appEp.MacAddress.String() != "02:42:ac:1e:00:0a" {
+		t.Fatalf("expected app_net MacAddress preserved, got %q", appEp.MacAddress.String())
 	}
 	bridgeEp := extra["bridge"]
 	if bridgeEp == nil || len(bridgeEp.Aliases) != 0 || len(bridgeEp.Links) != 0 || bridgeEp.IPAMConfig != nil {
 		t.Fatalf("expected bridge endpoint stripped of Aliases/Links/IPAMConfig, got %#v", bridgeEp)
+	}
+	if bridgeEp.MacAddress.String() != "02:42:ac:11:00:02" {
+		t.Fatalf("expected bridge MacAddress preserved, got %q", bridgeEp.MacAddress.String())
+	}
+	// 验证克隆的 MacAddress 切片与旧结构隔离
+	uctx.oldInfo.NetworkSettings.Networks["app_net"].MacAddress[0] = 0xff
+	if appEp.MacAddress.String() != "02:42:ac:1e:00:0a" {
+		t.Fatalf("expected cloned MacAddress isolated from source slice mutation, got %q", appEp.MacAddress.String())
 	}
 }
 
@@ -137,7 +151,8 @@ func TestBuildNewContainerConfigsResolvesPrimaryNetworkByID(t *testing.T) {
 			},
 			NetworkSettings: &container.NetworkSettings{
 				Networks: map[string]*network.EndpointSettings{
-					"aaa_secondary": {NetworkID: "1111111111111111111111111111111111111111111111111111111111111111"},
+					"aaa_secondary": {NetworkID: "1111111111111111111111111111111111111111111111111111111111111111", MacAddress: network.HardwareAddr{}},
+					"bbb_nil":       nil,
 					"zzz_primary":   {NetworkID: netID},
 				},
 			},
@@ -151,7 +166,11 @@ func TestBuildNewContainerConfigsResolvesPrimaryNetworkByID(t *testing.T) {
 	if _, ok := netCfg.EndpointsConfig["zzz_primary"]; !ok {
 		t.Fatalf("expected zzz_primary in EndpointsConfig, got %#v", netCfg.EndpointsConfig)
 	}
-	if _, ok := extra["aaa_secondary"]; !ok {
-		t.Fatalf("expected aaa_secondary in extraNetworks, got %#v", extra)
+	secEp := extra["aaa_secondary"]
+	if secEp == nil || secEp.MacAddress != nil {
+		t.Fatalf("expected empty MacAddress normalized to nil, got %#v", secEp)
+	}
+	if extra["bbb_nil"] == nil || extra["bbb_nil"].MacAddress != nil {
+		t.Fatalf("expected nil endpoint sanitized safely, got %#v", extra["bbb_nil"])
 	}
 }

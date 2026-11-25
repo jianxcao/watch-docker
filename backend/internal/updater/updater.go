@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -479,16 +480,22 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 				if ep == nil {
 					return &network.EndpointSettings{}
 				}
+				var mac network.HardwareAddr
+				if len(ep.MacAddress) > 0 {
+					mac = slices.Clone(ep.MacAddress)
+				}
 				if netName == "bridge" {
 					// Docker 26+ 禁止默认 bridge 网络携带 Aliases/IPAMConfig/Links
 					return &network.EndpointSettings{
 						DriverOpts: maps.Clone(ep.DriverOpts),
+						MacAddress: mac,
 					}
 				}
 				cleanEp := &network.EndpointSettings{
 					Links:      append([]string(nil), ep.Links...),
 					DriverOpts: maps.Clone(ep.DriverOpts),
 					GwPriority: ep.GwPriority,
+					MacAddress: mac,
 				}
 				if ep.IPAMConfig != nil {
 					cleanEp.IPAMConfig = ep.IPAMConfig.Copy()

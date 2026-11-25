@@ -117,8 +117,8 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
+        target: process.env.VITE_API_TARGET || 'http://localhost:8080',
+        changeOrigin: false,
         ws: true, // 启用 WebSocket 代理
         // 如果后端也是 HTTPS，请改为 https://localhost:8080
       },

@@ -77,12 +77,18 @@ func (n *Notifier) Send(ctx context.Context, title, content, link, image string)
 	}
 	notifyCfg := cfg.Notify
 
-	rawURL := strings.TrimSpace(notifyCfg.URL)
+	rawURL := config.NormalizeNotifyURL(notifyCfg.URL)
 	if rawURL == "" {
 		return nil
 	}
-
-	rawURL = strings.TrimPrefix(rawURL, "@")
+	u, err := url.Parse(rawURL)
+	if err != nil || u == nil || u.Host == "" {
+		return fmt.Errorf("invalid notify.url")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("invalid notify.url")
+	}
 
 	method := strings.ToUpper(strings.TrimSpace(notifyCfg.Method))
 	if method == "" {

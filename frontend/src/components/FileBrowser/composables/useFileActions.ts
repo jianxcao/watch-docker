@@ -3,26 +3,25 @@ import { useDialog, useMessage } from 'naive-ui'
 import { h, toValue, type MaybeRefOrGetter } from 'vue'
 import { NInput } from 'naive-ui'
 
+export const validateEntryName = (rawName: string, typeName: string): string | null => {
+  if (!rawName || rawName.trim() === '') {
+    return `请输入${typeName}名称`
+  }
+  if (rawName === '.' || rawName === '..') {
+    return `${typeName}名称不能为 "." 或 ".."`
+  }
+  if (rawName.includes('/') || rawName.includes('\\') || rawName.includes('\0')) {
+    return `${typeName}名称不能包含路径分隔符`
+  }
+  return null
+}
+
 /**
  * 文件/文件夹创建和重命名功能
  */
 export function useFileActions(containerId: MaybeRefOrGetter<string>) {
   const message = useMessage()
   const dialog = useDialog()
-
-  const validateEntryName = (rawName: string, typeName: string): string | null => {
-    const name = rawName.trim()
-    if (!name) {
-      return `请输入${typeName}名称`
-    }
-    if (name === '.' || name === '..' || name.includes('..')) {
-      return `${typeName}名称不能包含 ".."`
-    }
-    if (name.includes('/') || name.includes('\\')) {
-      return `${typeName}名称不能包含路径分隔符`
-    }
-    return null
-  }
 
   // 新建文件或文件夹
   const createPath = (currentPath: string, type: 'file' | 'directory', onSuccess?: () => void) => {
@@ -71,7 +70,7 @@ export function useFileActions(containerId: MaybeRefOrGetter<string>) {
     })
 
     const handleCreate = async () => {
-      const name = inputValue.trim()
+      const name = inputValue
       const fullPath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`
 
       const res = await createContainerPath(toValue(containerId), {
@@ -114,7 +113,7 @@ export function useFileActions(containerId: MaybeRefOrGetter<string>) {
           },
           onKeyup: async (e: KeyboardEvent) => {
             if (e.key === 'Enter' && !d.loading) {
-              const newName = inputValue.trim()
+              const newName = inputValue
               const validationErr = validateEntryName(newName, typeName)
               if (validationErr) {
                 message.error(validationErr)
@@ -137,7 +136,7 @@ export function useFileActions(containerId: MaybeRefOrGetter<string>) {
       positiveText: '重命名',
       negativeText: '取消',
       onPositiveClick: () => {
-        const newName = inputValue.trim()
+        const newName = inputValue
         const validationErr = validateEntryName(newName, typeName)
         if (validationErr) {
           message.error(validationErr)
@@ -157,7 +156,7 @@ export function useFileActions(containerId: MaybeRefOrGetter<string>) {
     })
 
     const handleRename = async () => {
-      const newName = inputValue.trim()
+      const newName = inputValue
       const newPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`
 
       const res = await renameContainerPath(toValue(containerId), {

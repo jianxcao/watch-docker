@@ -36,6 +36,8 @@ const (
 	ErrorTypeGeneral     ErrorType = "general"
 )
 
+var errRegistryCoolingDown = errors.New("registry cooling down")
+
 type CacheEntry struct {
 	IndexDigest  string
 	ChildDigest  string
@@ -475,7 +477,7 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 		canMirror := dockercli.IsDockerHubImage(q.ImageRef) && len(mirrors) > 0
 		if !canMirror && c.isRegistryRateLimited(host) {
 			results[qKey] = DigestResult{
-				Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却", host),
+				Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却: %w", host, errRegistryCoolingDown),
 				ErrType: ErrorTypeRateLimited,
 			}
 			continue
@@ -523,7 +525,9 @@ func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries
 				if dr.Error != nil {
 					switch dr.ErrType {
 					case ErrorTypeRateLimited:
-						c.setRegistryRateLimited(it.host, rateLimitCooldown)
+						if !errors.Is(dr.Error, errRegistryCoolingDown) {
+							c.setRegistryRateLimited(it.host, rateLimitCooldown)
+						}
 					case ErrorTypeNotFound:
 						c.setCache(it.cacheKey, CacheEntry{ErrorType: ErrorTypeNotFound}, notFoundCacheTTL)
 					}
@@ -577,7 +581,7 @@ func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, 
 
 	if c.isRegistryRateLimited(host) {
 		return DigestResult{
-			Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却", host),
+			Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却: %w", host, errRegistryCoolingDown),
 			ErrType: ErrorTypeRateLimited,
 		}
 	}

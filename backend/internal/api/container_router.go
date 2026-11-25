@@ -607,7 +607,15 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 						zap.String("containerID", containerID),
 						zap.String("network", netName),
 						zap.Error(err))
-					_ = s.docker.RemoveContainer(ctx, containerID, true)
+					rollbackCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+					removeErr := s.docker.RemoveContainer(rollbackCtx, containerID, true)
+					cancelRollback()
+					if removeErr != nil {
+						s.logger.Error("创建容器后回滚失败",
+							zap.String("containerID", containerID),
+							zap.String("network", netName),
+							zap.Error(removeErr))
+					}
 					c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, fmt.Sprintf("连接网络 %s 失败: %s", netName, err.Error())))
 					return
 				}
@@ -1360,8 +1368,8 @@ func (s *Server) handleDownloadContainerFile() gin.HandlerFunc {
 		}
 		defer reader.Close()
 
-		// 获取文件名
-		filename := filepath.Base(path)
+		// 获取文件名（逐字保留空格，仅过滤头注入字符）
+		filename := strings.NewReplacer("\"", "_", "\r", "", "\n", "").Replace(filepath.Base(path))
 
 		// 设置响应头
 		c.Header("Content-Type", "application/x-tar")

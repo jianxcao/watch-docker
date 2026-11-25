@@ -207,6 +207,41 @@ func resolveConfigPathLocked() string {
 	return envPath
 }
 
+// NormalizeNotifyURL 兼容历史配置中的单个前导 @（仅当后续为 http:// 或 https://，忽略协议大小写），保留其余字符原样。
+func NormalizeNotifyURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) > 1 && trimmed[0] == '@' {
+		rest := trimmed[1:]
+		lower := strings.ToLower(rest)
+		if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+			return rest
+		}
+	}
+	return trimmed
+}
+
+func replaceURLUserPassword(rawURL, username, password string) string {
+	schemeEnd := strings.Index(rawURL, "://")
+	if schemeEnd < 0 {
+		return rawURL
+	}
+	rest := rawURL[schemeEnd+3:]
+	authorityEnd := strings.IndexAny(rest, "/?#")
+	var authority, suffix string
+	if authorityEnd < 0 {
+		authority = rest
+	} else {
+		authority = rest[:authorityEnd]
+		suffix = rest[authorityEnd:]
+	}
+	atIdx := strings.LastIndex(authority, "@")
+	if atIdx < 0 {
+		return rawURL
+	}
+	hostPart := authority[atIdx+1:]
+	return rawURL[:schemeEnd+3] + url.UserPassword(username, password).String() + "@" + hostPart + suffix
+}
+
 func maskURLPassword(rawURL string) string {
 	if strings.TrimSpace(rawURL) == "" {
 		return rawURL
@@ -218,8 +253,7 @@ func maskURLPassword(rawURL string) string {
 	if _, hasPass := u.User.Password(); !hasPass {
 		return rawURL
 	}
-	u.User = url.UserPassword(u.User.Username(), MaskedSecretPlaceholder)
-	return u.String()
+	return replaceURLUserPassword(rawURL, u.User.Username(), MaskedSecretPlaceholder)
 }
 
 func restoreMaskedURLPassword(nextURL, prevURL string) string {
@@ -246,8 +280,7 @@ func restoreMaskedURLPassword(nextURL, prevURL string) string {
 		return nextURL
 	}
 	if oldPass, ok := prevU.User.Password(); ok && oldPass != "" {
-		u.User = url.UserPassword(u.User.Username(), oldPass)
-		return u.String()
+		return replaceURLUserPassword(nextURL, u.User.Username(), oldPass)
 	}
 	return nextURL
 }
@@ -345,7 +378,8 @@ func MergeMaskedSecrets(next, prev *Config) {
 	}
 
 	next.Proxy.URL = restoreMaskedURLPassword(next.Proxy.URL, prev.Proxy.URL)
-	next.Notify.URL = restoreMaskedURLPassword(next.Notify.URL, prev.Notify.URL)
+	next.Notify.URL = NormalizeNotifyURL(next.Notify.URL)
+	next.Notify.URL = restoreMaskedURLPassword(next.Notify.URL, NormalizeNotifyURL(prev.Notify.URL))
 }
 
 // SetGlobal 设置进程内的全局配置并原子落盘（供动态读取）。
@@ -555,7 +589,9 @@ func Validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("notify.method must be GET or POST")
 	}
-	if notifyURL := strings.TrimSpace(cfg.Notify.URL); notifyURL != "" {
+	notifyURL := NormalizeNotifyURL(cfg.Notify.URL)
+	cfg.Notify.URL = notifyURL
+	if notifyURL != "" {
 		u, err := url.Parse(notifyURL)
 		if err != nil || u == nil || u.Host == "" {
 			return fmt.Errorf("invalid notify.url")

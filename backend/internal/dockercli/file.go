@@ -43,16 +43,15 @@ type FileListResult struct {
 }
 
 // cleanContainerPath 严格规范化容器内 POSIX 路径。
-// 不再静默剥离特殊字符（防止 "/;" 变成 "/" 后触发危险操作），因为所有命令均通过参数数组执行，不经过 shell 解析。
+// 仅用 TrimSpace 判定空输入；对非空输入保留原始字符（包括前后空格）传给 path.Clean，避免 "report " 与 "report" 混淆。
 func cleanContainerPath(rawPath string) (string, error) {
-	trimmed := strings.TrimSpace(rawPath)
-	if trimmed == "" {
+	if strings.TrimSpace(rawPath) == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	if strings.ContainsRune(trimmed, 0) {
+	if strings.ContainsRune(rawPath, 0) {
 		return "", fmt.Errorf("invalid path: null byte")
 	}
-	cleaned := path.Clean("/" + trimmed)
+	cleaned := path.Clean("/" + rawPath)
 	return cleaned, nil
 }
 
@@ -159,79 +158,62 @@ func (c *Client) execContainerWithLimit(ctx context.Context, containerID string,
 	return stdoutBuf.String(), nil
 }
 
-// parseLsOutput 解析 ls -la 命令输出
+var (
+	lsLineRe         = regexp.MustCompile(`^([dlrwxst-]+)\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$`)
+	lsFullTimeRe     = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+[+-]\d{4}) (.+)$`)
+	lsCustomTimeRe   = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}) (.+)$`)
+	lsIsoTimeRe      = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}) (.+)$`)
+	lsIsoShortTimeRe = regexp.MustCompile(`^(\d{2}-\d{2}\s+\d{2}:\d{2}) (.+)$`)
+	lsIsoDateOnlyRe  = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}) (.+)$`)
+	lsTradTimeRe     = regexp.MustCompile(`^([A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?) (.+)$`)
+	lsYearTimeRe     = regexp.MustCompile(`^([A-Za-z]{3}\s+\d{1,2}\s+\d{4}) (.+)$`)
+)
+
+// parseLsOutput 解析 ls -la 命令输出，逐字保留条目名和链接目标中的前后空格。
+// 遇到无法明确判定日期边界或符号链接分隔符有歧义的行时返回错误，触发上层回退到 Docker Archive API。
 func parseLsOutput(output string) ([]FileEntry, error) {
 	lines := strings.Split(output, "\n")
 	entries := []FileEntry{}
 
-	re := regexp.MustCompile(`^([dlrwxst-]+)\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$`)
-	reFullTime := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+[+-]\d{4})\s+(.+)$`)
-	reCustomTime := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(.+)$`)
-	reIsoTime := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$`)
-	reTradTime := regexp.MustCompile(`^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?)\s+(.+)$`)
-	reYearTime := regexp.MustCompile(`^(\w{3}\s+\d{1,2}\s+\d{4})\s+(.+)$`)
+	timeRegexes := []*regexp.Regexp{
+		lsFullTimeRe,
+		lsCustomTimeRe,
+		lsIsoTimeRe,
+		lsIsoShortTimeRe,
+		lsIsoDateOnlyRe,
+		lsTradTimeRe,
+		lsYearTimeRe,
+	}
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "total") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" || line == "total" || strings.HasPrefix(line, "total ") {
 			continue
 		}
 
-		matches := re.FindStringSubmatch(line)
+		matches := lsLineRe.FindStringSubmatch(line)
 		if len(matches) < 6 {
-			continue
+			return nil, fmt.Errorf("unrecognized ls output line: %q", line)
 		}
 
 		perms := matches[1]
 		owner := matches[2]
 		group := matches[3]
 		sizeStr := matches[4]
-		remaining := strings.TrimSpace(matches[5])
+		remaining := strings.TrimLeft(matches[5], " \t")
 
 		var dateStr, namePart string
-
-		if timeMatch := reFullTime.FindStringSubmatch(remaining); len(timeMatch) == 3 {
-			dateStr = timeMatch[1]
-			namePart = timeMatch[2]
-		} else if timeMatch := reCustomTime.FindStringSubmatch(remaining); len(timeMatch) == 3 {
-			dateStr = timeMatch[1]
-			namePart = timeMatch[2]
-		} else if timeMatch := reIsoTime.FindStringSubmatch(remaining); len(timeMatch) == 3 {
-			dateStr = timeMatch[1]
-			namePart = timeMatch[2]
-		} else if timeMatch := reTradTime.FindStringSubmatch(remaining); len(timeMatch) == 3 {
-			dateStr = timeMatch[1]
-			namePart = timeMatch[2]
-		} else if timeMatch := reYearTime.FindStringSubmatch(remaining); len(timeMatch) == 3 {
-			dateStr = timeMatch[1]
-			namePart = timeMatch[2]
-		} else {
-			parts := strings.Fields(remaining)
-			if len(parts) >= 2 {
-				namePart = parts[len(parts)-1]
-				dateStr = strings.Join(parts[:len(parts)-1], " ")
-			} else {
-				logger.Logger.Warn("cannot parse ls line", zap.String("line", line))
-				continue
+		matched := false
+		for _, tre := range timeRegexes {
+			if timeMatch := tre.FindStringSubmatch(remaining); len(timeMatch) == 3 {
+				dateStr = timeMatch[1]
+				namePart = timeMatch[2]
+				matched = true
+				break
 			}
 		}
-
-		namePart = strings.TrimSpace(namePart)
-		dateStr = strings.TrimSpace(dateStr)
-
-		nameOnly := namePart
-		if strings.Contains(namePart, " -> ") {
-			nameOnly = strings.TrimSpace(strings.Split(namePart, " -> ")[0])
-		}
-
-		if nameOnly == "." || nameOnly == ".." {
-			continue
-		}
-
-		size, err := strconv.ParseInt(sizeStr, 10, 64)
-		if err != nil {
-			logger.Logger.Warn("parse size failed", zap.String("size", sizeStr), zap.Error(err))
-			size = 0
+		if !matched {
+			return nil, fmt.Errorf("ambiguous ls timestamp format: %q", line)
 		}
 
 		fileType := "other"
@@ -242,13 +224,24 @@ func parseLsOutput(output string) ([]FileEntry, error) {
 			fileType = "directory"
 		} else if strings.HasPrefix(perms, "l") {
 			fileType = "symlink"
-			parts := strings.Split(namePart, " -> ")
-			if len(parts) == 2 {
-				name = strings.TrimSpace(parts[0])
-				linkTarget = strings.TrimSpace(parts[1])
+			if strings.Count(namePart, " -> ") != 1 {
+				return nil, fmt.Errorf("ambiguous symlink entry in ls output: %q", line)
 			}
+			parts := strings.SplitN(namePart, " -> ", 2)
+			name = parts[0]
+			linkTarget = parts[1]
 		} else if strings.HasPrefix(perms, "-") {
 			fileType = "file"
+		}
+
+		if name == "." || name == ".." {
+			continue
+		}
+
+		size, err := strconv.ParseInt(sizeStr, 10, 64)
+		if err != nil {
+			logger.Logger.Warn("parse size failed", zap.String("size", sizeStr), zap.Error(err))
+			size = 0
 		}
 
 		readonly := true
@@ -277,10 +270,11 @@ func parseLsOutput(output string) ([]FileEntry, error) {
 }
 
 var (
-	reSpaces   = regexp.MustCompile(`\s+`)
-	reNano     = regexp.MustCompile(`(\d{2}:\d{2}:\d{2})\.\d+ `)
-	reMMDD     = regexp.MustCompile(`^(\d{2})-(\d{2})$`)
-	reYYYYMMDD = regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`)
+	reSpaces     = regexp.MustCompile(`\s+`)
+	reNano       = regexp.MustCompile(`(\d{2}:\d{2}:\d{2})\.\d+ `)
+	reMMDD       = regexp.MustCompile(`^(\d{2})-(\d{2})$`)
+	reMMDDHHMM   = regexp.MustCompile(`^(\d{2})-(\d{2}) (\d{2}:\d{2})$`)
+	reYYYYMMDD   = regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`)
 )
 
 // parseFileTime 解析文件时间
@@ -293,13 +287,21 @@ func parseFileTime(timeStr string) string {
 		"2006-01-02 15:04:05 -0700",
 		"2006-01-02 15:04:05",
 		"2006-01-02 15:04",
-		"Jan 02 15:04:05",
-		"Jan 02 15:04",
-		"Jan 02 2006",
+		"Jan 2 15:04:05",
+		"Jan 2 15:04",
+		"Jan 2 2006",
 	}
 
 	for _, format := range formats {
 		if t, err := time.Parse(format, timeStr); err == nil {
+			return t.Format(time.RFC3339)
+		}
+	}
+
+	if matched := reMMDDHHMM.FindStringSubmatch(timeStr); len(matched) == 4 {
+		currentYear := time.Now().Year()
+		dateStr := fmt.Sprintf("%d-%s-%s %s", currentYear, matched[1], matched[2], matched[3])
+		if t, err := time.Parse("2006-01-02 15:04", dateStr); err == nil {
 			return t.Format(time.RFC3339)
 		}
 	}
@@ -363,7 +365,11 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, rawPat
 
 	entries, err := parseLsOutput(output)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse ls output: %w", err)
+		logger.Logger.Info("ls output ambiguous, falling back to archive API",
+			zap.String("container", containerID),
+			zap.String("path", safePath),
+			zap.Error(err))
+		return c.listContainerDirectoryFromArchive(ctx, containerID, safePath)
 	}
 
 	return &FileListResult{
@@ -616,8 +622,8 @@ func (c *Client) PutSingleFileStream(ctx context.Context, containerID, targetDir
 	if err != nil {
 		return err
 	}
-	cleanName := path.Base(strings.TrimSpace(filename))
-	if cleanName == "" || cleanName == "." || cleanName == ".." || cleanName == "/" {
+	if filename == "" || filename == "." || filename == ".." ||
+		strings.ContainsAny(filename, "/\\") || strings.ContainsRune(filename, 0) {
 		return fmt.Errorf("invalid filename")
 	}
 
@@ -627,7 +633,7 @@ func (c *Client) PutSingleFileStream(ctx context.Context, containerID, targetDir
 	go func() {
 		tw := tar.NewWriter(pw)
 		hdr := &tar.Header{
-			Name:    cleanName,
+			Name:    filename,
 			Mode:    0644,
 			Size:    size,
 			ModTime: time.Now(),

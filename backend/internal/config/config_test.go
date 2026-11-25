@@ -303,3 +303,60 @@ func TestDurationMinutesYAMLAndEnvDecode(t *testing.T) {
 		t.Fatalf("expected legacy 1800000000000ns -> 30m, got %v", loadedLegacy.Scan.CacheTTL.Duration())
 	}
 }
+
+func TestLegacyNotifyURLAtPrefixCompatibility(t *testing.T) {
+	cfgPath := setupTempConfigEnv(t)
+	legacyYAML := "notify:\n  url: \"@https://notify.example/hook?title={title}\"\n"
+	if err := os.WriteFile(cfgPath, []byte(legacyYAML), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load legacy @https notify.url failed: %v", err)
+	}
+	want := "https://notify.example/hook?title={title}"
+	if cfg.Notify.URL != want {
+		t.Fatalf("notify URL = %q, want %q", cfg.Notify.URL, want)
+	}
+
+	diskRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(diskRaw) != legacyYAML {
+		t.Fatalf("expected non-empty disk config untouched on Load, got:\n%s", string(diskRaw))
+	}
+
+	// 验证带用户名密码和占位符的 URL 经 MaskedCopy -> MergeMaskedSecrets -> Validate 后可完整还原
+	prev := defaults()
+	prev.Notify.URL = "@https://user:secret@notify.example/{title}?text={content}"
+	if err := Validate(prev); err != nil {
+		t.Fatalf("Validate prev notify.url failed: %v", err)
+	}
+	masked := prev.MaskedCopy()
+	if strings.Contains(masked.Notify.URL, "secret") || !strings.Contains(masked.Notify.URL, "{title}") ||
+		(!strings.Contains(masked.Notify.URL, MaskedSecretPlaceholder) && !strings.Contains(masked.Notify.URL, "%2A%2A%2A%2A%2A%2A")) {
+		t.Fatalf("unexpected masked Notify.URL: %q", masked.Notify.URL)
+	}
+
+	incoming := masked.Clone()
+	incoming.Notify.URL = "@" + masked.Notify.URL
+	MergeMaskedSecrets(incoming, prev)
+	if err := Validate(incoming); err != nil {
+		t.Fatalf("Validate restored Notify.URL failed: %v", err)
+	}
+	wantAuth := "https://user:secret@notify.example/{title}?text={content}"
+	if incoming.Notify.URL != wantAuth {
+		t.Fatalf("restored Notify.URL = %q, want %q", incoming.Notify.URL, wantAuth)
+	}
+
+	// 非法格式必须继续被 Validate 拒绝
+	for _, bad := range []string{"@", "@@https://notify.example/hook", "@ftp://notify.example/hook"} {
+		badCfg := defaults()
+		badCfg.Notify.URL = bad
+		if err := Validate(badCfg); err == nil {
+			t.Fatalf("expected Validate to reject %q", bad)
+		}
+	}
+}
