@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseShellArgs,
+  transformBasicForm,
   transformEnvForm,
   transformLabelForm,
   transformNetworkForm,
@@ -21,6 +22,40 @@ describe('parseShellArgs', () => {
       'single arg',
       'plain space',
     ])
+  })
+
+  it('preserves ordinary backslashes inside double quotes while handling special escapes', () => {
+    expect(parseShellArgs(String.raw`printf "\n"`)).toEqual(['printf', String.raw`\n`])
+    expect(parseShellArgs(String.raw`grep "\d+"`)).toEqual(['grep', String.raw`\d+`])
+    expect(parseShellArgs(String.raw`echo "a\"b" "a\\b" "\$HOME" "\`id\`"`)).toEqual([
+      'echo',
+      'a"b',
+      String.raw`a\b`,
+      '$HOME',
+      '`id`',
+    ])
+    expect(parseShellArgs('echo "a\\\nb"')).toEqual(['echo', 'ab'])
+  })
+})
+
+describe('transformBasicForm', () => {
+  it('parses both entrypointString and cmdString with double-quoted backslashes', () => {
+    const res = transformBasicForm({
+      name: 'demo',
+      image: 'alpine:latest',
+      entrypointString: String.raw`/bin/sh -c "grep \"\d+\""`,
+      cmdString: String.raw`printf "\n" 'raw\narg' plain\ space`,
+      workingDir: '',
+      user: '',
+      hostname: '',
+      domainname: '',
+      tty: false,
+      openStdin: false,
+      stdinOnce: false,
+    })
+
+    expect(res.entrypoint).toEqual(['/bin/sh', '-c', String.raw`grep "\d+"`])
+    expect(res.cmd).toEqual(['printf', String.raw`\n`, String.raw`raw\narg`, 'plain space'])
   })
 })
 

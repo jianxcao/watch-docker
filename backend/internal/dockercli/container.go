@@ -466,12 +466,39 @@ func isHex64(s string) bool {
 	return true
 }
 
+// ResolveMountVolumeName 解析卷挂载名称；若 MountPoint 未填充 Name，则尝试从标准 Docker 卷 _data 路径提取。
+func ResolveMountVolumeName(m container.MountPoint) string {
+	if m.Type != mount.TypeVolume {
+		return ""
+	}
+	if m.Name != "" {
+		return m.Name
+	}
+	if m.Source == "" {
+		return ""
+	}
+	norm := strings.TrimSuffix(strings.ReplaceAll(m.Source, "\\", "/"), "/")
+	if !strings.HasSuffix(norm, "/_data") {
+		return ""
+	}
+	parent := strings.TrimSuffix(norm, "/_data")
+	idx := strings.LastIndex(parent, "/")
+	if idx < 0 {
+		return ""
+	}
+	prefix, volName := parent[:idx], parent[idx+1:]
+	if volName != "" && (prefix == "/volumes" || strings.HasSuffix(prefix, "/volumes")) {
+		return volName
+	}
+	return ""
+}
+
 // isAnonymousVolume 准确判断卷是否为匿名卷，避免误删长名字的命名卷
 func isAnonymousVolume(volName string, labels map[string]string) bool {
 	if labels["com.docker.compose.volume"] != "" {
 		return false
 	}
-	if labels["com.docker.volume.anonymous"] == "true" {
+	if _, ok := labels["com.docker.volume.anonymous"]; ok {
 		return true
 	}
 	return isHex64(volName)
@@ -491,8 +518,8 @@ func (c *Client) SafeRemoveVolumes(ctx context.Context, volumeNames []string) er
 	inUse := make(map[string]struct{})
 	for _, ct := range listRes.Items {
 		for _, m := range ct.Mounts {
-			if m.Type == mount.TypeVolume && m.Name != "" {
-				inUse[m.Name] = struct{}{}
+			if volName := ResolveMountVolumeName(m); volName != "" {
+				inUse[volName] = struct{}{}
 			}
 		}
 	}
@@ -533,8 +560,8 @@ func (c *Client) CleanupContainerResources(ctx context.Context, containerInfo co
 	if len(containerInfo.Mounts) > 0 {
 		var volumeNames []string
 		for _, m := range containerInfo.Mounts {
-			if m.Type == mount.TypeVolume && m.Name != "" {
-				volumeNames = append(volumeNames, m.Name)
+			if volName := ResolveMountVolumeName(m); volName != "" {
+				volumeNames = append(volumeNames, volName)
 			}
 		}
 		_ = c.SafeRemoveVolumes(ctx, volumeNames)

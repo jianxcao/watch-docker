@@ -159,7 +159,8 @@ func (c *Client) execContainerWithLimit(ctx context.Context, containerID string,
 }
 
 var (
-	lsLineRe         = regexp.MustCompile(`^([dlrwxst-]+)\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$`)
+	lsRegularLineRe  = regexp.MustCompile(`^([-dlsp][rwxstST-]{9}[.+]?)\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$`)
+	lsDeviceLineRe   = regexp.MustCompile(`^([cb][rwxstST-]{9}[.+]?)\s+\d+\s+(\S+)\s+(\S+)\s+(\d+,\s*\d+)\s+(.+)$`)
 	lsFullTimeRe     = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+[+-]\d{4}) (.+)$`)
 	lsCustomTimeRe   = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}) (.+)$`)
 	lsIsoTimeRe      = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}) (.+)$`)
@@ -191,9 +192,14 @@ func parseLsOutput(output string) ([]FileEntry, error) {
 			continue
 		}
 
-		matches := lsLineRe.FindStringSubmatch(line)
+		isDevice := false
+		matches := lsRegularLineRe.FindStringSubmatch(line)
 		if len(matches) < 6 {
-			return nil, fmt.Errorf("unrecognized ls output line: %q", line)
+			matches = lsDeviceLineRe.FindStringSubmatch(line)
+			if len(matches) < 6 {
+				return nil, fmt.Errorf("unrecognized ls output line: %q", line)
+			}
+			isDevice = true
 		}
 
 		perms := matches[1]
@@ -238,10 +244,14 @@ func parseLsOutput(output string) ([]FileEntry, error) {
 			continue
 		}
 
-		size, err := strconv.ParseInt(sizeStr, 10, 64)
-		if err != nil {
-			logger.Logger.Warn("parse size failed", zap.String("size", sizeStr), zap.Error(err))
-			size = 0
+		var size int64
+		if !isDevice {
+			var err error
+			size, err = strconv.ParseInt(sizeStr, 10, 64)
+			if err != nil {
+				logger.Logger.Warn("parse size failed", zap.String("size", sizeStr), zap.Error(err))
+				size = 0
+			}
 		}
 
 		readonly := true

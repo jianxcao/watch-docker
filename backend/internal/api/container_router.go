@@ -375,7 +375,8 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 		// 构建网络配置(主网络写入 Create，其余网络创建后通过 ConnectNetwork 附加)
 		var networkConfig *network.NetworkingConfig
 		var extraNetworks map[string]*network.EndpointSettings
-		if req.NetworkConfig != nil && len(req.NetworkConfig.EndpointsConfig) > 0 {
+		if req.NetworkConfig != nil && len(req.NetworkConfig.EndpointsConfig) > 0 &&
+			!hostConfig.NetworkMode.IsHost() && !hostConfig.NetworkMode.IsNone() && !hostConfig.NetworkMode.IsContainer() {
 			netNames := make([]string, 0, len(req.NetworkConfig.EndpointsConfig))
 			for netName := range req.NetworkConfig.EndpointsConfig {
 				netNames = append(netNames, netName)
@@ -437,29 +438,73 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			}
 
 			primaryName := netNames[0]
-			primaryEp, err := buildEndpoint(primaryName, req.NetworkConfig.EndpointsConfig[primaryName])
-			if err != nil {
-				c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
-				return
-			}
-			if !hostConfig.NetworkMode.IsHost() && !hostConfig.NetworkMode.IsNone() && !hostConfig.NetworkMode.IsContainer() {
-				hostConfig.NetworkMode = container.NetworkMode(primaryName)
-			}
-			networkConfig = &network.NetworkingConfig{
-				EndpointsConfig: map[string]*network.EndpointSettings{
-					primaryName: primaryEp,
-				},
-			}
-			if len(netNames) > 1 {
-				extraNetworks = make(map[string]*network.EndpointSettings, len(netNames)-1)
-				for _, netName := range netNames[1:] {
-					ep, err := buildEndpoint(netName, req.NetworkConfig.EndpointsConfig[netName])
-					if err != nil {
-						c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
-						return
+			hasPrimaryEndpoint := true
+			if rawMode := strings.TrimSpace(req.NetworkMode); rawMode != "" {
+				if _, ok := req.NetworkConfig.EndpointsConfig[rawMode]; ok {
+					primaryName = rawMode
+				} else {
+					var exactIDMatches, prefixIDMatches []string
+					for _, netName := range netNames {
+						ep := req.NetworkConfig.EndpointsConfig[netName]
+						if ep == nil {
+							continue
+						}
+						netID := strings.TrimSpace(ep.NetworkID)
+						if netID == "" {
+							continue
+						}
+						if netID == rawMode {
+							exactIDMatches = append(exactIDMatches, netName)
+						} else if strings.HasPrefix(netID, rawMode) {
+							prefixIDMatches = append(prefixIDMatches, netName)
+						}
 					}
-					extraNetworks[netName] = ep
+					switch {
+					case len(exactIDMatches) > 1:
+						c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("主网络 %q 匹配到多个端点", rawMode)))
+						return
+					case len(exactIDMatches) == 1:
+						primaryName = exactIDMatches[0]
+					case len(prefixIDMatches) > 1:
+						c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("主网络 ID 前缀 %q 存在歧义", rawMode)))
+						return
+					case len(prefixIDMatches) == 1:
+						primaryName = prefixIDMatches[0]
+					default:
+						primaryName = rawMode
+						hasPrimaryEndpoint = false
+					}
 				}
+			}
+
+			hostConfig.NetworkMode = container.NetworkMode(primaryName)
+			if hasPrimaryEndpoint {
+				primaryEp, err := buildEndpoint(primaryName, req.NetworkConfig.EndpointsConfig[primaryName])
+				if err != nil {
+					c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
+					return
+				}
+				networkConfig = &network.NetworkingConfig{
+					EndpointsConfig: map[string]*network.EndpointSettings{
+						primaryName: primaryEp,
+					},
+				}
+			}
+
+			extraNetworks = make(map[string]*network.EndpointSettings, len(netNames))
+			for _, netName := range netNames {
+				if hasPrimaryEndpoint && netName == primaryName {
+					continue
+				}
+				ep, err := buildEndpoint(netName, req.NetworkConfig.EndpointsConfig[netName])
+				if err != nil {
+					c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
+					return
+				}
+				extraNetworks[netName] = ep
+			}
+			if len(extraNetworks) == 0 {
+				extraNetworks = nil
 			}
 		}
 

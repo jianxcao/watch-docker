@@ -40,7 +40,15 @@ export function parseShellArgs(input: string): string[] {
     }
     if (quote === '"') {
       if (ch === '\\') {
-        escaped = true
+        const next = input[i + 1]
+        if (next === '"' || next === '\\' || next === '$' || next === '`') {
+          current += next
+          i++
+        } else if (next === '\n') {
+          i++
+        } else {
+          current += ch
+        }
       } else if (ch === '"') {
         quote = null
       } else {

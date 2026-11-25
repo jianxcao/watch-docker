@@ -124,9 +124,6 @@ func TestListContainerDirectoryArchiveFallbackPreservesSpaces(t *testing.T) {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/events"):
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec"):
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-1"})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
 			hj, ok := w.(http.Hijacker)
 			if !ok {
@@ -138,7 +135,7 @@ func TestListContainerDirectoryArchiveFallbackPreservesSpaces(t *testing.T) {
 				return
 			}
 			defer conn.Close()
-			_, _ = rw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n")
+			_, _ = rw.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
 			payload := []byte("-rw-r--r-- 1 root root 1 badfmt report \n")
 			var hdr [8]byte
 			hdr[0] = 1 // stdcopy.Stdout
@@ -147,6 +144,9 @@ func TestListContainerDirectoryArchiveFallbackPreservesSpaces(t *testing.T) {
 			_, _ = rw.Write(hdr[:])
 			_, _ = rw.Write(payload)
 			_ = rw.Flush()
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-1"})
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/") && strings.HasSuffix(r.URL.Path, "/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"ExitCode": 0})
@@ -160,7 +160,7 @@ func TestListContainerDirectoryArchiveFallbackPreservesSpaces(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	dockerCli, err := client.New(client.WithHost(srv.URL))
+	dockerCli, err := client.New(client.WithHost("tcp://" + srv.Listener.Addr().String()))
 	if err != nil {
 		t.Fatalf("create docker client: %v", err)
 	}
@@ -173,6 +173,97 @@ func TestListContainerDirectoryArchiveFallbackPreservesSpaces(t *testing.T) {
 	}
 	if len(res.Entries) != 2 || res.Entries[0].Name != "report" || res.Entries[1].Name != "report " {
 		t.Fatalf("expected verbatim tar entry names ['report', 'report '], got %#v", res.Entries)
+	}
+}
+
+func TestListContainerDirectorySpecialFilesSkipArchiveFallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lsPayload := strings.Join([]string{
+		"total 4194308",
+		"prw------- 1 root root 0 2026-11-25 10:00:00 events",
+		"crw-rw-rw- 1 root root 1,  3 2026-11-25 10:00:00 null",
+		"brw-rw---- 1 root disk 8, 0 2026-11-25 10:00:00 sda",
+		"srwxr-xr-x 1 root root 0 2026-11-25 10:00:00 app.sock",
+		"-rwSr--r-T 1 root root 12 2026-11-25 10:00:00 special ",
+		"-rw-r--r-- 1 root root 4294967296 2026-11-25 10:00:00 backup.tar",
+	}, "\n") + "\n"
+
+	archiveHits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/events"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "no hijack", http.StatusInternalServerError)
+				return
+			}
+			conn, rw, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			_, _ = rw.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+			payload := []byte(lsPayload)
+			var hdr [8]byte
+			hdr[0] = 1
+			binary.BigEndian.PutUint32(hdr[4:], uint32(len(payload)))
+			_, _ = rw.Write(hdr[:])
+			_, _ = rw.Write(payload)
+			_ = rw.Flush()
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-special"})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/") && strings.HasSuffix(r.URL.Path, "/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ExitCode": 0})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/archive"):
+			archiveHits++
+			http.Error(w, "unexpected archive call", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dockerCli, err := client.New(client.WithHost("tcp://" + srv.Listener.Addr().String()))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer dockerCli.Close()
+	cli := &Client{docker: dockerCli}
+
+	res, err := cli.ListContainerDirectory(ctx, "cid-special", "/tmp")
+	if err != nil {
+		t.Fatalf("ListContainerDirectory failed: %v", err)
+	}
+	if archiveHits != 0 {
+		t.Fatalf("expected 0 /archive calls, got %d", archiveHits)
+	}
+	if len(res.Entries) != 6 {
+		t.Fatalf("expected 6 entries, got %d: %#v", len(res.Entries), res.Entries)
+	}
+	if res.Entries[0].Name != "events" || res.Entries[0].Type != "other" || res.Entries[0].Size != 0 {
+		t.Fatalf("unexpected fifo entry: %#v", res.Entries[0])
+	}
+	if res.Entries[1].Name != "null" || res.Entries[1].Type != "other" || res.Entries[1].Size != 0 {
+		t.Fatalf("unexpected char device entry: %#v", res.Entries[1])
+	}
+	if res.Entries[2].Name != "sda" || res.Entries[2].Type != "other" || res.Entries[2].Group != "disk" || res.Entries[2].Size != 0 {
+		t.Fatalf("unexpected block device entry: %#v", res.Entries[2])
+	}
+	if res.Entries[3].Name != "app.sock" || res.Entries[3].Type != "other" || res.Entries[3].Size != 0 {
+		t.Fatalf("unexpected socket entry: %#v", res.Entries[3])
+	}
+	if res.Entries[4].Name != "special " || res.Entries[4].Type != "file" || res.Entries[4].Size != 12 {
+		t.Fatalf("unexpected special permission entry: %#v", res.Entries[4])
+	}
+	if res.Entries[5].Name != "backup.tar" || res.Entries[5].Type != "file" || res.Entries[5].Size != 4294967296 {
+		t.Fatalf("unexpected large file entry: %#v", res.Entries[5])
 	}
 }
 
@@ -191,7 +282,7 @@ func TestPutSingleFileStreamPreservesTrailingSpaceFilename(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	dockerCli, err := client.New(client.WithHost(srv.URL))
+	dockerCli, err := client.New(client.WithHost("tcp://" + srv.Listener.Addr().String()))
 	if err != nil {
 		t.Fatalf("create docker client: %v", err)
 	}

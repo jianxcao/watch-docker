@@ -46,12 +46,14 @@ chown -R watch-docker:watch-docker \
     "$HOME" \
     "$CONFIG_DIR"
 
-# 仅授权 APP_PATH 顶层目录，避免对已有 Compose 项目数据执行递归 chown
-if [ -n "$APP_PATH" ]; then
-    if [ ! -d "$APP_PATH" ]; then
-        mkdir -p "$APP_PATH"
+# 仅在新建 APP_PATH 目录时设置运行用户属主，避免覆盖宿主机已有目录属主
+if [ -n "$APP_PATH" ] && [ ! -d "$APP_PATH" ]; then
+    mkdir -p "$(dirname "$APP_PATH")" || exit 1
+    if mkdir "$APP_PATH"; then
+        chown watch-docker:watch-docker "$APP_PATH" || exit 1
+    elif [ ! -d "$APP_PATH" ]; then
+        exit 1
     fi
-    chown watch-docker:watch-docker "$APP_PATH"
 fi
 
 # 自动将运行用户加入 docker.sock 所属宿主机组，确保非 root 用户也可访问 Docker Engine

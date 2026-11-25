@@ -207,3 +207,212 @@ func TestHandleCreateContainerRollbackAcrossCancellationAndErrors(t *testing.T) 
 		t.Fatalf("expected both connect and rollback errors logged, connect=%v rollback=%v", sawConnectErr, sawRollbackErr)
 	}
 }
+
+func TestHandleCreateContainerRespectsPrimaryNetwork(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	type createRawBody struct {
+		HostConfig struct {
+			NetworkMode string `json:"NetworkMode"`
+		} `json:"HostConfig"`
+		NetworkingConfig struct {
+			EndpointsConfig map[string]struct {
+				Aliases   []string `json:"Aliases"`
+				NetworkID string   `json:"NetworkID"`
+			} `json:"EndpointsConfig"`
+		} `json:"NetworkingConfig"`
+	}
+	type connectCall struct {
+		Network string
+		Aliases []string
+	}
+
+	var mu sync.Mutex
+	var lastCreate *createRawBody
+	var connects []connectCall
+
+	mockDocker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/events"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"Id": "sha256:abc", "RepoTags": []string{"alpine:latest"}},
+			})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/create"):
+			var body createRawBody
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			lastCreate = &body
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": "cid-net-test"})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/networks/") && strings.HasSuffix(r.URL.Path, "/connect"):
+			trimmed := strings.TrimPrefix(r.URL.Path[strings.Index(r.URL.Path, "/networks/")+len("/networks/"):], "/")
+			netName := strings.TrimSuffix(trimmed, "/connect")
+			var reqBody struct {
+				EndpointConfig *struct {
+					Aliases []string `json:"Aliases"`
+				} `json:"EndpointConfig"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&reqBody)
+			var aliases []string
+			if reqBody.EndpointConfig != nil {
+				aliases = reqBody.EndpointConfig.Aliases
+			}
+			mu.Lock()
+			connects = append(connects, connectCall{Network: netName, Aliases: aliases})
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockDocker.Close()
+
+	cli, err := dockercli.New(context.Background(), mockDocker.URL)
+	if err != nil {
+		t.Fatalf("create dockercli: %v", err)
+	}
+	defer cli.Close()
+
+	srv := &Server{
+		docker: cli,
+		logger: zap.NewNop(),
+	}
+	r := gin.New()
+	r.POST("/containers/create", srv.handleCreateContainer())
+
+	doReq := func(payload map[string]any) BaseRes {
+		mu.Lock()
+		lastCreate = nil
+		connects = nil
+		mu.Unlock()
+		b, _ := json.Marshal(payload)
+		req := httptest.NewRequest(http.MethodPost, "/containers/create", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		var res BaseRes
+		if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+			t.Fatalf("decode response failed: %v, body=%s", err, rec.Body.String())
+		}
+		return res
+	}
+
+	zNetID := "feedface1234567890abcdef1234567890abcdef1234567890abcdef12345678"
+	aNetID := "1111111111111111111111111111111111111111111111111111111111111111"
+
+	// 1. 显式按名称指定主网络 z_primary，Create 只带 z_primary，Connect 只附加 a_extra
+	res := doReq(map[string]any{
+		"image":       "alpine:latest",
+		"networkMode": "z_primary",
+		"networkConfig": map[string]any{
+			"endpointsConfig": map[string]any{
+				"a_extra":   map[string]any{"aliases": []string{"extra"}},
+				"z_primary": map[string]any{"aliases": []string{"primary"}},
+			},
+		},
+	})
+	if res.Code != 0 {
+		t.Fatalf("expected success, got %+v", res)
+	}
+	if lastCreate == nil || lastCreate.HostConfig.NetworkMode != "z_primary" ||
+		len(lastCreate.NetworkingConfig.EndpointsConfig) != 1 ||
+		len(lastCreate.NetworkingConfig.EndpointsConfig["z_primary"].Aliases) != 1 ||
+		lastCreate.NetworkingConfig.EndpointsConfig["z_primary"].Aliases[0] != "primary" {
+		t.Fatalf("unexpected Create payload for explicit z_primary: %#v", lastCreate)
+	}
+	if len(connects) != 1 || connects[0].Network != "a_extra" || len(connects[0].Aliases) != 1 || connects[0].Aliases[0] != "extra" {
+		t.Fatalf("unexpected Connect calls: %#v", connects)
+	}
+
+	// 2. 通过完整 NetworkID 与唯一短前缀匹配 z_primary
+	for _, mode := range []string{zNetID, zNetID[:12]} {
+		res = doReq(map[string]any{
+			"image":       "alpine:latest",
+			"networkMode": mode,
+			"networkConfig": map[string]any{
+				"endpointsConfig": map[string]any{
+					"a_extra":   map[string]any{"networkID": aNetID, "aliases": []string{"extra"}},
+					"z_primary": map[string]any{"networkID": zNetID, "aliases": []string{"primary"}},
+				},
+			},
+		})
+		if res.Code != 0 {
+			t.Fatalf("mode=%q expected success, got %+v", mode, res)
+		}
+		if lastCreate.HostConfig.NetworkMode != "z_primary" || lastCreate.NetworkingConfig.EndpointsConfig["z_primary"].Aliases[0] != "primary" {
+			t.Fatalf("mode=%q expected Create z_primary, got %#v", mode, lastCreate)
+		}
+		if len(connects) != 1 || connects[0].Network != "a_extra" {
+			t.Fatalf("mode=%q expected Connect a_extra, got %#v", mode, connects)
+		}
+	}
+
+	// 3. 省略 networkMode 时沿用排序首项 a_extra
+	res = doReq(map[string]any{
+		"image": "alpine:latest",
+		"networkConfig": map[string]any{
+			"endpointsConfig": map[string]any{
+				"a_extra":   map[string]any{"aliases": []string{"extra"}},
+				"z_primary": map[string]any{"aliases": []string{"primary"}},
+			},
+		},
+	})
+	if res.Code != 0 || lastCreate.HostConfig.NetworkMode != "a_extra" || len(connects) != 1 || connects[0].Network != "z_primary" {
+		t.Fatalf("omitted networkMode mismatch: res=%+v create=%#v connects=%#v", res, lastCreate, connects)
+	}
+
+	// 4. 显式指定不在 endpointsConfig 中的主网络时，保留主网络并附加端点表中所有网络
+	res = doReq(map[string]any{
+		"image":       "alpine:latest",
+		"networkMode": "bridge",
+		"networkConfig": map[string]any{
+			"endpointsConfig": map[string]any{
+				"a_extra": map[string]any{"aliases": []string{"extra"}},
+			},
+		},
+	})
+	if res.Code != 0 || lastCreate.HostConfig.NetworkMode != "bridge" || len(lastCreate.NetworkingConfig.EndpointsConfig) != 0 {
+		t.Fatalf("explicit bridge without endpoint mismatch: res=%+v create=%#v", res, lastCreate)
+	}
+	if len(connects) != 1 || connects[0].Network != "a_extra" || len(connects[0].Aliases) != 1 || connects[0].Aliases[0] != "extra" {
+		t.Fatalf("expected extra network connected on explicit bridge, got %#v", connects)
+	}
+
+	// 5. 多个端点共享同一个 NetworkID 前缀时返回 CodeBadRequest，且不调用 Create
+	res = doReq(map[string]any{
+		"image":       "alpine:latest",
+		"networkMode": "abcd",
+		"networkConfig": map[string]any{
+			"endpointsConfig": map[string]any{
+				"net1": map[string]any{"networkID": "abcd1111"},
+				"net2": map[string]any{"networkID": "abcd2222"},
+			},
+		},
+	})
+	if res.Code != CodeBadRequest || lastCreate != nil {
+		t.Fatalf("expected CodeBadRequest and no Create call on ambiguous prefix, got res=%+v create=%#v", res, lastCreate)
+	}
+
+	// 6. 特殊模式 host 保持 NetworkMode 不被 endpointsConfig 覆盖且不附加端点
+	res = doReq(map[string]any{
+		"image":       "alpine:latest",
+		"networkMode": "host",
+		"networkConfig": map[string]any{
+			"endpointsConfig": map[string]any{
+				"a_extra": map[string]any{"aliases": []string{"extra"}},
+			},
+		},
+	})
+	if res.Code != 0 || lastCreate.HostConfig.NetworkMode != "host" || len(lastCreate.NetworkingConfig.EndpointsConfig) != 0 || len(connects) != 0 {
+		t.Fatalf("host mode mismatch: res=%+v create=%#v connects=%#v", res, lastCreate, connects)
+	}
+}

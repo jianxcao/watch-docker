@@ -373,6 +373,41 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 		}
 	}
 
+	if !newHostCfg.AutoRemove && len(newHostCfg.VolumesFrom) == 0 && len(newHostCfg.Binds) > 0 {
+		volByDest := make(map[string]struct {
+			name string
+			rw   bool
+			dest string
+		}, len(uctx.oldInfo.Mounts))
+		for _, m := range uctx.oldInfo.Mounts {
+			volName := dockercli.ResolveMountVolumeName(m)
+			if volName != "" && m.Destination != "" {
+				volByDest[m.Destination] = struct {
+					name string
+					rw   bool
+					dest string
+				}{name: volName, rw: m.RW, dest: m.Destination}
+			}
+		}
+		for i, b := range newHostCfg.Binds {
+			if strings.Contains(b, ":") {
+				continue
+			}
+			v, ok := volByDest[b]
+			if !ok && strings.HasPrefix(b, "/") && b != "/" {
+				v, ok = volByDest[strings.TrimRight(b, "/")]
+			}
+			if !ok {
+				continue
+			}
+			rewritten := v.name + ":" + v.dest
+			if !v.rw {
+				rewritten += ":ro"
+			}
+			newHostCfg.Binds[i] = rewritten
+		}
+	}
+
 	existingTargets := make(map[string]struct{})
 	existingSources := make(map[string]struct{})
 	for _, m := range newHostCfg.Mounts {
@@ -395,18 +430,19 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 
 	if !newHostCfg.AutoRemove && len(newHostCfg.VolumesFrom) == 0 {
 		for _, m := range uctx.oldInfo.Mounts {
-			if m.Type == mount.TypeVolume && m.Name != "" && m.Destination != "" {
+			volName := dockercli.ResolveMountVolumeName(m)
+			if volName != "" && m.Destination != "" {
 				_, hasTarget := existingTargets[m.Destination]
-				_, hasSource := existingSources[m.Name]
+				_, hasSource := existingSources[volName]
 				if !hasTarget && !hasSource {
 					newHostCfg.Mounts = append(newHostCfg.Mounts, mount.Mount{
 						Type:     mount.TypeVolume,
-						Source:   m.Name,
+						Source:   volName,
 						Target:   m.Destination,
 						ReadOnly: !m.RW,
 					})
 					existingTargets[m.Destination] = struct{}{}
-					existingSources[m.Name] = struct{}{}
+					existingSources[volName] = struct{}{}
 				}
 			}
 		}

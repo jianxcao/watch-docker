@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="log-container" ref="containerRef" :style="{ height: containerHeight }">
+    <div class="log-container" :style="{ height: containerHeight }">
       <n-virtual-list
         ref="virtualListRef"
         class="virtual-log-list"
@@ -8,6 +8,7 @@
         :item-size="estimatedItemSize"
         key-field="_k"
         item-resizable
+        @scroll="onLogScroll"
       >
         <template #default="{ item: log }">
           <div class="log-line">
@@ -57,7 +58,6 @@ interface LogEntry {
 const logs = ref<LogEntry[]>([])
 const connectionError = ref('')
 const virtualListRef = ref()
-const containerRef = ref<HTMLDivElement | null>(null)
 const containerHeight = computed(
   () => `calc(100vh - ${settingStore.contentSafeTop + settingStore.contentSafeBottom}px)`,
 )
@@ -67,6 +67,14 @@ const estimatedItemSize = 85
 
 let eventSource: EventSource | null = null
 let nextId = 1
+let followTail = true
+
+function onLogScroll(event: Event) {
+  const el = event.target
+  if (el instanceof HTMLElement) {
+    followTail = el.scrollHeight - el.clientHeight - el.scrollTop < 80
+  }
+}
 
 function getExtraFields(log: LogEntry): Record<string, any> | null {
   const extra: Record<string, any> = {}
@@ -82,18 +90,12 @@ function getExtraFields(log: LogEntry): Record<string, any> | null {
 
 const scrollToBottom = async () => {
   await nextTick()
+  if (!followTail) {
+    return
+  }
   if (virtualListRef.value && logs.value.length > 0) {
     virtualListRef.value.scrollTo({ index: logs.value.length - 1, behavior: 'auto' })
   }
-}
-
-const isNearBottom = (): boolean => {
-  const containerEl = containerRef.value?.querySelector('.n-vl') as HTMLElement | null
-  if (!containerEl) {
-    return true
-  }
-  const distance = containerEl.scrollHeight - containerEl.scrollTop - containerEl.clientHeight
-  return distance < 80
 }
 
 function levelColor(level: string): 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error' {
@@ -148,7 +150,7 @@ const connectEventSource = () => {
         logEntry._k = nextId++
       })
 
-      const shouldScroll = isNearBottom()
+      const shouldScroll = followTail
       const newLogs = [...logs.value, ...logArray]
       if (newLogs.length > 500) {
         newLogs.splice(0, newLogs.length - 500)

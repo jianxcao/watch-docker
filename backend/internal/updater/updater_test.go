@@ -174,3 +174,88 @@ func TestBuildNewContainerConfigsResolvesPrimaryNetworkByID(t *testing.T) {
 		t.Fatalf("expected nil endpoint sanitized safely, got %#v", extra["bbb_nil"])
 	}
 }
+
+func TestBuildNewContainerConfigsDestinationOnlyBind(t *testing.T) {
+	u := &Updater{}
+
+	t.Run("rewrites destination-only bind to existing volume and avoids duplicate mount", func(t *testing.T) {
+		uctx := &updateContext{oldInfo: container.InspectResponse{
+			Config:     &container.Config{},
+			HostConfig: &container.HostConfig{Binds: []string{"/data", "logs:/logs:ro"}},
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "old-anon", Destination: "/data", RW: true},
+				{Type: mount.TypeVolume, Name: "logs", Destination: "/logs", RW: false},
+			},
+		}}
+
+		_, newHostCfg, _, _, _ := u.buildNewContainerConfigs(uctx)
+
+		if len(newHostCfg.Binds) != 2 || newHostCfg.Binds[0] != "old-anon:/data" || newHostCfg.Binds[1] != "logs:/logs:ro" {
+			t.Fatalf("unexpected Binds: %#v", newHostCfg.Binds)
+		}
+		if len(newHostCfg.Mounts) != 0 {
+			t.Fatalf("expected no duplicate structured Mounts, got %#v", newHostCfg.Mounts)
+		}
+		if uctx.oldInfo.HostConfig.Binds[0] != "/data" {
+			t.Fatalf("expected source HostConfig.Binds untouched, got %#v", uctx.oldInfo.HostConfig.Binds)
+		}
+	})
+
+	t.Run("preserves read-only flag and missing or autoremove binds", func(t *testing.T) {
+		uctx := &updateContext{oldInfo: container.InspectResponse{
+			Config:     &container.Config{},
+			HostConfig: &container.HostConfig{Binds: []string{"/rodata", "/unbacked"}},
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "old-ro", Destination: "/rodata", RW: false},
+			},
+		}}
+
+		_, newHostCfg, _, _, _ := u.buildNewContainerConfigs(uctx)
+		if len(newHostCfg.Binds) != 2 || newHostCfg.Binds[0] != "old-ro:/rodata:ro" || newHostCfg.Binds[1] != "/unbacked" {
+			t.Fatalf("unexpected Binds for ro/unbacked: %#v", newHostCfg.Binds)
+		}
+
+		autoRm := &updateContext{oldInfo: container.InspectResponse{
+			Config:     &container.Config{},
+			HostConfig: &container.HostConfig{AutoRemove: true, Binds: []string{"/ephemeral"}},
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "ephem-vol", Destination: "/ephemeral", RW: true},
+			},
+		}}
+		_, autoHostCfg, _, _, _ := u.buildNewContainerConfigs(autoRm)
+		if len(autoHostCfg.Binds) != 1 || autoHostCfg.Binds[0] != "/ephemeral" || len(autoHostCfg.Mounts) != 0 {
+			t.Fatalf("expected AutoRemove bind preserved without migration, got binds=%#v mounts=%#v", autoHostCfg.Binds, autoHostCfg.Mounts)
+		}
+	})
+
+	t.Run("extracts volume name from _data Source when Engine omits MountPoint Name", func(t *testing.T) {
+		uctx := &updateContext{oldInfo: container.InspectResponse{
+			Config:     &container.Config{},
+			HostConfig: &container.HostConfig{Binds: []string{"/data", "/unbacked"}},
+			Mounts: []container.MountPoint{
+				{
+					Type:        mount.TypeVolume,
+					Name:        "",
+					Source:      "/var/lib/docker/volumes/aab36938/_data",
+					Destination: "/data",
+					RW:          true,
+				},
+				{
+					Type:        mount.TypeVolume,
+					Name:        "",
+					Source:      "",
+					Destination: "/unbacked",
+					RW:          true,
+				},
+			},
+		}}
+
+		_, newHostCfg, _, _, _ := u.buildNewContainerConfigs(uctx)
+		if len(newHostCfg.Binds) != 2 || newHostCfg.Binds[0] != "aab36938:/data" || newHostCfg.Binds[1] != "/unbacked" {
+			t.Fatalf("expected _data Source rewritten to aab36938:/data while leaving /unbacked, got %#v", newHostCfg.Binds)
+		}
+		if len(newHostCfg.Mounts) != 0 {
+			t.Fatalf("expected zero duplicate Mounts, got %#v", newHostCfg.Mounts)
+		}
+	})
+}
