@@ -12,7 +12,7 @@
                   v-model:value="envItem.key"
                   placeholder="KEY"
                   size="small"
-                  @blur="updateEnv(index)"
+                  @update:value="syncFromList"
                 />
               </div>
               <div class="env-separator">
@@ -24,7 +24,7 @@
                   v-model:value="envItem.value"
                   placeholder="value"
                   size="small"
-                  @blur="updateEnv(index)"
+                  @update:value="syncFromList"
                 />
               </div>
               <div class="env-delete">
@@ -55,6 +55,7 @@
             type="textarea"
             placeholder="KEY=value&#10;ANOTHER_KEY=另一个值"
             :rows="8"
+            @update:value="handleEnvTextInput"
             @blur="handleEnvTextChange"
           />
         </div>
@@ -85,40 +86,45 @@ const addEnv = () => {
   formValue.value.envList.push({ key: '', value: '' })
 }
 
-const removeEnv = (index: number) => {
-  formValue.value.env.splice(index, 1)
-  formValue.value.envList.splice(index, 1)
-  formValue.value.envText = formValue.value.env.join('\n')
+const syncFromList = () => {
+  const newEnv = formValue.value.envList
+    .filter((item) => item.key.trim() !== '')
+    .map((item) => `${item.key.trim()}=${item.value}`)
+  formValue.value.env = newEnv
+  formValue.value.envText = newEnv.join('\n')
 }
 
-const updateEnv = (index: number) => {
-  const item = formValue.value.envList[index]
-  formValue.value.env[index] = `${item.key}=${item.value}`
-  formValue.value.envText = formValue.value.env.join('\n')
+const removeEnv = (index: number) => {
+  formValue.value.envList.splice(index, 1)
+  syncFromList()
+}
+
+const parseEnvText = (text: string) => {
+  const lines = text.split('\n').filter((line) => line.trim() !== '')
+  const newEnvList: { key: string; value: string }[] = []
+  const newEnv: string[] = []
+
+  lines.forEach((line) => {
+    const eqIndex = line.indexOf('=')
+    const key = (eqIndex >= 0 ? line.slice(0, eqIndex) : line).trim()
+    const value = eqIndex >= 0 ? line.slice(eqIndex + 1) : ''
+    if (key) {
+      newEnvList.push({ key, value })
+      newEnv.push(`${key}=${value}`)
+    }
+  })
+
+  formValue.value.envList = newEnvList
+  formValue.value.env = newEnv
+}
+
+const handleEnvTextInput = (val: string) => {
+  parseEnvText(val)
 }
 
 const handleEnvTextChange = () => {
-  nextTick(() => {
-    const lines = formValue.value.envText.split('\n').filter((line) => line.trim())
-    const newEnvList = lines.reduce((acc, line) => {
-      let [key, value] = line.split('=')
-      key = (key || '').trim()
-      value = (value || '').trim()
-      if (key) {
-        acc.push(`${key}=${value}`)
-      }
-      return acc
-    }, [] as string[])
-
-    formValue.value.env = newEnvList
-    formValue.value.envList = newEnvList.map((item) => {
-      const [key, ...valueParts] = item.split('=')
-      return {
-        key: key || '',
-        value: valueParts.join('=') || '',
-      }
-    })
-  })
+  parseEnvText(formValue.value.envText)
+  formValue.value.envText = formValue.value.env.join('\n')
 }
 
 const validate = () => formRef.value?.validate()

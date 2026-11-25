@@ -141,9 +141,9 @@ import {
   WarningOutline,
   AddCircleOutline,
 } from '@vicons/ionicons5'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { NIcon, type DropdownOption } from 'naive-ui'
-import { renderIcon, sleep } from '@/common/utils'
+import { renderIcon } from '@/common/utils'
 import type { ComposeProject } from '@/common/types'
 import {
   buildComposeListQuery,
@@ -257,7 +257,11 @@ const filteredProjects = computed(() => {
   // 搜索筛选
   if (searchKeyword.value) {
     const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter((project) => project.name.toLowerCase().includes(keyword))
+    result = result.filter(
+      (project) =>
+        project.name.toLowerCase().includes(keyword) ||
+        Boolean(project.composeFile && project.composeFile.toLowerCase().includes(keyword)),
+    )
   }
 
   // 排序
@@ -320,12 +324,25 @@ watch(
   { immediate: true },
 )
 const visibility = useDocumentVisibility()
+let visibilityTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(visibility, (newVal) => {
+  if (visibilityTimer) {
+    clearTimeout(visibilityTimer)
+    visibilityTimer = null
+  }
   if (newVal === 'visible' && isComposeEnabled.value) {
-    sleep(1000).then(() => {
+    visibilityTimer = setTimeout(() => {
+      visibilityTimer = null
       composeStore.fetchProjects()
-    })
+    }, 1000)
+  }
+})
+
+onUnmounted(() => {
+  if (visibilityTimer) {
+    clearTimeout(visibilityTimer)
+    visibilityTimer = null
   }
 })
 </script>
@@ -362,19 +379,19 @@ watch(visibility, (newVal) => {
     gap: 16px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

@@ -221,13 +221,28 @@ const row2Keys = computed<KeyConfig[]>(() => [
   { id: 'ctrl-l', label: '^L', description: '清屏 (Ctrl+L)', sequence: '\x0c' },
 ])
 
-// 功能键
+// 功能键（VT220/xterm 标准序列：F1-F4 使用 SS3 \x1bOP-OS，F5-F12 使用 CSI 序列）
+const F_KEY_SEQUENCES = [
+  '\x1bOP',
+  '\x1bOQ',
+  '\x1bOR',
+  '\x1bOS',
+  '\x1b[15~',
+  '\x1b[17~',
+  '\x1b[18~',
+  '\x1b[19~',
+  '\x1b[20~',
+  '\x1b[21~',
+  '\x1b[23~',
+  '\x1b[24~',
+]
+
 const functionKeys = computed<KeyConfig[]>(() =>
-  Array.from({ length: 12 }, (_, i) => ({
+  F_KEY_SEQUENCES.map((sequence, i) => ({
     id: `f${i + 1}`,
     label: `F${i + 1}`,
     description: `功能键 ${i + 1}`,
-    sequence: `\x1bO${String.fromCharCode(80 + i)}`, // F1-F4: \x1bOP-OS, F5-F12: \x1b[15~-24~
+    sequence,
   })),
 )
 
@@ -272,8 +287,8 @@ const handleKeyClick = (key: KeyConfig) => {
     activeModifiers.value = activeModifiers.value.filter((m) => m !== 'ctrl')
   }
   if (isAltActive.value && key.id !== 'alt') {
-    // Alt 前缀：\x1b + key
-    sequence = '\x1b' + key.sequence
+    // Alt 前缀：\x1b + sequence（保留 Ctrl 组合键处理结果）
+    sequence = '\x1b' + sequence
     activeModifiers.value = activeModifiers.value.filter((m) => m !== 'alt')
   }
 

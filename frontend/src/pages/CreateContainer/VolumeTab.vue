@@ -12,7 +12,7 @@
                   v-model:value="volume.source"
                   placeholder="源路径或卷名"
                   size="small"
-                  @blur="updateVolumes"
+                  @update:value="updateVolumes"
                 />
               </div>
               <div class="volume-separator">
@@ -24,7 +24,7 @@
                   v-model:value="volume.target"
                   placeholder="容器路径"
                   size="small"
-                  @blur="updateVolumes"
+                  @update:value="updateVolumes"
                 />
               </div>
               <div class="volume-options">
@@ -66,6 +66,7 @@
             type="textarea"
             placeholder="/host/path:/container/path&#10;volume_name:/container/path:ro"
             :rows="6"
+            @update:value="handleVolumeTextInput"
             @blur="handleVolumeTextChange"
           />
         </div>
@@ -105,7 +106,7 @@ const updateVolumes = () => {
   const newBinds = formValue.value.volumeList
     .filter((item) => item.source.trim() && item.target.trim())
     .map((item) => {
-      let bind = `${item.source}:${item.target}`
+      let bind = `${item.source.trim()}:${item.target.trim()}`
       if (item.readonly) {
         bind += ':ro'
       }
@@ -116,27 +117,48 @@ const updateVolumes = () => {
   formValue.value.volumeText = newBinds.join('\n')
 }
 
-const handleVolumeTextChange = () => {
-  const lines = formValue.value.volumeText.split('\n').filter((line) => line.trim())
+const parseVolumeText = (text: string) => {
+  const lines = text.split('\n').filter((line) => line.trim())
   const newBinds: string[] = []
   const newVolumeList: VolumeItem[] = []
 
   lines.forEach((line) => {
     const trimmedLine = line.trim()
-    if (trimmedLine && trimmedLine.includes(':')) {
-      newBinds.push(trimmedLine)
-      const parts = trimmedLine.split(':')
-      newVolumeList.push({
-        source: parts[0] || '',
-        target: parts[1] || '',
-        readonly: parts[2] === 'ro',
-      })
+    if (!trimmedLine || !trimmedLine.includes(':')) {
+      return
+    }
+    const parts = trimmedLine.split(':')
+    const lastPart = parts[parts.length - 1]
+    let readonly = false
+    let source = ''
+    let target = ''
+
+    if (parts.length >= 3 && (lastPart === 'ro' || lastPart === 'rw')) {
+      readonly = lastPart === 'ro'
+      target = parts[parts.length - 2].trim()
+      source = parts.slice(0, -2).join(':').trim()
+    } else if (parts.length >= 2) {
+      target = parts[parts.length - 1].trim()
+      source = parts.slice(0, -1).join(':').trim()
+    }
+
+    if (source && target) {
+      newVolumeList.push({ source, target, readonly })
+      newBinds.push(`${source}:${target}${readonly ? ':ro' : ''}`)
     }
   })
 
   formValue.value.volumeList = newVolumeList
   formValue.value.binds = newBinds
-  formValue.value.volumeText = newBinds.join('\n')
+}
+
+const handleVolumeTextInput = (val: string) => {
+  parseVolumeText(val)
+}
+
+const handleVolumeTextChange = () => {
+  parseVolumeText(formValue.value.volumeText)
+  formValue.value.volumeText = formValue.value.binds.join('\n')
 }
 
 const validate = () => formRef.value?.validate()

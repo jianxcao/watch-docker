@@ -43,10 +43,10 @@ describe('buildTerminalSocketUrl', () => {
     )
   })
 
-  it('uses ws on HTTP pages', () => {
+  it('uses ws on HTTP pages and omits empty token parameter', () => {
     expect(
       buildTerminalSocketUrl({ protocol: 'http:', host: 'localhost:8080' }, '/bin/sh', ''),
-    ).toBe('ws://localhost:8080/api/v1/shell?shell=%2Fbin%2Fsh&token=')
+    ).toBe('ws://localhost:8080/api/v1/shell?shell=%2Fbin%2Fsh')
   })
 })
 

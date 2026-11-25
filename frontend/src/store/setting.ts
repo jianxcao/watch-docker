@@ -1,9 +1,42 @@
 import { defineStore } from 'pinia'
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed, watchEffect } from 'vue'
 import { useStorage } from '@vueuse/core'
-import { useThemeVars, type CustomThemeCommonVars, type ThemeCommonVars } from 'naive-ui'
+import { lightTheme, type CustomThemeCommonVars, type ThemeCommonVars } from 'naive-ui'
 import { authApi } from '@/common/api'
 import type { SystemInfo } from '@/common/types'
+
+const CURRENT_USERNAME_STORAGE_KEY = 'watch-docker:current-username'
+
+function decodeJwtUsername(token: string): string {
+  try {
+    const parts = token.split('.')
+    if (parts.length < 2) {
+      return ''
+    }
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const bytes = Uint8Array.from(atob(padded), (c) => c.charCodeAt(0))
+    const payload = JSON.parse(new TextDecoder().decode(bytes))
+    return typeof payload?.username === 'string' ? payload.username : ''
+  } catch {
+    return ''
+  }
+}
+
+function loadInitialUsername(rememberedUsername: string, token: string): string {
+  if (rememberedUsername) {
+    return rememberedUsername
+  }
+  try {
+    const stored = sessionStorage.getItem(CURRENT_USERNAME_STORAGE_KEY)
+    if (stored) {
+      return stored
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return token ? decodeJwtUsername(token) : ''
+}
 
 export const useSettingStore = defineStore('setting', () => {
   const setting = useStorage(
@@ -20,7 +53,9 @@ export const useSettingStore = defineStore('setting', () => {
 
   const tmpToken = ref('')
 
-  const currentUsername = ref(setting.value.rememberedUsername || '')
+  const currentUsername = ref(
+    loadInitialUsername(setting.value.rememberedUsername, setting.value.token),
+  )
 
   const headerHeight = ref(56)
 
@@ -33,22 +68,24 @@ export const useSettingStore = defineStore('setting', () => {
   const docStyle = window.getComputedStyle(doc)
   safeArea.top = parseInt(docStyle.getPropertyValue('--top-inset')) || 0
   safeArea.bottom = parseInt(docStyle.getPropertyValue('--bottom-inset')) || 0
-  const layoutPadding = parseInt(docStyle.getPropertyValue('--layout-padding')) || 0
-  const contentSafeTop = ref(safeArea.top + headerHeight.value + layoutPadding)
-  const contentSafeBottom = ref(safeArea.bottom + layoutPadding)
+  const layoutPadding = ref(parseInt(docStyle.getPropertyValue('--layout-padding')) || 0)
+  const contentSafeTop = computed(() => safeArea.top + headerHeight.value + layoutPadding.value)
+  const contentSafeBottom = computed(() => safeArea.bottom + layoutPadding.value)
 
   watchEffect(() => {
     document.body.style.setProperty('--content-safe-top', `${contentSafeTop.value}px`)
     document.body.style.setProperty('--content-safe-bottom', `${contentSafeBottom.value}px`)
   })
 
-  const themeDefault = useThemeVars()
-
-  const themeVars = ref<ThemeCommonVars & CustomThemeCommonVars>(themeDefault.value)
+  const themeVars = ref<ThemeCommonVars & CustomThemeCommonVars>(
+    { ...lightTheme.common } as ThemeCommonVars & CustomThemeCommonVars,
+  )
 
   // 系统信息相关状态
   const systemInfo = ref<SystemInfo | null>(null)
   const systemInfoLoading = ref(false)
+  let systemInfoInFlight: Promise<SystemInfo | null> | null = null
+  let lastFetchedToken: string | undefined
 
   function setTheme(val: string) {
     setting.value.theme = val
@@ -58,22 +95,37 @@ export const useSettingStore = defineStore('setting', () => {
     themeVars.value = val
   }
 
-  // 获取系统信息
-  async function fetchSystemInfo() {
-    if (systemInfoLoading.value) {
-      return
+  // 获取系统信息（按当前 token 去重并发请求，避免未认证请求覆盖已认证结果）
+  async function fetchSystemInfo(force = false): Promise<SystemInfo | null> {
+    const reqToken = getToken() || ''
+    if (!force && systemInfoInFlight && lastFetchedToken === reqToken) {
+      return systemInfoInFlight
     }
 
+    lastFetchedToken = reqToken
     systemInfoLoading.value = true
-    try {
-      const res = await authApi.getInfo()
 
-      systemInfo.value = res.data.info
-    } catch (error) {
-      console.log('Failed to fetch system info:', error)
-    } finally {
-      systemInfoLoading.value = false
-    }
+    const reqPromise: Promise<SystemInfo | null> = (async (): Promise<SystemInfo | null> => {
+      try {
+        const res = await authApi.getInfo()
+        if (res.code === 0 && res.data?.info && (getToken() || '') === reqToken) {
+          systemInfo.value = res.data.info
+          return res.data.info
+        }
+        return systemInfo.value
+      } catch (error) {
+        console.log('Failed to fetch system info:', error)
+        return null
+      }
+    })().finally(() => {
+      if (systemInfoInFlight === reqPromise) {
+        systemInfoInFlight = null
+        systemInfoLoading.value = false
+      }
+    })
+
+    systemInfoInFlight = reqPromise
+    return reqPromise
   }
 
   // 保存记住的用户名（安全优化：不再保存密码）
@@ -95,11 +147,25 @@ export const useSettingStore = defineStore('setting', () => {
   // 设置当前登录用户名
   function setCurrentUsername(username: string) {
     currentUsername.value = username
+    try {
+      if (username) {
+        sessionStorage.setItem(CURRENT_USERNAME_STORAGE_KEY, username)
+      } else {
+        sessionStorage.removeItem(CURRENT_USERNAME_STORAGE_KEY)
+      }
+    } catch {
+      // ignore storage errors
+    }
   }
 
   // 清除当前登录用户名
   function clearCurrentUsername() {
     currentUsername.value = ''
+    try {
+      sessionStorage.removeItem(CURRENT_USERNAME_STORAGE_KEY)
+    } catch {
+      // ignore storage errors
+    }
   }
 
   // 获取记住的用户名
@@ -107,7 +173,7 @@ export const useSettingStore = defineStore('setting', () => {
     return setting.value.rememberUsername ? setting.value.rememberedUsername : ''
   }
 
-  // Token 管理
+  // Token 管理（严格区分完整访问令牌与 2FA 临时令牌）
   function setToken(token: string) {
     setting.value.token = token
   }
@@ -117,11 +183,16 @@ export const useSettingStore = defineStore('setting', () => {
   }
 
   function getToken() {
-    return setting.value.token || tmpToken.value
+    return setting.value.token
+  }
+
+  function getTmpToken() {
+    return tmpToken.value
   }
 
   function clearToken() {
     setting.value.token = ''
+    tmpToken.value = ''
   }
 
   return {
@@ -143,6 +214,7 @@ export const useSettingStore = defineStore('setting', () => {
     setToken,
     setTmpToken,
     getToken,
+    getTmpToken,
     clearToken,
     contentSafeTop,
     contentSafeBottom,

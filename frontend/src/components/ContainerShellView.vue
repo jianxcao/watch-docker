@@ -8,7 +8,7 @@
           :options="shellOptions"
           size="small"
           style="width: 120px"
-          :disabled="isConnected"
+          :disabled="isConnected || isConnecting"
         />
         <n-button
           v-if="!isConnected"
@@ -20,7 +20,7 @@
         >
           连接
         </n-button>
-        <n-button v-else type="error" size="small" @click="disconnect"> 断开 </n-button>
+        <n-button v-else type="error" size="small" @click="() => disconnect()"> 断开 </n-button>
         <n-tag :type="connectionStatusType" size="small">
           {{ connectionStatusText }}
         </n-tag>
@@ -31,9 +31,6 @@
       <div v-if="!isRunning" class="terminal-message">
         <n-empty description="容器未运行，无法连接 Shell" />
       </div>
-      <div v-else-if="!isConnected && !isConnecting" class="terminal-message">
-        <n-empty description="点击连接按钮开始使用 Shell" />
-      </div>
       <div v-else-if="errorMessage" class="terminal-message error">
         <n-result status="error" :title="errorMessage">
           <template #footer>
@@ -41,12 +38,15 @@
           </template>
         </n-result>
       </div>
+      <div v-else-if="!isConnected && !isConnecting" class="terminal-message">
+        <n-empty description="点击连接按钮开始使用 Shell" />
+      </div>
       <TermView
         v-else
         ref="terminalRef"
         :config="termConfig"
         :auto-fit="true"
-        :height="terminalHeight"
+        height="100%"
         @ready="handleTerminalReady"
         @data="handleTerminalData"
         @resize="handleTerminalResize"
@@ -56,12 +56,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useWebSocket } from '@vueuse/core'
 import TermView from '@/components/Term/TermView.vue'
 import type { Terminal } from '@xterm/xterm'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 import { API_ENDPOINTS } from '@/constants/api'
 
 interface Props {
@@ -80,6 +81,8 @@ const terminal = ref<Terminal>()
 const errorMessage = ref('')
 const selectedShell = ref('sh')
 const wsUrl = ref('')
+const shellState = ref<'CLOSED' | 'CONNECTING' | 'OPEN'>('CLOSED')
+let isUnmounting = false
 
 // Shell 选项
 const shellOptions = [
@@ -101,38 +104,65 @@ const terminalHeight = computed(() => {
   return 'calc(100% - 48px)'
 })
 
+const authStore = useAuthStore()
+
 // WebSocket URL
 const getWebSocketUrl = () => {
   const token = settingStore.getToken()
+  if (authStore.authEnabled && !token) {
+    throw new Error('未登录，请先登录后再连接 Shell')
+  }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
   const baseUrl = API_ENDPOINTS.CONTAINER_SHELL_WS(props.containerId, selectedShell.value)
-  return `${protocol}//${host}/api/v1${baseUrl}&token=${token}`
+  const fullBase = `${protocol}//${host}/api/v1${baseUrl}`
+  return token ? `${fullBase}&token=${encodeURIComponent(token)}` : fullBase
+}
+
+const pendingChunks: Array<string | Uint8Array> = []
+
+const appendShellChunk = (chunk: string | Uint8Array) => {
+  if (!terminal.value) {
+    pendingChunks.push(chunk)
+    return
+  }
+  terminal.value.write(chunk)
 }
 
 // 使用 VueUse 的 useWebSocket
-const { status, send, open, close } = useWebSocket(wsUrl, {
+const { ws, open, close } = useWebSocket(wsUrl, {
   immediate: false, // 不自动连接，等用户点击
   autoReconnect: false, // 禁用自动重连
   heartbeat: false, // 终端不需要心跳
   autoConnect: false,
   onMessage: (_ws, event) => {
-    const newData = event.data
-    if (!newData || !terminal.value) {
+    if (isUnmounting || _ws !== ws.value) {
       return
     }
-    // 处理接收到的数据
-    if (newData instanceof Blob) {
-      // 二进制数据
-      newData.arrayBuffer().then((buffer) => {
-        terminal.value?.write(new Uint8Array(buffer))
+    const newData = event.data
+    if (!newData) {
+      return
+    }
+    // 处理接收到的数据（TermView 尚未 @ready 时先缓冲，避免丢失初始提示符）
+    if (newData instanceof ArrayBuffer) {
+      appendShellChunk(new Uint8Array(newData))
+    } else if (newData instanceof Blob) {
+      void newData.arrayBuffer().then((buffer) => {
+        if (isUnmounting || _ws !== ws.value) {
+          return
+        }
+        appendShellChunk(new Uint8Array(buffer))
       })
     } else if (typeof newData === 'string') {
-      // 文本数据
-      terminal.value.write(newData)
+      appendShellChunk(newData)
     }
   },
-  onConnected: () => {
+  onConnected: (_ws) => {
+    if (isUnmounting || _ws !== ws.value) {
+      return
+    }
+    shellState.value = 'OPEN'
+    _ws.binaryType = 'arraybuffer'
     errorMessage.value = ''
     message.success('Shell 连接成功')
 
@@ -145,11 +175,21 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
     }
   },
   onError: (_ws, event) => {
+    if (isUnmounting || _ws !== ws.value) {
+      return
+    }
+    shellState.value = 'CLOSED'
     console.error('WebSocket error:', event)
     errorMessage.value = 'WebSocket 连接错误'
     message.error('Shell 连接失败')
   },
-  onDisconnected: () => {
+  onDisconnected: (_ws) => {
+    if (isUnmounting || _ws !== ws.value) {
+      return
+    }
+    shellState.value = 'CLOSED'
+    terminal.value = undefined
+    pendingChunks.length = 0
     if (!errorMessage.value) {
       message.info('Shell 连接已关闭')
     }
@@ -157,8 +197,8 @@ const { status, send, open, close } = useWebSocket(wsUrl, {
 })
 
 // 连接状态
-const isConnected = computed(() => status.value === 'OPEN')
-const isConnecting = computed(() => status.value === 'CONNECTING')
+const isConnected = computed(() => shellState.value === 'OPEN')
+const isConnecting = computed(() => shellState.value === 'CONNECTING')
 
 const connectionStatusType = computed(() => {
   if (isConnected.value) {
@@ -186,13 +226,19 @@ const connect = () => {
     message.warning('容器未运行，无法连接 Shell')
     return
   }
+  if (isConnecting.value) {
+    return
+  }
 
   try {
     errorMessage.value = ''
+    pendingChunks.length = 0
     wsUrl.value = getWebSocketUrl()
     console.debug('wsUrl', wsUrl.value)
+    shellState.value = 'CONNECTING'
     open()
   } catch (error: any) {
+    shellState.value = 'CLOSED'
     console.error('Failed to connect WebSocket:', error)
     errorMessage.value = error.message || '连接失败'
     message.error('Shell 连接失败: ' + error.message)
@@ -200,13 +246,27 @@ const connect = () => {
 }
 
 // 断开连接
-const disconnect = () => {
+const disconnect = (silent = false) => {
+  const wasConnected = shellState.value === 'OPEN'
+  shellState.value = 'CLOSED'
+  terminal.value = undefined
+  pendingChunks.length = 0
   close()
+  if (wasConnected && !silent && !isUnmounting) {
+    message.info('Shell 连接已关闭')
+  }
 }
 
 // 终端就绪
 const handleTerminalReady = (term: Terminal) => {
   terminal.value = term
+
+  while (pendingChunks.length > 0) {
+    const chunk = pendingChunks.shift()
+    if (chunk !== undefined) {
+      term.write(chunk)
+    }
+  }
 
   // 如果已经连接，发送终端大小
   if (isConnected.value) {
@@ -219,34 +279,50 @@ const handleTerminalReady = (term: Terminal) => {
 
 // 终端数据输入
 const handleTerminalData = (data: string) => {
-  if (isConnected.value) {
-    send(data)
+  if (ws.value?.readyState === WebSocket.OPEN) {
+    ws.value.send(data)
   }
 }
 
 // 终端大小变化
 const handleTerminalResize = (size: { cols: number; rows: number }) => {
-  if (isConnected.value) {
+  if (ws.value?.readyState === WebSocket.OPEN) {
     // 发送 resize 消息
     const resizeMsg = JSON.stringify({
       type: 'resize',
       rows: size.rows,
       cols: size.cols,
     })
-    send(resizeMsg)
+    ws.value.send(resizeMsg)
   }
 }
 
-// 监听容器运行状态变化
+// 监听容器运行状态与容器 ID 变化
 watch(
   () => props.isRunning,
   (newValue) => {
-    if (!newValue && isConnected.value) {
-      disconnect()
-      message.warning('容器已停止，Shell 连接已断开')
+    if (!newValue && (isConnected.value || isConnecting.value)) {
+      const wasConnected = isConnected.value
+      disconnect(true)
+      if (wasConnected) {
+        message.warning('容器已停止，Shell 连接已断开')
+      }
     }
   },
 )
+
+watch(
+  () => props.containerId,
+  () => {
+    errorMessage.value = ''
+    disconnect(true)
+  },
+)
+
+onBeforeUnmount(() => {
+  isUnmounting = true
+  disconnect(true)
+})
 </script>
 
 <style scoped lang="less">

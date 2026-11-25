@@ -2,7 +2,7 @@
   <n-form
     ref="formRef"
     :model="formValue"
-    :show-feedback="false"
+    :show-feedback="true"
     :rules="rules"
     label-placement="top"
     class="basic-tab"

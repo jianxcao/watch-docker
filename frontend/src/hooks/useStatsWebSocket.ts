@@ -1,4 +1,5 @@
 import type { ContainerStats, ContainerStatus } from '@/common/types'
+import { useAuthStore } from '@/store/auth'
 import { useSettingStore } from '@/store/setting'
 import { useWebSocket } from '@vueuse/core'
 import { computed } from 'vue'
@@ -18,17 +19,19 @@ export interface StatsMessage {
  */
 export default function useStatsWebSocket() {
   const settingStore = useSettingStore()
+  const authStore = useAuthStore()
 
-  // 计算 WebSocket URL
+  // 计算 WebSocket URL（未开启认证时也允许无 token 建立连接）
   const wsUrl = computed(() => {
     const token = settingStore.getToken()
-    if (!token) {
+    if (authStore.authEnabled && !token) {
       return undefined
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    return `${protocol}//${host}/api/v1/containers/stats/ws?token=${token}`
+    const base = `${protocol}//${host}/api/v1/containers/stats/ws`
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base
   })
 
   // 使用 VueUse 的 useWebSocket
@@ -116,10 +119,14 @@ export default function useStatsWebSocket() {
 
   // 是否已连接
   const isConnected = computed(() => status.value === 'OPEN')
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   // 启动连接
   const connect = () => {
-    if (isConnected.value) {
+    if (
+      ws.value &&
+      (ws.value.readyState === WebSocket.OPEN || ws.value.readyState === WebSocket.CONNECTING)
+    ) {
       return
     }
     console.debug('connect')
@@ -132,18 +139,23 @@ export default function useStatsWebSocket() {
 
   // 断开连接
   const disconnect = () => {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
     close()
   }
 
-  // 重新连接
+  // 重新连接（open 内部会原子关闭旧 socket 并重置状态，避免异步 close() 竞态导致重连被跳过）
   const reconnect = () => {
     console.debug('reconnect')
-    if (status.value === 'OPEN') {
-      disconnect()
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
     }
-    setTimeout(() => {
-      connect()
-    }, 100)
+    if (wsUrl.value) {
+      open()
+    }
   }
 
   return {

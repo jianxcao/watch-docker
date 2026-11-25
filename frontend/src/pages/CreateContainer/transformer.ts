@@ -1,3 +1,4 @@
+import { toRaw } from 'vue'
 import type { ContainerCreateRequest } from '@/common/types'
 import type {
   BasicFormValue,
@@ -11,25 +12,87 @@ import type {
 } from './types'
 
 /**
+ * 解析带单引号/双引号和反斜杠转义的命令行字符串为参数数组
+ */
+export function parseShellArgs(input: string): string[] {
+  const args: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  let escaped = false
+  let hasToken = false
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (escaped) {
+      current += ch
+      escaped = false
+      hasToken = true
+      continue
+    }
+    if (quote === "'") {
+      if (ch === "'") {
+        quote = null
+      } else {
+        current += ch
+      }
+      hasToken = true
+      continue
+    }
+    if (quote === '"') {
+      if (ch === '\\') {
+        escaped = true
+      } else if (ch === '"') {
+        quote = null
+      } else {
+        current += ch
+      }
+      hasToken = true
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      hasToken = true
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+      hasToken = true
+    } else if (/\s/.test(ch)) {
+      if (hasToken) {
+        args.push(current)
+        current = ''
+        hasToken = false
+      }
+    } else {
+      current += ch
+      hasToken = true
+    }
+  }
+
+  if (hasToken) {
+    args.push(current)
+  }
+  return args
+}
+
+/**
  * 转换基础配置表单数据
  */
 export function transformBasicForm(form: BasicFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {
-    name: form.name || '',
-    image: form.image,
+    name: (form.name || '').trim(),
+    image: (form.image || '').trim(),
     tty: form.tty || false,
     openStdin: form.openStdin || false,
     stdinOnce: form.stdinOnce || false,
   }
 
-  // 转换 entrypointString 为数组
+  // 转换 entrypointString 为数组（支持引号与转义）
   if (form.entrypointString && form.entrypointString.trim()) {
-    data.entrypoint = form.entrypointString.trim().split(/\s+/)
+    data.entrypoint = parseShellArgs(form.entrypointString.trim())
   }
 
-  // 转换 cmdString 为数组
+  // 转换 cmdString 为数组（支持引号与转义）
   if (form.cmdString && form.cmdString.trim()) {
-    data.cmd = form.cmdString.trim().split(/\s+/)
+    data.cmd = parseShellArgs(form.cmdString.trim())
   }
 
   if (form.workingDir) {
@@ -57,21 +120,66 @@ export function transformBasicForm(form: BasicFormValue): Partial<ContainerCreat
 export function transformEnvForm(form: EnvFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {}
 
-  if (form.env && form.env.length > 0) {
-    data.env = toRaw(form.env)
+  if (form.envList && form.envList.length > 0) {
+    const env = form.envList
+      .filter((item) => item.key.trim() !== '')
+      .map((item) => `${item.key.trim()}=${item.value}`)
+    if (env.length > 0) {
+      data.env = env
+    }
+  } else if (form.env && form.env.length > 0) {
+    const env = toRaw(form.env).filter(Boolean)
+    if (env.length > 0) {
+      data.env = env
+    }
   }
 
   return data
 }
 
 /**
- * 转换端口配置表单数据
+ * 转换端口配置表单数据（同时填充 portBindings 与 exposedPorts）
  */
 export function transformPortForm(form: PortFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {}
+  const exposedPorts: Record<string, Record<string, never>> = { ...(form.exposedPorts || {}) }
+  let portBindings: Record<string, { hostIP: string; hostPort: string }[]> = {}
 
-  if (form.portBindings && Object.keys(form.portBindings).length > 0) {
-    data.portBindings = toRaw(form.portBindings)
+  if (form.portList && form.portList.length > 0) {
+    form.portList.forEach((port) => {
+      if (port.containerPort && port.protocol.length > 0) {
+        port.protocol.forEach((protocol) => {
+          const key = `${port.containerPort}/${protocol}`
+          if (!exposedPorts[key]) {
+            exposedPorts[key] = {}
+          }
+          if (port.hostPort) {
+            if (!portBindings[key]) {
+              portBindings[key] = []
+            }
+            portBindings[key].push({
+              hostIP: '',
+              hostPort: port.hostPort.toString(),
+            })
+          }
+        })
+      }
+    })
+  } else if (form.portBindings && Object.keys(form.portBindings).length > 0) {
+    portBindings = toRaw(form.portBindings)
+    for (const portKey of Object.keys(portBindings)) {
+      if (!exposedPorts[portKey]) {
+        exposedPorts[portKey] = {}
+      }
+    }
+  }
+
+  if (Object.keys(portBindings).length > 0) {
+    data.portBindings = portBindings
+  }
+
+  if (Object.keys(exposedPorts).length > 0) {
+    data.exposedPorts = exposedPorts
   }
 
   return data
@@ -83,8 +191,18 @@ export function transformPortForm(form: PortFormValue): Partial<ContainerCreateR
 export function transformVolumeForm(form: VolumeFormValue): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {}
 
-  if (form.binds && form.binds.length > 0) {
-    data.binds = toRaw(form.binds)
+  if (form.volumeList && form.volumeList.length > 0) {
+    const binds = form.volumeList
+      .filter((item) => item.source.trim() && item.target.trim())
+      .map((item) => `${item.source.trim()}:${item.target.trim()}${item.readonly ? ':ro' : ''}`)
+    if (binds.length > 0) {
+      data.binds = binds
+    }
+  } else if (form.binds && form.binds.length > 0) {
+    const binds = toRaw(form.binds).filter(Boolean)
+    if (binds.length > 0) {
+      data.binds = binds
+    }
   }
 
   return data
@@ -96,59 +214,41 @@ export function transformVolumeForm(form: VolumeFormValue): Partial<ContainerCre
 export function transformNetworkForm(
   form: NetworkFormValue,
   portPublishAllPorts: boolean,
-  containerName: string,
+  _containerName: string,
 ): Partial<ContainerCreateRequest> {
   const data: Partial<ContainerCreateRequest> = {
     publishAllPorts: form.publishAllPorts || portPublishAllPorts || false,
   }
 
-  // 根据配置模式处理网络配置
+  // 默认模式：直接复用 Docker 默认 bridge 网络，避免每次创建容器产生孤儿网络
   if (form.configMode === 'default') {
-    // 默认模式：创建一个 容器名_default 的网络
     data.networkMode = 'bridge'
-
-    // 如果提供了容器名，创建一个默认网络
-    if (containerName && containerName.trim()) {
-      const networkName = `${containerName}_default`
-
-      // 创建网络配置
-      data.networksToCreate = [
-        {
-          name: networkName,
-          driver: 'bridge',
-          enableIPv6: false,
-          internal: false,
-          attachable: true,
-        },
-      ]
-
-      // 配置容器连接到该网络
-      const endpointsConfig: Record<string, any> = {}
-      endpointsConfig[networkName] = {
-        aliases: [],
-      }
-
-      data.networkConfig = {
-        endpointsConfig,
-      }
-    }
   } else if (form.configMode === 'custom') {
     // 自定义网络配置模式
     data.networkMode = 'bridge'
 
-    if (form.customNetworks && form.customNetworks.length > 0) {
+    const validNetworks = (form.customNetworks || [])
+      .map((network) => ({ ...network, name: network.name?.trim() || '' }))
+      .filter((network) => network.name !== '')
+
+    const specialModeNetwork = validNetworks.find(
+      (network) => network.name === 'host' || network.name === 'none',
+    )
+
+    if (specialModeNetwork) {
+      data.networkMode = specialModeNetwork.name
+      data.publishAllPorts = false
+    } else if (validNetworks.length > 0) {
       const networksToCreate: any[] = []
       const endpointsConfig: Record<string, any> = {}
 
-      form.customNetworks.forEach((network) => {
-        if (!network.name) {
-          return
-        }
+      validNetworks.forEach((network) => {
+        const networkName = network.name
 
         // 如果网络不存在，构建网络创建配置
         if (!network.exists) {
           const networkToCreate: any = {
-            name: network.name,
+            name: networkName,
             driver: network.driver || 'bridge',
             enableIPv6: network.enableIPv6 || false,
             internal: network.internal || false,
@@ -200,8 +300,9 @@ export function transformNetworkForm(
         }
 
         // 配置容器连接到网络的参数
-        const endpointSettings: any = {
-          aliases: network.aliases || [],
+        const endpointSettings: any = {}
+        if (network.aliases && network.aliases.length > 0 && networkName !== 'bridge') {
+          endpointSettings.aliases = network.aliases
         }
 
         // 配置容器的静态 IP
@@ -220,7 +321,7 @@ export function transformNetworkForm(
           endpointSettings.macAddress = network.macAddress
         }
 
-        endpointsConfig[network.name] = endpointSettings
+        endpointsConfig[networkName] = endpointSettings
       })
 
       // 如果有需要创建的网络，添加到请求中
@@ -230,6 +331,8 @@ export function transformNetworkForm(
 
       // 添加网络连接配置
       if (Object.keys(endpointsConfig).length > 0) {
+        const sortedNetworkNames = Object.keys(endpointsConfig).sort()
+        data.networkMode = sortedNetworkNames[0]
         data.networkConfig = {
           endpointsConfig,
         }
@@ -263,14 +366,20 @@ export function transformNetworkForm(
 export function transformRuntimeResourceForm(
   form: RuntimeResourceFormValue,
 ): Partial<ContainerCreateRequest> {
+  const autoRemove = form.autoRemove || false
   const data: Partial<ContainerCreateRequest> = {
     privileged: form.privileged || false,
     readonlyRootfs: form.readonlyRootfs || false,
-    autoRemove: form.autoRemove || false,
-    restartPolicy: {
-      name: form.restartPolicyName as any,
-      maximumRetryCount: form.restartPolicyMaxRetry || 0,
-    },
+    autoRemove,
+    restartPolicy: autoRemove
+      ? {
+          name: '' as any,
+          maximumRetryCount: 0,
+        }
+      : {
+          name: form.restartPolicyName as any,
+          maximumRetryCount: form.restartPolicyMaxRetry || 0,
+        },
   }
 
   // 资源限制
@@ -343,8 +452,19 @@ export function transformLabelForm(form: LabelFormValue): Partial<ContainerCreat
   const data: Partial<ContainerCreateRequest> = {}
 
   // 标签
-  if (form.labels && Object.keys(form.labels).length > 0) {
-    data.labels = form.labels
+  if (form.labelList && form.labelList.length > 0) {
+    const labels: Record<string, string> = {}
+    form.labelList.forEach((item) => {
+      const key = item.key.trim()
+      if (key) {
+        labels[key] = item.value
+      }
+    })
+    if (Object.keys(labels).length > 0) {
+      data.labels = labels
+    }
+  } else if (form.labels && Object.keys(form.labels).length > 0) {
+    data.labels = toRaw(form.labels)
   }
 
   return data

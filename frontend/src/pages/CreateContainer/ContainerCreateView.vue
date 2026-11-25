@@ -7,28 +7,28 @@
       :pane-style="{ height: tabHeight }"
       animated
     >
-      <n-tab-pane name="basic" tab="基础">
-        <BasicTab v-model="basicForm" />
+      <n-tab-pane name="basic" tab="基础" display-directive="show:lazy">
+        <BasicTab ref="basicTabRef" v-model="basicForm" />
       </n-tab-pane>
-      <n-tab-pane name="env" tab="环境变量">
+      <n-tab-pane name="env" tab="环境变量" display-directive="show:lazy">
         <EnvTab v-model="envForm" />
       </n-tab-pane>
-      <n-tab-pane name="port" tab="端口">
+      <n-tab-pane name="port" tab="端口" display-directive="show:lazy">
         <PortTab v-model="portForm" />
       </n-tab-pane>
-      <n-tab-pane name="volume" tab="数据挂载">
+      <n-tab-pane name="volume" tab="数据挂载" display-directive="show:lazy">
         <VolumeTab v-model="volumeForm" />
       </n-tab-pane>
-      <n-tab-pane name="network" tab="网络">
+      <n-tab-pane name="network" tab="网络" display-directive="show:lazy">
         <NetworkTab v-model="networkForm" />
       </n-tab-pane>
-      <n-tab-pane name="runtime-resource" tab="运行&资源">
+      <n-tab-pane name="runtime-resource" tab="运行&资源" display-directive="show:lazy">
         <RuntimeResourceTab v-model="runtimeResourceForm" />
       </n-tab-pane>
-      <n-tab-pane name="label" tab="标签">
+      <n-tab-pane name="label" tab="标签" display-directive="show:lazy">
         <LabelTab v-model="labelForm" />
       </n-tab-pane>
-      <n-tab-pane name="advanced" tab="高级">
+      <n-tab-pane name="advanced" tab="高级" display-directive="show:lazy">
         <AdvancedTab v-model="advancedForm" />
       </n-tab-pane>
     </n-tabs>
@@ -82,6 +82,7 @@ const settingStore = useSettingStore()
 const containerStore = useContainerStore()
 const activeTab = ref('basic')
 const creating = ref(false)
+const basicTabRef = ref<InstanceType<typeof BasicTab> | null>(null)
 
 const tabTitleHeight = computed(() => 42)
 const bottomHeight = computed(() => 51 + settingStore.contentSafeBottom)
@@ -166,7 +167,26 @@ const handleCancel = () => {
 }
 
 const handleCreate = async () => {
+  try {
+    await basicTabRef.value?.validate()
+  } catch {
+    activeTab.value = 'basic'
+    message.error('请完善必填的基础配置信息')
+    return
+  }
+
   // 校验基础表单 - 直接校验数据而不依赖表单组件
+  const trimmedName = basicForm.value.name?.trim() || ''
+  if (!trimmedName) {
+    activeTab.value = 'basic'
+    message.error('请输入容器名称')
+    return
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(trimmedName)) {
+    activeTab.value = 'basic'
+    message.error('容器名称只能包含字母、数字、下划线、点和连字符，且必须以字母或数字开头')
+    return
+  }
   if (!basicForm.value.image || !basicForm.value.image.trim()) {
     activeTab.value = 'basic'
     message.error('请输入镜像名称')
