@@ -2,6 +2,7 @@
   <n-modal
     :show="show"
     :mask-closable="!hasChanges"
+    :close-on-esc="false"
     preset="card"
     class="file-editor-modal"
     style="width: 90vw; max-width: 1200px"
@@ -9,7 +10,11 @@
   >
     <template #header>
       <div class="flex items-center gap-2">
-        <n-icon><ArrowBack /></n-icon>
+        <n-button text @click="handleClose" title="关闭编辑器">
+          <template #icon>
+            <n-icon><ArrowBack /></n-icon>
+          </template>
+        </n-button>
         <span>{{ fileName }}</span>
         <span v-if="hasChanges" class="text-warning">●</span>
         <span v-if="readOnly" class="text-xs text-gray-500">(只读)</span>
@@ -62,7 +67,7 @@
       <div class="flex justify-between items-center text-sm text-gray-500">
         <span>{{ filePath }}</span>
         <span v-if="isEditable"
-          >wan 快捷键: <kbd>{{ isMac ? 'Cmd' : 'Ctrl' }}+S</kbd> 保存, <kbd>ESC</kbd> 关闭
+          >快捷键: <kbd>{{ isMac ? 'Cmd' : 'Ctrl' }}+S</kbd> 保存, <kbd>ESC</kbd> 关闭
         </span>
       </div>
     </template>
@@ -72,25 +77,12 @@
 <script setup lang="ts">
 import { getContainerFileContent, updateContainerFileContent } from '@/common/api'
 import { downloadContainerFile } from './utils'
-import { cpp } from '@codemirror/lang-cpp'
-import { css } from '@codemirror/lang-css'
-import { html } from '@codemirror/lang-html'
-import { java } from '@codemirror/lang-java'
-import { javascript } from '@codemirror/lang-javascript'
-import { json } from '@codemirror/lang-json'
-import { markdown } from '@codemirror/lang-markdown'
-import { php } from '@codemirror/lang-php'
-import { python } from '@codemirror/lang-python'
-import { rust } from '@codemirror/lang-rust'
-import { sql } from '@codemirror/lang-sql'
-import { xml } from '@codemirror/lang-xml'
-import { yaml } from '@codemirror/lang-yaml'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { ArrowBack, Download, Save } from '@vicons/ionicons5'
 import { EditorView, basicSetup } from 'codemirror'
 import { NAlert, NButton, NIcon, NModal, NSpace, NSpin, useMessage } from 'naive-ui'
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 
 interface FileEditorProps {
   show: boolean
@@ -125,85 +117,103 @@ const hasChanges = ref(false)
 const languageConf = new Compartment()
 const readOnlyConf = new Compartment()
 
-// 根据文件扩展名获取语言支持
-const getLanguageSupport = (filename: string) => {
+// 按需懒加载 CodeMirror 语言扩展，避免将所有语法包打入初始包
+const loadLanguageSupport = async (filename: string): Promise<Extension> => {
   const ext = filename.split('.').pop()?.toLowerCase() || ''
-
-  const languageMap: Record<string, any> = {
-    // JavaScript/TypeScript
-    js: javascript(),
-    jsx: javascript({ jsx: true }),
-    ts: javascript({ typescript: true }),
-    tsx: javascript({ typescript: true, jsx: true }),
-    mjs: javascript(),
-    cjs: javascript(),
-
-    // HTML/XML
-    html: html(),
-    htm: html(),
-    xml: xml(),
-    svg: xml(),
-
-    // CSS
-    css: css(),
-    scss: css(),
-    sass: css(),
-    less: css(),
-
-    // JSON/YAML
-    json: json(),
-    yaml: yaml(),
-    yml: yaml(),
-
-    // Markdown
-    md: markdown(),
-    markdown: markdown(),
-
-    // Python
-    py: python(),
-    pyw: python(),
-
-    // PHP
-    php: php(),
-
-    // SQL
-    sql: sql(),
-
-    // C/C++
-    c: cpp(),
-    cpp: cpp(),
-    cc: cpp(),
-    cxx: cpp(),
-    h: cpp(),
-    hpp: cpp(),
-
-    // Java
-    java: java(),
-
-    // Rust
-    rs: rust(),
-
-    // Shell
-    sh: javascript(), // 用 js 作为基本高亮
-    bash: javascript(),
-
-    // Config files
-    conf: javascript(),
-    config: javascript(),
-    ini: javascript(),
-    env: javascript(),
-
-    // Docker
-    dockerfile: javascript(),
-
-    // Go
-    go: javascript(),
+  switch (ext) {
+    case 'js':
+    case 'mjs':
+    case 'cjs':
+    case 'sh':
+    case 'bash':
+    case 'conf':
+    case 'config':
+    case 'ini':
+    case 'env':
+    case 'dockerfile':
+    case 'go': {
+      const { javascript } = await import('@codemirror/lang-javascript')
+      return javascript()
+    }
+    case 'jsx': {
+      const { javascript } = await import('@codemirror/lang-javascript')
+      return javascript({ jsx: true })
+    }
+    case 'ts': {
+      const { javascript } = await import('@codemirror/lang-javascript')
+      return javascript({ typescript: true })
+    }
+    case 'tsx': {
+      const { javascript } = await import('@codemirror/lang-javascript')
+      return javascript({ typescript: true, jsx: true })
+    }
+    case 'html':
+    case 'htm': {
+      const { html } = await import('@codemirror/lang-html')
+      return html()
+    }
+    case 'xml':
+    case 'svg': {
+      const { xml } = await import('@codemirror/lang-xml')
+      return xml()
+    }
+    case 'css':
+    case 'scss':
+    case 'sass':
+    case 'less': {
+      const { css } = await import('@codemirror/lang-css')
+      return css()
+    }
+    case 'json': {
+      const { json } = await import('@codemirror/lang-json')
+      return json()
+    }
+    case 'yaml':
+    case 'yml': {
+      const { yaml } = await import('@codemirror/lang-yaml')
+      return yaml()
+    }
+    case 'md':
+    case 'markdown': {
+      const { markdown } = await import('@codemirror/lang-markdown')
+      return markdown()
+    }
+    case 'py':
+    case 'pyw': {
+      const { python } = await import('@codemirror/lang-python')
+      return python()
+    }
+    case 'php': {
+      const { php } = await import('@codemirror/lang-php')
+      return php()
+    }
+    case 'sql': {
+      const { sql } = await import('@codemirror/lang-sql')
+      return sql()
+    }
+    case 'c':
+    case 'cpp':
+    case 'cc':
+    case 'cxx':
+    case 'h':
+    case 'hpp': {
+      const { cpp } = await import('@codemirror/lang-cpp')
+      return cpp()
+    }
+    case 'java': {
+      const { java } = await import('@codemirror/lang-java')
+      return java()
+    }
+    case 'rs': {
+      const { rust } = await import('@codemirror/lang-rust')
+      return rust()
+    }
+    default:
+      return []
   }
-
-  return languageMap[ext] || []
 }
 
-// 文件类型检测
+// 文件类型检测（移除 svg，作为 XML 文本可编辑）
 const isBinaryFile = (filename: string): boolean => {
   const binaryExts = [
     'jpg',
@@ -212,7 +222,6 @@ const isBinaryFile = (filename: string): boolean => {
     'gif',
     'bmp',
     'ico',
-    'svg',
     'zip',
     'tar',
     'gz',
@@ -246,43 +255,53 @@ const isMac = computed(() => {
   return typeof window !== 'undefined' && window.navigator.platform.includes('Mac')
 })
 
+// 加载请求序号（防止异步加载期间切换文件/关闭后产生竞态覆盖）
+let loadRequestId = 0
+
 // 加载文件内容
 const loadFile = async () => {
   if (!props.filePath || !props.show) {
     return
   }
 
+  const requestId = ++loadRequestId
+  error.value = null
+  hasChanges.value = false
+
+  if (editorView.value) {
+    editorView.value.destroy()
+    editorView.value = null
+  }
+
   // 检查是否为二进制文件
   if (isBinaryFile(props.fileName)) {
+    loading.value = false
+    content.value = ''
     error.value = '此文件为二进制文件，不支持在线预览。请下载后查看。'
     return
   }
 
   loading.value = true
-  error.value = null
 
   try {
-    console.log('Loading file:', props.filePath)
     const res = await getContainerFileContent(props.containerId, props.filePath)
-    console.log('File content response:', res)
+    if (requestId !== loadRequestId || !props.show) {
+      return
+    }
 
     if (res.code === 0 && res.data) {
-      content.value = res.data.content || ''
-      console.log('File content loaded, length:', content.value.length, 'chars')
-
-      // 如果内容为空，显示提示
-      if (content.value === '') {
-        error.value = '文件内容为空或无法读取'
-      }
-
+      content.value = res.data.content ?? ''
       hasChanges.value = false
-      initEditor()
+      await initEditor(requestId)
     } else {
       const errorMsg = res.msg || '加载文件失败'
       console.error('Load file failed:', errorMsg, 'code:', res.code)
       throw new Error(errorMsg)
     }
   } catch (err: any) {
+    if (requestId !== loadRequestId) {
+      return
+    }
     console.error('Load file error:', err)
     let errorMessage = err.message || '加载文件失败'
 
@@ -294,13 +313,20 @@ const loadFile = async () => {
     error.value = errorMessage
     content.value = ''
   } finally {
-    loading.value = false
+    if (requestId === loadRequestId) {
+      loading.value = false
+    }
   }
 }
 
 // 初始化编辑器
-const initEditor = () => {
+const initEditor = async (requestId: number) => {
   if (!editorContainer.value) {
+    return
+  }
+
+  const language = await loadLanguageSupport(props.fileName)
+  if (requestId !== loadRequestId || !props.show || !editorContainer.value) {
     return
   }
 
@@ -309,8 +335,6 @@ const initEditor = () => {
     editorView.value.destroy()
     editorView.value = null
   }
-
-  const language = getLanguageSupport(props.fileName)
 
   const state = EditorState.create({
     doc: content.value,
@@ -382,6 +406,9 @@ const handleClose = () => {
     }
   }
 
+  loadRequestId++
+  loading.value = false
+
   emit('update:show', false)
   emit('close')
 
@@ -395,20 +422,32 @@ const handleClose = () => {
   error.value = null
 }
 
-// 监听显示状态
+// 监听显示状态与目标文件变化
 watch(
-  () => props.show,
-  (show) => {
+  [() => props.show, () => props.containerId, () => props.filePath],
+  ([show]) => {
     if (show) {
-      loadFile()
+      void loadFile()
+    } else {
+      loadRequestId++
+      loading.value = false
+      if (editorView.value) {
+        editorView.value.destroy()
+        editorView.value = null
+      }
+      hasChanges.value = false
+      error.value = null
     }
   },
 )
 
-// 键盘快捷键
+// 键盘快捷键（仅在编辑器弹窗打开时生效）
 const handleKeydown = (e: KeyboardEvent) => {
+  if (!props.show) {
+    return
+  }
   // Cmd+S / Ctrl+S 保存
-  if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
     e.preventDefault()
     if (isEditable.value && hasChanges.value) {
       saveFile()
@@ -422,6 +461,14 @@ const handleKeydown = (e: KeyboardEvent) => {
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  if (editorView.value) {
+    editorView.value.destroy()
+    editorView.value = null
+  }
 })
 </script>
 

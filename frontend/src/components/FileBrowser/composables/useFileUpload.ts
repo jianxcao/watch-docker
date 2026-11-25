@@ -1,11 +1,11 @@
 import { uploadContainerFiles } from '@/common/api'
 import { useMessage } from 'naive-ui'
-import { ref } from 'vue'
+import { ref, toValue, type MaybeRefOrGetter } from 'vue'
 
 /**
  * 文件上传功能
  */
-export function useFileUpload(containerId: string) {
+export function useFileUpload(containerId: MaybeRefOrGetter<string>) {
   const message = useMessage()
   const uploading = ref(false)
   const uploadProgress = ref(0)
@@ -20,12 +20,24 @@ export function useFileUpload(containerId: string) {
     uploadProgress.value = 0
 
     try {
-      const res = await uploadContainerFiles(containerId, targetPath, files)
+      const res = await uploadContainerFiles(toValue(containerId), targetPath, files)
       
       if (res.code === 0) {
-        const count = res.data.uploaded.length
-        message.success(`成功上传 ${count} 个文件`)
-        onSuccess?.()
+        const count = res.data?.uploaded?.length ?? 0
+        const errors = res.data?.errors || []
+        if (errors.length > 0) {
+          const preview = errors.slice(0, 3).join('; ')
+          const suffix = errors.length > 3 ? ` 等 ${errors.length} 项错误` : ''
+          message.warning(
+            `已上传 ${count} 个文件，${errors.length} 个失败: ${preview}${suffix}`,
+            { duration: 6000 },
+          )
+        } else {
+          message.success(`成功上传 ${count} 个文件`)
+        }
+        if (count > 0) {
+          onSuccess?.()
+        }
       } else {
         throw new Error(res.msg || '上传失败')
       }

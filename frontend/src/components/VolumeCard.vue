@@ -117,10 +117,11 @@ const isUsed = computed(() => (props.volume.usageData?.refCount || 0) > 0)
 
 // 格式化创建时间
 const formatCreatedTime = (createdAt: string): string => {
-  if (!createdAt) {
+  if (!createdAt || createdAt.startsWith('0001-01-01')) {
     return '-'
   }
-  return dayjs(createdAt).format('YYYY-MM-DD HH:mm')
+  const d = dayjs(createdAt)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : '-'
 }
 
 // 下拉菜单选项

@@ -1,14 +1,28 @@
 import { createContainerPath, renameContainerPath } from '@/common/api'
 import { useDialog, useMessage } from 'naive-ui'
-import { h } from 'vue'
+import { h, toValue, type MaybeRefOrGetter } from 'vue'
 import { NInput } from 'naive-ui'
 
 /**
  * 文件/文件夹创建和重命名功能
  */
-export function useFileActions(containerId: string) {
+export function useFileActions(containerId: MaybeRefOrGetter<string>) {
   const message = useMessage()
   const dialog = useDialog()
+
+  const validateEntryName = (rawName: string, typeName: string): string | null => {
+    const name = rawName.trim()
+    if (!name) {
+      return `请输入${typeName}名称`
+    }
+    if (name === '.' || name === '..' || name.includes('..')) {
+      return `${typeName}名称不能包含 ".."`
+    }
+    if (name.includes('/') || name.includes('\\')) {
+      return `${typeName}名称不能包含路径分隔符`
+    }
+    return null
+  }
 
   // 新建文件或文件夹
   const createPath = (currentPath: string, type: 'file' | 'directory', onSuccess?: () => void) => {
@@ -25,7 +39,12 @@ export function useFileActions(containerId: string) {
             inputValue = v
           },
           onKeyup: async (e: KeyboardEvent) => {
-            if (e.key === 'Enter' && inputValue.trim()) {
+            if (e.key === 'Enter' && !d.loading) {
+              const validationErr = validateEntryName(inputValue, typeName)
+              if (validationErr) {
+                message.error(validationErr)
+                return
+              }
               d.loading = true
               try {
                 await handleCreate()
@@ -39,12 +58,14 @@ export function useFileActions(containerId: string) {
       positiveText: '创建',
       negativeText: '取消',
       onPositiveClick: () => {
-        if (!inputValue.trim()) {
-          message.error(`请输入${typeName}名称`)
+        const validationErr = validateEntryName(inputValue, typeName)
+        if (validationErr) {
+          message.error(validationErr)
           return false
         }
-        return new Promise((resolve, reject) => {
-          handleCreate().then(resolve).catch(reject)
+        d.loading = true
+        return handleCreate().finally(() => {
+          d.loading = false
         })
       },
     })
@@ -53,7 +74,7 @@ export function useFileActions(containerId: string) {
       const name = inputValue.trim()
       const fullPath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`
 
-      const res = await createContainerPath(containerId, {
+      const res = await createContainerPath(toValue(containerId), {
         path: fullPath,
         type,
       })
@@ -92,7 +113,17 @@ export function useFileActions(containerId: string) {
             inputValue = v
           },
           onKeyup: async (e: KeyboardEvent) => {
-            if (e.key === 'Enter' && inputValue.trim() && inputValue !== entry.name) {
+            if (e.key === 'Enter' && !d.loading) {
+              const newName = inputValue.trim()
+              const validationErr = validateEntryName(newName, typeName)
+              if (validationErr) {
+                message.error(validationErr)
+                return
+              }
+              if (newName === entry.name) {
+                message.warning('名称未改变')
+                return
+              }
               d.loading = true
               try {
                 await handleRename()
@@ -107,9 +138,9 @@ export function useFileActions(containerId: string) {
       negativeText: '取消',
       onPositiveClick: () => {
         const newName = inputValue.trim()
-
-        if (!newName) {
-          message.error(`请输入新${typeName}名称`)
+        const validationErr = validateEntryName(newName, typeName)
+        if (validationErr) {
+          message.error(validationErr)
           return false
         }
 
@@ -118,8 +149,9 @@ export function useFileActions(containerId: string) {
           return false
         }
 
-        return new Promise((resolve, reject) => {
-          handleRename().then(resolve).catch(reject)
+        d.loading = true
+        return handleRename().finally(() => {
+          d.loading = false
         })
       },
     })
@@ -128,7 +160,7 @@ export function useFileActions(containerId: string) {
       const newName = inputValue.trim()
       const newPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`
 
-      const res = await renameContainerPath(containerId, {
+      const res = await renameContainerPath(toValue(containerId), {
         oldPath,
         newPath,
       })

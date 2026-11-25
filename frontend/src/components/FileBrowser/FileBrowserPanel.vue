@@ -314,7 +314,7 @@ import {
   NSpin,
 } from 'naive-ui'
 import { VList } from 'virtua/vue'
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   useContextMenu,
   useFileActions,
@@ -353,10 +353,10 @@ const {
   goHome,
   toggleHiddenFiles,
   restoreSettings,
-} = useFileList(props.containerId)
+} = useFileList(() => props.containerId)
 
 // 文件操作
-const { downloadFile, deleteEntry } = useFileOperations(props.containerId)
+const { downloadFile, deleteEntry } = useFileOperations(() => props.containerId)
 
 // 文件编辑器
 const { fileEditor, openFileEditor } = useFileEditor()
@@ -371,16 +371,16 @@ const {
   showContextMenu,
   hideContextMenu,
   isEntrySelected,
-} = useContextMenu(props.canEdit)
+} = useContextMenu(() => props.canEdit)
 
 // 文件交互
 const { handleEntryClick, handleDoubleClick } = useFileInteraction()
 
 // 文件操作（创建、重命名）
-const { createPath, renamePath } = useFileActions(props.containerId)
+const { createPath, renamePath } = useFileActions(() => props.containerId)
 
 // 文件上传
-const { uploading, handleFileSelect, handleDrop } = useFileUpload(props.containerId)
+const { uploading, handleFileSelect, handleDrop } = useFileUpload(() => props.containerId)
 const fileInput = ref<HTMLInputElement | null>(null)
 const isDragOver = ref(false)
 
@@ -399,8 +399,10 @@ const handleDragOver = () => {
 
 // 处理拖拽离开
 const handleDragLeave = (e: DragEvent) => {
-  // 只有当离开整个文件列表区域时才取消高亮
-  if (e.target === e.currentTarget) {
+  // 只有当真正离开整个文件列表区域（而非移入子元素）时才取消高亮
+  const current = e.currentTarget as HTMLElement | null
+  const related = e.relatedTarget as Node | null
+  if (!current || !related || !current.contains(related)) {
     isDragOver.value = false
   }
 }
@@ -519,6 +521,26 @@ const onEntryDoubleClick = (entry: (typeof displayEntries.value)[0]) => {
     props.canEdit,
   )
 }
+
+// 路径变化时清理选中状态并关闭右键菜单
+watch(currentPath, () => {
+  selectedEntry.value = null
+  hideContextMenu()
+})
+
+// 监听容器 ID 变化，切换或更新容器后关闭编辑器/菜单并重新加载目录
+watch(
+  () => props.containerId,
+  () => {
+    fileEditor.value.show = false
+    fileEditor.value.filePath = ''
+    fileEditor.value.fileName = ''
+    fileEditor.value.readOnly = false
+    selectedEntry.value = null
+    hideContextMenu()
+    loadDirectory(props.initialPath)
+  },
+)
 
 // 生命周期
 onMounted(() => {

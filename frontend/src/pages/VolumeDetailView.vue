@@ -182,7 +182,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { volumeApi } from '@/common/api'
 import type { VolumeDetailResponse, ContainerRef } from '@/common/types'
@@ -219,10 +219,11 @@ const hasLabels = computed(() => {
 
 // 格式化创建时间
 const formatCreatedTime = (createdAt: string): string => {
-  if (!createdAt) {
+  if (!createdAt || createdAt.startsWith('0001-01-01')) {
     return '-'
   }
-  return dayjs(createdAt).format('YYYY-MM-DD HH:mm:ss')
+  const d = dayjs(createdAt)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
 // 获取Volume详情
@@ -300,6 +301,13 @@ const handleContainerClick = (container: ContainerRef) => {
   router.push(`/containers/${container.id}`)
 }
 
+// 监听路由参数变化
+watch(volumeName, (newName, oldName) => {
+  if (newName && newName !== oldName) {
+    void fetchVolumeDetail()
+  }
+})
+
 // 页面初始化
 onMounted(async () => {
   await fetchVolumeDetail()
@@ -329,7 +337,7 @@ onMounted(async () => {
 
     .info-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 24px 32px;
       .info-item {
         display: flex;

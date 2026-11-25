@@ -1,12 +1,12 @@
 import { listContainerFiles } from '@/common/api'
 import type { FileEntry } from '@/common/types'
-import { computed, ref } from 'vue'
+import { computed, ref, toValue, type MaybeRefOrGetter } from 'vue'
 import type { SortDirection, SortField } from '../types'
 
 /**
  * 文件列表数据管理
  */
-export function useFileList(containerId: string) {
+export function useFileList(containerId: MaybeRefOrGetter<string>) {
   // 状态
   const currentPath = ref('/')
   const entries = ref<FileEntry[]>([])
@@ -15,6 +15,7 @@ export function useFileList(containerId: string) {
   const showHiddenFiles = ref(true)
   const sortField = ref<SortField>('name')
   const sortDirection = ref<SortDirection>('asc')
+  let latestRequestId = 0
 
   // 计算属性：过滤和排序后的文件列表
   const displayEntries = computed(() => {
@@ -65,13 +66,17 @@ export function useFileList(containerId: string) {
     return currentPath.value.split('/').filter(Boolean)
   })
 
-  // 加载目录
+  // 加载目录（递增 requestId 丢弃过期请求响应，防止竞态覆盖）
   const loadDirectory = async (path: string) => {
+    const requestId = ++latestRequestId
     loading.value = true
     error.value = null
 
     try {
-      const res = await listContainerFiles(containerId, path)
+      const res = await listContainerFiles(toValue(containerId), path)
+      if (requestId !== latestRequestId) {
+        return
+      }
       if (res.code === 0 && res.data) {
         currentPath.value = res.data.path
         entries.value = res.data.entries || []
@@ -79,10 +84,15 @@ export function useFileList(containerId: string) {
         throw new Error(res.msg || '加载目录失败')
       }
     } catch (err: any) {
+      if (requestId !== latestRequestId) {
+        return
+      }
       error.value = err.message || '加载目录失败'
       entries.value = []
     } finally {
-      loading.value = false
+      if (requestId === latestRequestId) {
+        loading.value = false
+      }
     }
   }
 
@@ -98,7 +108,7 @@ export function useFileList(containerId: string) {
     }
     const parts = currentPath.value.split('/').filter(Boolean)
     parts.pop()
-    navigateTo('/' + parts.join('/') || '/')
+    navigateTo(parts.length > 0 ? '/' + parts.join('/') : '/')
   }
 
   // 回到根目录

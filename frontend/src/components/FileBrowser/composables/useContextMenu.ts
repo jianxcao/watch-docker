@@ -11,13 +11,13 @@ import {
   CreateOutline,
 } from '@vicons/ionicons5'
 import { useThemeVars, type DropdownOption } from 'naive-ui'
-import { nextTick, ref } from 'vue'
+import { nextTick, ref, toValue, type MaybeRefOrGetter } from 'vue'
 import type { ContextMenuState } from '../types'
 
 /**
  * 右键菜单管理
  */
-export function useContextMenu(canEdit: boolean) {
+export function useContextMenu(canEdit: MaybeRefOrGetter<boolean>) {
   const contextMenu = ref<ContextMenuState>({
     show: false,
     x: 0,
@@ -48,7 +48,7 @@ export function useContextMenu(canEdit: boolean) {
           label: '编辑',
           key: 'edit',
           icon: renderIcon(Create),
-          disabled: !canEdit,
+          disabled: !toValue(canEdit),
         },
       )
     }
@@ -71,7 +71,7 @@ export function useContextMenu(canEdit: boolean) {
         label: '重命名',
         key: 'rename',
         icon: renderIcon(Text),
-        disabled: !canEdit,
+        disabled: !toValue(canEdit),
       },
       {
         type: 'divider',
@@ -83,7 +83,7 @@ export function useContextMenu(canEdit: boolean) {
         icon: renderIcon(Trash, {
           color: theme.value.errorColor,
         }),
-        disabled: !canEdit,
+        disabled: !toValue(canEdit),
         props: {
           style: `color: ${theme.value.errorColor}`,
         },
@@ -95,7 +95,7 @@ export function useContextMenu(canEdit: boolean) {
 
   // 获取空白区域右键菜单选项
   const getEmptyAreaContextMenuOptions = (): DropdownOption[] => {
-    if (!canEdit) {
+    if (!toValue(canEdit)) {
       return []
     }
 
