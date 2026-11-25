@@ -3,20 +3,27 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/distribution/reference"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
-
-	"github.com/distribution/reference"
-	manifestpkg "github.com/docker-make/docker-mainifest/pkg/registry"
+	"golang.org/x/sync/singleflight"
 )
 
 // ErrorType 标识远程查询错误的类型
@@ -30,9 +37,11 @@ const (
 )
 
 type CacheEntry struct {
-	Digest    string
-	Expiry    time.Time
-	ErrorType ErrorType // 如果是负缓存，记录错误类型
+	IndexDigest  string
+	ChildDigest  string
+	ConfigDigest string
+	Expiry       time.Time
+	ErrorType    ErrorType // 如果是负缓存，记录错误类型
 }
 
 // rateLimitState 记录某个 registry 的限流状态
@@ -40,43 +49,94 @@ type rateLimitState struct {
 	Until time.Time
 }
 
+// DigestQuery 描述单个镜像及目标平台的远程 digest 查询需求
+type DigestQuery struct {
+	ImageRef         string
+	OS               string
+	Arch             string
+	Variant          string
+	NeedConfigDigest bool
+}
+
+// Key 返回包含平台信息的查询唯一键
+func (q DigestQuery) Key() string {
+	osName, arch, variant := normalizePlatform(q.OS, q.Arch, q.Variant)
+	return fmt.Sprintf("%s|%s/%s/%s", q.ImageRef, osName, arch, variant)
+}
+
+// DigestResult 批量查询的单个结果
+type DigestResult struct {
+	IndexDigest  string
+	ChildDigest  string
+	ConfigDigest string
+	Error        error
+	ErrType      ErrorType
+}
+
 type Client struct {
-	cache          map[string]CacheEntry
-	mu             sync.RWMutex
-	manifestClient *manifestpkg.Client
-	rateLimits     map[string]rateLimitState // registry key -> 限流状态
-	rateLimitMu    sync.RWMutex
+	cache       map[string]CacheEntry
+	mu          sync.RWMutex
+	rateLimits  map[string]rateLimitState // canonical registry host -> 限流状态
+	rateLimitMu sync.RWMutex
+
+	credsMu     sync.RWMutex
+	credentials map[string]authn.AuthConfig // canonical host -> auth config
+
+	transportMu    sync.Mutex
+	transportProxy string
+	httpTransport  *http.Transport
+
+	sf singleflight.Group
 }
 
 func New() *Client {
-	cfg := config.Get()
+	c := &Client{
+		cache:       make(map[string]CacheEntry),
+		rateLimits:  make(map[string]rateLimitState),
+		credentials: make(map[string]authn.AuthConfig),
+	}
 
-	// 创建 manifest 客户端
-	var manifestClient *manifestpkg.Client
-	var err error
-	if cfg != nil && cfg.Proxy.URL != "" {
-		manifestClient, err = manifestpkg.NewClientWithProxy(cfg.Proxy.URL)
-		if err != nil {
-			logger.Logger.Warn("创建 manifest 客户端失败，使用默认配置", zap.Error(err))
-			manifestClient = manifestpkg.NewClient()
+	c.UpdateManifestCredentials()
+	return c
+}
+
+// getTransport 返回复用的 *http.Transport；当代理配置变化时重建并释放旧连接池
+func (c *Client) getTransport() *http.Transport {
+	proxyStr := ""
+	if cfg := config.Get(); cfg != nil {
+		proxyStr = strings.TrimSpace(cfg.Proxy.URL)
+	}
+
+	c.transportMu.Lock()
+	defer c.transportMu.Unlock()
+
+	if c.httpTransport != nil && c.transportProxy == proxyStr {
+		return c.httpTransport
+	}
+
+	if c.httpTransport != nil {
+		c.httpTransport.CloseIdleConnections()
+	}
+
+	tr := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 16,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	if proxyStr != "" {
+		if proxyURL, err := url.Parse(proxyStr); err == nil {
+			tr.Proxy = http.ProxyURL(proxyURL)
+		} else {
+			logger.Logger.Warn("解析代理地址失败，回退系统环境变量代理", zap.String("proxy", proxyStr), zap.Error(err))
+			tr.Proxy = http.ProxyFromEnvironment
 		}
 	} else {
-		manifestClient = manifestpkg.NewClient()
+		tr.Proxy = http.ProxyFromEnvironment
 	}
 
-	// 设置 logger
-	manifestClient.WithLogger(logger.Logger)
-
-	c := &Client{
-		cache:          make(map[string]CacheEntry),
-		manifestClient: manifestClient,
-		rateLimits:     make(map[string]rateLimitState),
-	}
-
-	// 初始化凭据
-	c.UpdateManifestCredentials()
-
-	return c
+	c.httpTransport = tr
+	c.transportProxy = proxyStr
+	return tr
 }
 
 func (c *Client) getCache(key string) (CacheEntry, bool) {
@@ -88,28 +148,27 @@ func (c *Client) getCache(key string) (CacheEntry, bool) {
 	return CacheEntry{}, false
 }
 
-func (c *Client) setCache(key, digest string, ttl time.Duration, errType ErrorType) {
+func (c *Client) setCache(key string, entry CacheEntry, ttl time.Duration) {
+	now := time.Now()
+	entry.Expiry = now.Add(ttl)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cache[key] = CacheEntry{Digest: digest, Expiry: time.Now().Add(ttl), ErrorType: errType}
+	if prev, ok := c.cache[key]; ok && now.Before(prev.Expiry) && entry.ErrorType == ErrorTypeNone && entry.ConfigDigest == "" && prev.ConfigDigest != "" {
+		if prev.IndexDigest == entry.IndexDigest && prev.ChildDigest == entry.ChildDigest {
+			entry.ConfigDigest = prev.ConfigDigest
+		}
+	}
+	c.cache[key] = entry
+	if len(c.cache) > 512 {
+		for k, v := range c.cache {
+			if now.After(v.Expiry) {
+				delete(c.cache, k)
+			}
+		}
+	}
 }
 
-// detectErrorType 从 manifest 库返回的错误字符串中识别错误类型
-func detectErrorType(err error) ErrorType {
-	if err == nil {
-		return ErrorTypeNone
-	}
-	msg := err.Error()
-	if strings.Contains(msg, "状态码: 404") || strings.Contains(msg, "MANIFEST_UNKNOWN") {
-		return ErrorTypeNotFound
-	}
-	if strings.Contains(msg, "状态码: 429") || strings.Contains(msg, "TOOMANYREQUESTS") {
-		return ErrorTypeRateLimited
-	}
-	return ErrorTypeGeneral
-}
-
-// isRegistryRateLimited 检查某个 registry 是否仍处于限流状态
 func (c *Client) isRegistryRateLimited(registryKey string) bool {
 	c.rateLimitMu.RLock()
 	defer c.rateLimitMu.RUnlock()
@@ -119,11 +178,16 @@ func (c *Client) isRegistryRateLimited(registryKey string) bool {
 	return false
 }
 
-// setRegistryRateLimited 标记某个 registry 进入限流冷却期
 func (c *Client) setRegistryRateLimited(registryKey string, cooldown time.Duration) {
+	now := time.Now()
 	c.rateLimitMu.Lock()
 	defer c.rateLimitMu.Unlock()
-	c.rateLimits[registryKey] = rateLimitState{Until: time.Now().Add(cooldown)}
+	c.rateLimits[registryKey] = rateLimitState{Until: now.Add(cooldown)}
+	for k, v := range c.rateLimits {
+		if now.After(v.Until) {
+			delete(c.rateLimits, k)
+		}
+	}
 	logger.Logger.Warn("registry 已被限流，暂停请求",
 		zap.String("registry", registryKey),
 		zap.Duration("cooldown", cooldown))
@@ -143,331 +207,523 @@ func (c *Client) GetRateLimitedRegistries() map[string]time.Duration {
 	return result
 }
 
+func canonicalHost(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	h = strings.TrimPrefix(h, "https://")
+	h = strings.TrimPrefix(h, "http://")
+	if idx := strings.IndexByte(h, '/'); idx >= 0 {
+		h = h[:idx]
+	}
+	switch h {
+	case "docker.io", "dockerhub", "index.docker.io", "registry-1.docker.io":
+		return "index.docker.io"
+	default:
+		return h
+	}
+}
+
+func normalizePlatform(osName, arch, variant string) (string, string, string) {
+	o := strings.TrimSpace(osName)
+	a := strings.TrimSpace(arch)
+	v := strings.TrimSpace(variant)
+	if o == "" {
+		o = "linux"
+	}
+	if a == "" {
+		a = runtime.GOARCH
+	}
+	return strings.ToLower(o), strings.ToLower(a), strings.ToLower(v)
+}
+
 func normalizeImageRef(ref string) (normalized, host, repo, tag string, err error) {
-	named, err := reference.ParseNormalizedNamed(ref)
+	named, err := reference.ParseNormalizedNamed(strings.TrimSpace(ref))
 	if err != nil {
 		return "", "", "", "", err
 	}
 	named = reference.TagNameOnly(named)
-	// tag = reference.FamiliarString(named)
-	// FamiliarString returns repo:tag but not host, so rebuild
-	name := named.Name() // includes host
-	// split host from path
-	parts := strings.SplitN(name, "/", 2)
-	host = parts[0]
-	path := ""
-	if len(parts) == 2 {
-		path = parts[1]
-	}
-	if host == "docker.io" || host == "index.docker.io" {
-		host = "registry-1.docker.io"
+	host = canonicalHost(reference.Domain(named))
+	repo = reference.Path(named)
+
+	if d, ok := named.(reference.Digested); ok {
+		tag = d.Digest().String()
+	} else if t, ok := named.(reference.NamedTagged); ok {
+		tag = t.Tag()
+	} else {
+		tag = "latest"
 	}
 
-	// extract tag value
-	t, ok := named.(reference.NamedTagged)
-	if !ok {
-		// default tag latest
-		tag = "latest"
+	if d, ok := named.(reference.Digested); ok {
+		normalized = fmt.Sprintf("%s/%s@%s", host, repo, d.Digest().String())
 	} else {
-		tag = t.Tag()
+		normalized = fmt.Sprintf("%s/%s:%s", host, repo, tag)
 	}
-	normalized = fmt.Sprintf("%s/%s:%s", host, path, tag)
-	return normalized, host, path, tag, nil
+	return normalized, host, repo, tag, nil
 }
 
-// UpdateManifestCredentials 从全局配置更新 manifestClient 的认证凭据
+// UpdateManifestCredentials 从全局配置全量替换认证凭据，支持任意仓库并清除已删除凭据与历史负面缓存
 func (c *Client) UpdateManifestCredentials() {
-	if c.manifestClient == nil {
-		return
-	}
-
 	cfg := config.Get()
-	if cfg == nil {
-		return
-	}
-
-	// 清空现有凭据（通过重新设置）
-	for _, auth := range cfg.Registry.Auth {
-		registryKey := mapHostToRegistryKey(auth.Host)
-		if registryKey != "" && auth.Username != "" {
-			c.manifestClient.AddCredential(registryKey, auth.Username, auth.Token)
-			logger.Logger.Debug("已更新 manifest 客户端凭据",
-				zap.String("registry", registryKey),
-				zap.String("username", auth.Username))
+	newCreds := make(map[string]authn.AuthConfig)
+	if cfg != nil {
+		for _, auth := range cfg.Registry.Auth {
+			host := canonicalHost(auth.Host)
+			if host == "" {
+				continue
+			}
+			if strings.TrimSpace(auth.Username) == "" && strings.TrimSpace(auth.Token) == "" {
+				continue
+			}
+			newCreds[host] = authn.AuthConfig{
+				Username: auth.Username,
+				Password: auth.Token,
+			}
 		}
 	}
+
+	c.credsMu.Lock()
+	c.credentials = newCreds
+	c.credsMu.Unlock()
+
+	c.mu.Lock()
+	clear(c.cache)
+	c.mu.Unlock()
+
+	c.rateLimitMu.Lock()
+	clear(c.rateLimits)
+	c.rateLimitMu.Unlock()
 }
 
-// mapHostToRegistryKey 将 host 配置映射到 manifest 库的 registry key
-func mapHostToRegistryKey(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	switch host {
-	case "docker.io", "dockerhub", "registry-1.docker.io", "index.docker.io":
-		return manifestpkg.DockerHubKey
-	case "ghcr.io":
-		return manifestpkg.GHCRKey
-	default:
-		// 自定义 registry 暂不支持批量模式
+func (c *Client) getCredentialForHost(host string) (authn.AuthConfig, bool) {
+	key := canonicalHost(host)
+	c.credsMu.RLock()
+	defer c.credsMu.RUnlock()
+	cred, ok := c.credentials[key]
+	return cred, ok
+}
+
+func (c *Client) isHostExplicitHTTP(host string) bool {
+	target := canonicalHost(host)
+	cfg := config.Get()
+	if cfg == nil || target == "" {
+		return false
+	}
+	for _, item := range cfg.Registry.Auth {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.Host)), "http://") && canonicalHost(item.Host) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func extractHostWithoutPort(hostport string) string {
+	h := strings.TrimSpace(hostport)
+	if h == "" {
 		return ""
 	}
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		return strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
 }
 
-// DigestResult 批量查询的单个结果
-type DigestResult struct {
-	IndexDigest string
-	ChildDigest string
-	Error       error
-	ErrType     ErrorType
+func (c *Client) allowInsecureFallback(host string) bool {
+	if c.isHostExplicitHTTP(host) {
+		return true
+	}
+	h := strings.ToLower(extractHostWithoutPort(host))
+	if h == "" {
+		return false
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	if h == "localhost" || !strings.Contains(h, ".") ||
+		strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".lan") ||
+		strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".home") {
+		return true
+	}
+	return false
 }
 
-// GetRemoteDigestsBatch 批量获取多个镜像的远程 digest
-// 使用 manifest 库的批量模式，支持批量认证和并发查询。
-// 当 cacheOnly=true 时，只读取缓存，不会发起任何远程请求。
+// detectErrorType 基于标准 *transport.Error HTTP 状态码和诊断码分类错误
+func detectErrorType(err error) ErrorType {
+	if err == nil {
+		return ErrorTypeNone
+	}
+	var terr *transport.Error
+	if errors.As(err, &terr) {
+		if terr.StatusCode == http.StatusNotFound {
+			return ErrorTypeNotFound
+		}
+		if terr.StatusCode == http.StatusTooManyRequests {
+			return ErrorTypeRateLimited
+		}
+		for _, diag := range terr.Errors {
+			switch strings.ToUpper(string(diag.Code)) {
+			case "MANIFEST_UNKNOWN", "NAME_UNKNOWN":
+				return ErrorTypeNotFound
+			case "TOOMANYREQUESTS":
+				return ErrorTypeRateLimited
+			}
+		}
+	}
+
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "status code 404") || strings.Contains(msg, "404") && strings.Contains(msg, "manifest_unknown") {
+		return ErrorTypeNotFound
+	}
+	if strings.Contains(msg, "status code 429") || strings.Contains(msg, "toomanyrequests") {
+		return ErrorTypeRateLimited
+	}
+	return ErrorTypeGeneral
+}
+
+// GetRemoteDigestsBatch 批量获取多个镜像的远程 digest（兼容旧签名）
 func (c *Client) GetRemoteDigestsBatch(ctx context.Context, imageRefs []string, isUserCache bool, cacheOnly bool, concurrency int) map[string]DigestResult {
-	results := make(map[string]DigestResult)
+	queries := make([]DigestQuery, 0, len(imageRefs))
+	for _, ref := range imageRefs {
+		queries = append(queries, DigestQuery{ImageRef: ref})
+	}
+	raw := c.GetRemoteDigestsBatchWithPlatforms(ctx, queries, isUserCache, cacheOnly, concurrency)
+	out := make(map[string]DigestResult, len(imageRefs))
+	for _, q := range queries {
+		out[q.ImageRef] = raw[q.Key()]
+	}
+	return out
+}
 
-	if len(imageRefs) == 0 {
+// GetRemoteDigestsBatchWithPlatforms 批量按指定目标平台查询远程 digest
+func (c *Client) GetRemoteDigestsBatchWithPlatforms(ctx context.Context, queries []DigestQuery, isUserCache bool, cacheOnly bool, concurrency int) map[string]DigestResult {
+	results := make(map[string]DigestResult, len(queries))
+	if len(queries) == 0 {
 		return results
 	}
 
-	// 1. 检查缓存，收集需要查询的镜像
-	needQuery := make([]string, 0, len(imageRefs))
-	imageSpecs := make([]manifestpkg.ImageSpec, 0, len(imageRefs))
-	imageRefMap := make(map[string]string) // normalized -> original
-
-	for _, imageRef := range imageRefs {
-		normalized, _, _, tag, err := normalizeImageRef(imageRef)
-		if err != nil {
-			results[imageRef] = DigestResult{Error: err, ErrType: ErrorTypeGeneral}
-			continue
-		}
-
-		imageRefMap[normalized] = imageRef
-
-		// 检查缓存（含负缓存）
-		if isUserCache {
-			if entry, ok := c.getCache(normalized); ok {
-				if entry.ErrorType != ErrorTypeNone {
-					results[imageRef] = DigestResult{
-						Error:   fmt.Errorf("cached error: %s", entry.ErrorType),
-						ErrType: entry.ErrorType,
-					}
-				} else {
-					results[imageRef] = DigestResult{IndexDigest: entry.Digest, ChildDigest: ""}
-				}
-				continue
-			}
-		}
-
-		if cacheOnly {
-			// 只读缓存模式：缓存未命中时直接返回空结果，不触发远程查询。
-			results[imageRef] = DigestResult{}
-			continue
-		}
-
-		// 检查该镜像所在 registry 是否被限流
-		imageName := strings.Split(imageRef, ":")[0]
-		registryKey := manifestpkg.DetectRegistry(imageName)
-		if c.isRegistryRateLimited(registryKey) {
-			results[imageRef] = DigestResult{
-				Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却", registryKey),
-				ErrType: ErrorTypeRateLimited,
-			}
-			continue
-		}
-
-		// 需要查询
-		needQuery = append(needQuery, imageRef)
-
-		imageSpecs = append(imageSpecs, manifestpkg.ImageSpec{
-			Image: imageName,
-			Tag:   tag,
-		})
-	}
-
-	// 2. 如果没有需要查询的，直接返回
-	if len(needQuery) == 0 {
-		return results
-	}
-
-	// 2.5 优先通过用户配置的 Docker Hub mirror 查询 docker.io 镜像
-	// 命中的镜像会从 needQuery / imageSpecs 中剔除，剩余镜像继续走 manifestpkg 流程
-	mirrors := dockercli.EnabledMirrorHosts()
-	if len(mirrors) > 0 {
-		ttlForMirror := time.Minute * 5
-		if cfgTmp := config.Get(); cfgTmp != nil && cfgTmp.Scan.CacheTTL > 0 {
-			ttlForMirror = cfgTmp.Scan.CacheTTL.Duration()
-		}
-
-		filteredQuery := needQuery[:0]
-		filteredSpecs := imageSpecs[:0]
-		for i, imageRef := range needQuery {
-			if !dockercli.IsDockerHubImage(imageRef) {
-				filteredQuery = append(filteredQuery, imageRef)
-				filteredSpecs = append(filteredSpecs, imageSpecs[i])
-				continue
-			}
-			body, digest, ok := c.queryDigestViaMirrors(imageRef, mirrors)
-			if !ok {
-				filteredQuery = append(filteredQuery, imageRef)
-				filteredSpecs = append(filteredSpecs, imageSpecs[i])
-				continue
-			}
-
-			childDigest, _ := parseManifest(body)
-			results[imageRef] = DigestResult{
-				IndexDigest: digest,
-				ChildDigest: childDigest,
-			}
-			if normalized, _, _, _, nerr := normalizeImageRef(imageRef); nerr == nil && normalized != "" {
-				c.setCache(normalized, digest, ttlForMirror, ErrorTypeNone)
-			}
-			logger.Logger.Info("mirror 命中，跳过官方查询",
-				zap.String("image", imageRef),
-				zap.String("digest", digest))
-		}
-		needQuery = filteredQuery
-		imageSpecs = filteredSpecs
-	}
-
-	// 全部命中 mirror 时直接返回
-	if len(needQuery) == 0 {
-		return results
-	}
-
-	// 3. 使用 manifestClient 批量查询
 	cfg := config.Get()
 	if concurrency <= 0 {
-		concurrency = 3
+		if cfg != nil && cfg.Scan.Concurrency > 0 {
+			concurrency = cfg.Scan.Concurrency
+		} else {
+			concurrency = 3
+		}
 	}
 	if concurrency > 64 {
 		concurrency = 64
 	}
-	if cfg != nil && cfg.Scan.Concurrency > 0 {
-		concurrency = cfg.Scan.Concurrency
-	}
 
-	logger.Logger.Debug("批量获取 manifest",
-		zap.Int("total", len(imageSpecs)),
-		zap.Int("concurrency", concurrency))
-
-	manifestResults := c.manifestClient.GetManifestsWithDigest(imageSpecs, concurrency, true, nil)
-
-	// 4. 解析结果并缓存
-	ttl := time.Minute * 5
+	ttl := 5 * time.Minute
 	if cfg != nil && cfg.Scan.CacheTTL > 0 {
 		ttl = cfg.Scan.CacheTTL.Duration()
 	}
+	const rateLimitCooldown = 5 * time.Minute
+	const notFoundCacheTTL = 30 * time.Minute
 
-	rateLimitCooldown := 5 * time.Minute
-	notFoundCacheTTL := 30 * time.Minute
-	rateLimitedRegistries := make(map[string]bool)
+	mirrors := dockercli.EnabledMirrorEndpoints()
 
-	for i, manifestResult := range manifestResults {
-		if i >= len(needQuery) {
-			break
-		}
-
-		imageRef := needQuery[i]
-
-		if manifestResult.Error != nil {
-			errType := detectErrorType(manifestResult.Error)
-
-			switch errType {
-			case ErrorTypeRateLimited:
-				imageName := strings.Split(imageRef, ":")[0]
-				registryKey := manifestpkg.DetectRegistry(imageName)
-				if !rateLimitedRegistries[registryKey] {
-					rateLimitedRegistries[registryKey] = true
-					c.setRegistryRateLimited(registryKey, rateLimitCooldown)
-				}
-				results[imageRef] = DigestResult{Error: manifestResult.Error, ErrType: ErrorTypeRateLimited}
-				logger.Logger.Warn("镜像请求频率超限",
-					zap.String("image", imageRef))
-
-			case ErrorTypeNotFound:
-				normalized, _, _, _, _ := normalizeImageRef(imageRef)
-				if normalized != "" {
-					c.setCache(normalized, "", notFoundCacheTTL, ErrorTypeNotFound)
-				}
-				results[imageRef] = DigestResult{Error: manifestResult.Error, ErrType: ErrorTypeNotFound}
-				logger.Logger.Warn("镜像或标签不存在，已缓存以避免重复查询",
-					zap.String("image", imageRef),
-					zap.Duration("cacheTTL", notFoundCacheTTL))
-
-			default:
-				results[imageRef] = DigestResult{Error: manifestResult.Error, ErrType: ErrorTypeGeneral}
-				logger.Logger.Error("批量获取 manifest 失败",
-					zap.String("image", imageRef),
-					zap.Error(manifestResult.Error))
-			}
-			continue
-		}
-
-		digest := manifestResult.Digest
-		if digest == "" {
-			results[imageRef] = DigestResult{Error: fmt.Errorf("empty digest"), ErrType: ErrorTypeGeneral}
-			continue
-		}
-
-		// 缓存结果
-		normalized, _, _, _, _ := normalizeImageRef(imageRef)
-		if normalized != "" {
-			c.setCache(normalized, digest, ttl, ErrorTypeNone)
-		}
-
-		manifest := manifestResult.Manifest
-		childDigest, _ := parseManifest(manifest)
-		results[imageRef] = DigestResult{
-			IndexDigest: digest,
-			ChildDigest: childDigest,
-		}
-
-		logger.Logger.Debug("批量获取 manifest 成功",
-			zap.String("image", imageRef),
-			zap.String("digest", digest))
+	type pendingItem struct {
+		query      DigestQuery
+		cacheKey   string
+		host       string
+		normalized string
 	}
 
-	// 对于 429 之后还未处理的镜像，直接标记为限流
-	for i := len(manifestResults); i < len(needQuery); i++ {
-		imageRef := needQuery[i]
-		if _, exists := results[imageRef]; !exists {
-			results[imageRef] = DigestResult{
-				Error:   fmt.Errorf("跳过查询：registry 请求频率超限"),
+	pending := make([]pendingItem, 0, len(queries))
+	seenQueryKeys := make(map[string]struct{}, len(queries))
+
+	for _, q := range queries {
+		qKey := q.Key()
+		if _, dup := seenQueryKeys[qKey]; dup {
+			continue
+		}
+		seenQueryKeys[qKey] = struct{}{}
+
+		normalized, host, _, _, err := normalizeImageRef(q.ImageRef)
+		if err != nil {
+			results[qKey] = DigestResult{Error: err, ErrType: ErrorTypeGeneral}
+			continue
+		}
+
+		osName, arch, variant := normalizePlatform(q.OS, q.Arch, q.Variant)
+		cacheKey := fmt.Sprintf("%s|%s/%s/%s", normalized, osName, arch, variant)
+
+		if isUserCache {
+			if entry, ok := c.getCache(cacheKey); ok {
+				if entry.ErrorType != ErrorTypeNone {
+					results[qKey] = DigestResult{
+						Error:   fmt.Errorf("cached error: %s", entry.ErrorType),
+						ErrType: entry.ErrorType,
+					}
+					continue
+				}
+				// 如果需要 ConfigDigest 但此前缓存未解析该字段，且允许发网络请求，则继续拉取补充
+				if !q.NeedConfigDigest || entry.ConfigDigest != "" || cacheOnly {
+					results[qKey] = DigestResult{
+						IndexDigest:  entry.IndexDigest,
+						ChildDigest:  entry.ChildDigest,
+						ConfigDigest: entry.ConfigDigest,
+					}
+					continue
+				}
+			}
+		}
+
+		if cacheOnly {
+			results[qKey] = DigestResult{}
+			continue
+		}
+
+		canMirror := dockercli.IsDockerHubImage(q.ImageRef) && len(mirrors) > 0
+		if !canMirror && c.isRegistryRateLimited(host) {
+			results[qKey] = DigestResult{
+				Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却", host),
 				ErrType: ErrorTypeRateLimited,
 			}
+			continue
 		}
+
+		pending = append(pending, pendingItem{
+			query:      q,
+			cacheKey:   cacheKey,
+			host:       host,
+			normalized: normalized,
+		})
 	}
 
+	if len(pending) == 0 {
+		return results
+	}
+
+	var (
+		resMu sync.Mutex
+		wg    sync.WaitGroup
+		sem   = make(chan struct{}, concurrency)
+	)
+
+	for _, item := range pending {
+		wg.Add(1)
+		go func(it pendingItem) {
+			defer wg.Done()
+
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				resMu.Lock()
+				results[it.query.Key()] = DigestResult{Error: ctx.Err(), ErrType: ErrorTypeGeneral}
+				resMu.Unlock()
+				return
+			}
+			defer func() { <-sem }()
+
+			sfKey := fmt.Sprintf("%s|cfg=%v", it.cacheKey, it.query.NeedConfigDigest)
+			ch := c.sf.DoChan(sfKey, func() (any, error) {
+				flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+				defer cancel()
+
+				dr := c.fetchDigest(flightCtx, it.query, it.normalized, it.host, mirrors)
+				if dr.Error != nil {
+					switch dr.ErrType {
+					case ErrorTypeRateLimited:
+						c.setRegistryRateLimited(it.host, rateLimitCooldown)
+					case ErrorTypeNotFound:
+						c.setCache(it.cacheKey, CacheEntry{ErrorType: ErrorTypeNotFound}, notFoundCacheTTL)
+					}
+					return dr, nil
+				}
+
+				c.setCache(it.cacheKey, CacheEntry{
+					IndexDigest:  dr.IndexDigest,
+					ChildDigest:  dr.ChildDigest,
+					ConfigDigest: dr.ConfigDigest,
+					ErrorType:    ErrorTypeNone,
+				}, ttl)
+				return dr, nil
+			})
+
+			var finalRes DigestResult
+			select {
+			case <-ctx.Done():
+				finalRes = DigestResult{Error: ctx.Err(), ErrType: ErrorTypeGeneral}
+			case res := <-ch:
+				if res.Err != nil {
+					finalRes = DigestResult{Error: res.Err, ErrType: detectErrorType(res.Err)}
+				} else {
+					finalRes = res.Val.(DigestResult)
+				}
+			}
+
+			resMu.Lock()
+			results[it.query.Key()] = finalRes
+			resMu.Unlock()
+		}(item)
+	}
+
+	wg.Wait()
 	return results
 }
 
-func parseManifest(manifest string) (childDigest string, err error) {
-	var idx v1.Index
-	if err := json.Unmarshal([]byte(manifest), &idx); err != nil {
-		return "", fmt.Errorf("decode index: %w", err)
+func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, host string, mirrors []dockercli.MirrorEndpoint) DigestResult {
+	targetOS, targetArch, targetVariant := normalizePlatform(q.OS, q.Arch, q.Variant)
+
+	// 1. 若配置了 Docker Hub mirror 且镜像属于 docker.io，先尝试通过 mirror 查询（即使官方处于限流冷却也继续走 mirror）
+	if dockercli.IsDockerHubImage(q.ImageRef) && len(mirrors) > 0 {
+		if indexDig, childDig, configDig, ok := c.queryDigestViaMirrors(ctx, q.ImageRef, mirrors, targetOS, targetArch, targetVariant, q.NeedConfigDigest); ok {
+			return DigestResult{
+				IndexDigest:  indexDig,
+				ChildDigest:  childDig,
+				ConfigDigest: configDig,
+			}
+		}
 	}
-	digest, derr := selectDigestFromIndex(idx)
-	if derr != nil {
-		return "", derr
+
+	if c.isRegistryRateLimited(host) {
+		return DigestResult{
+			Error:   fmt.Errorf("registry %s 请求频率超限，等待冷却", host),
+			ErrType: ErrorTypeRateLimited,
+		}
 	}
-	return digest, nil
+
+	// 2. 使用 go-containerregistry 查询官方/私有仓库
+	ref, err := name.ParseReference(normalizedRef)
+	if err != nil {
+		// 对非 HTTPS 私有仓库（如 http:// 或局域网自建）可保留原始引用重试
+		ref, err = name.ParseReference(q.ImageRef)
+		if err != nil {
+			return DigestResult{Error: fmt.Errorf("解析镜像引用失败: %w", err), ErrType: ErrorTypeGeneral}
+		}
+	}
+
+	opts := []remote.Option{
+		remote.WithContext(ctx),
+		remote.WithTransport(c.getTransport()),
+		remote.WithPlatform(v1.Platform{
+			OS:           targetOS,
+			Architecture: targetArch,
+			Variant:      targetVariant,
+		}),
+	}
+	if cred, ok := c.getCredentialForHost(host); ok {
+		opts = append(opts, remote.WithAuth(authn.FromConfig(cred)))
+	}
+
+	desc, err := remote.Get(ref, opts...)
+	if err != nil {
+		// 兼容未配置 TLS 的局域网私有仓库或显式 http:// 配置的仓库（禁止对公网域名静默降级明文传输凭据）
+		if strings.Contains(host, ":") && c.allowInsecureFallback(host) && strings.Contains(strings.ToLower(err.Error()), "http: server gave http response to https client") {
+			if insecRef, rerr := name.ParseReference(normalizedRef, name.Insecure); rerr == nil {
+				desc, err = remote.Get(insecRef, opts...)
+			}
+		}
+		if err != nil {
+			errType := detectErrorType(err)
+			return DigestResult{Error: err, ErrType: errType}
+		}
+	}
+
+	return extractDigestFromDescriptor(desc, targetOS, targetArch, targetVariant, q.NeedConfigDigest)
 }
 
-func selectDigestFromIndex(idx v1.Index) (string, error) {
-	os := runtime.GOOS
-	arch := runtime.GOARCH
-	for _, m := range idx.Manifests {
+func extractDigestFromDescriptor(desc *remote.Descriptor, targetOS, targetArch, targetVariant string, needConfig bool) DigestResult {
+	indexDigest := desc.Digest.String()
+	if desc.MediaType.IsIndex() {
+		idx, err := desc.ImageIndex()
+		if err != nil {
+			return DigestResult{Error: fmt.Errorf("解析 manifest index 失败: %w", err), ErrType: ErrorTypeGeneral}
+		}
+		im, err := idx.IndexManifest()
+		if err != nil {
+			return DigestResult{Error: fmt.Errorf("读取 index manifest 失败: %w", err), ErrType: ErrorTypeGeneral}
+		}
+		childDesc := selectDescriptorFromIndex(im, targetOS, targetArch, targetVariant)
+		var childDigest, configDigest string
+		if childDesc != nil {
+			childDigest = childDesc.Digest.String()
+			if needConfig {
+				img, ierr := idx.Image(childDesc.Digest)
+				if ierr != nil {
+					return DigestResult{Error: fmt.Errorf("获取平台镜像失败: %w", ierr), ErrType: detectErrorType(ierr)}
+				}
+				cfgHash, cerr := img.ConfigName()
+				if cerr != nil {
+					return DigestResult{Error: fmt.Errorf("获取平台镜像 config digest 失败: %w", cerr), ErrType: detectErrorType(cerr)}
+				}
+				configDigest = cfgHash.String()
+			}
+		} else {
+			if needConfig {
+				return DigestResult{
+					Error:   fmt.Errorf("未找到匹配平台 %s/%s 的子 manifest", targetOS, targetArch),
+					ErrType: ErrorTypeGeneral,
+				}
+			}
+			if childDig, derr := parseManifest(desc.Manifest, targetOS, targetArch, targetVariant); derr == nil {
+				childDigest = childDig
+			}
+		}
+		return DigestResult{
+			IndexDigest:  indexDigest,
+			ChildDigest:  childDigest,
+			ConfigDigest: configDigest,
+		}
+	}
+
+	var configDigest string
+	if needConfig {
+		img, err := desc.Image()
+		if err != nil {
+			return DigestResult{Error: fmt.Errorf("解析远程镜像失败: %w", err), ErrType: detectErrorType(err)}
+		}
+		cfgHash, cerr := img.ConfigName()
+		if cerr != nil {
+			return DigestResult{Error: fmt.Errorf("获取镜像 config digest 失败: %w", cerr), ErrType: detectErrorType(cerr)}
+		}
+		configDigest = cfgHash.String()
+	}
+	return DigestResult{
+		IndexDigest:  indexDigest,
+		ChildDigest:  indexDigest,
+		ConfigDigest: configDigest,
+	}
+}
+
+func selectDescriptorFromIndex(im *v1.IndexManifest, targetOS, targetArch, targetVariant string) *v1.Descriptor {
+	if im == nil {
+		return nil
+	}
+	var archMatch *v1.Descriptor
+	for i := range im.Manifests {
+		m := &im.Manifests[i]
 		if m.Platform == nil {
 			continue
 		}
-		if strings.EqualFold(m.Platform.OS, os) && strings.EqualFold(m.Platform.Architecture, arch) {
-			return m.Digest.String(), nil
+		pos := strings.ToLower(m.Platform.OS)
+		parch := strings.ToLower(m.Platform.Architecture)
+		pvar := strings.ToLower(m.Platform.Variant)
+		if pos == "" || pos == "unknown" || parch == "" || parch == "unknown" {
+			continue
+		}
+		if pos != targetOS || parch != targetArch {
+			continue
+		}
+		if pvar == targetVariant {
+			return m
+		}
+		if archMatch == nil {
+			archMatch = m
 		}
 	}
-	// fallback first digest
-	if len(idx.Manifests) > 0 {
-		return idx.Manifests[0].Digest.String(), nil
+	return archMatch
+}
+
+func parseManifest(raw []byte, targetOS, targetArch, targetVariant string) (string, error) {
+	if len(raw) == 0 {
+		return "", fmt.Errorf("empty manifest")
 	}
-	return "", fmt.Errorf("no manifests in index")
+	var im v1.IndexManifest
+	if err := json.Unmarshal(raw, &im); err != nil {
+		return "", fmt.Errorf("decode index: %w", err)
+	}
+	if desc := selectDescriptorFromIndex(&im, targetOS, targetArch, targetVariant); desc != nil {
+		return desc.Digest.String(), nil
+	}
+	return "", fmt.Errorf("no matching platform manifest in index for %s/%s", targetOS, targetArch)
 }

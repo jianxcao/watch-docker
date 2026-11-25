@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,17 +9,15 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
-	"github.com/jianxcao/watch-docker/backend/internal/config"
+	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
-
-	manifestpkg "github.com/docker-make/docker-mainifest/pkg/registry"
 )
 
-// mirrorManifestAccept 标准 manifest Accept 头集合，覆盖 v2 / index / oci 等格式。
 var mirrorManifestAccept = []string{
 	"application/vnd.docker.distribution.manifest.v2+json",
 	"application/vnd.docker.distribution.manifest.list.v2+json",
@@ -26,75 +25,126 @@ var mirrorManifestAccept = []string{
 	"application/vnd.oci.image.index.v1+json",
 }
 
-// mirrorTokenResponse 与 manifestpkg.tokenResponse 等价的私有副本。
 type mirrorTokenResponse struct {
 	Token       string `json:"token"`
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-// fetchManifestFromMirror 通过指定的 mirror 主机查询 docker.io 镜像的 manifest 与 digest。
-//
-// mirrorHost: 已规范化的 mirror 主机（不含协议），例如 "docker.m.daocloud.io"
-// imageRef:   原始 docker.io 镜像引用，例如 "nginx:1.25" / "bitnami/redis:7"
-//
-// 实现：先匿名请求 mirror 的 /v2/{path}/manifests/{tag}；若返回 401 则解析
-// WWW-Authenticate（一般指向 docker.io 官方认证服务）拿 bearer token 后再次请求。
-// 成功则优先从 Docker-Content-Digest 响应头取 digest，缺省则对响应体计算 sha256。
-func (c *Client) fetchManifestFromMirror(mirrorHost, imageRef string) (manifest string, digest string, err error) {
-	if mirrorHost == "" {
-		return "", "", fmt.Errorf("mirror host 为空")
+var wwwAuthParamRe = regexp.MustCompile(`(\w+)="([^"]*)"`)
+
+func parseWWWAuthenticate(header string) (realm, service, scope string, err error) {
+	trimmed := strings.TrimSpace(header)
+	if trimmed == "" {
+		return "", "", "", fmt.Errorf("empty Www-Authenticate header")
+	}
+	matches := wwwAuthParamRe.FindAllStringSubmatch(trimmed, -1)
+	for _, m := range matches {
+		if len(m) < 3 {
+			continue
+		}
+		switch strings.ToLower(m[1]) {
+		case "realm":
+			realm = m[2]
+		case "service":
+			service = m[2]
+		case "scope":
+			scope = m[2]
+		}
+	}
+	if realm == "" {
+		return "", "", "", fmt.Errorf("missing realm in Www-Authenticate: %s", header)
+	}
+	return realm, service, scope, nil
+}
+
+func (c *Client) mirrorHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: c.getTransport(),
+	}
+}
+
+// fetchManifestFromMirror 通过指定的 mirror 端点查询 docker.io 镜像的 manifest 与 digest
+func (c *Client) fetchManifestFromMirror(ctx context.Context, ep dockercli.MirrorEndpoint, imageRef string) (manifest []byte, digest string, bearer string, mirrorRepoPath string, err error) {
+	if ep.Host == "" {
+		return nil, "", "", "", fmt.Errorf("mirror host 为空")
 	}
 
-	_, _, repoPath, tag, err := normalizeImageRef(imageRef)
+	_, _, rawRepoPath, tag, err := normalizeImageRef(imageRef)
 	if err != nil {
-		return "", "", fmt.Errorf("解析镜像引用失败: %w", err)
+		return nil, "", "", "", fmt.Errorf("解析镜像引用失败: %w", err)
 	}
-	// normalizeImageRef 已经把 docker.io 单段镜像补全为 library/xxx
-	if repoPath == "" {
-		return "", "", fmt.Errorf("无法提取镜像路径: %s", imageRef)
+	if rawRepoPath == "" {
+		return nil, "", "", "", fmt.Errorf("无法提取镜像路径: %s", imageRef)
 	}
 
-	mirrorBase := mirrorBaseURL(mirrorHost)
-	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/%s", mirrorBase, repoPath, tag)
+	mirrorRepoPath = ep.RepoPath(rawRepoPath)
+	mirrorBase := ep.BaseURL()
+	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/%s", mirrorBase, mirrorRepoPath, tag)
 
-	// 第一次尝试：匿名
-	body, headers, status, err := c.requestManifest(manifestURL, "")
+	body, headers, status, err := c.requestManifest(ctx, manifestURL, "")
 	if err != nil {
-		return "", "", err
+		return nil, "", "", "", err
 	}
 
 	if status == http.StatusUnauthorized {
 		wwwAuth := headers.Get("Www-Authenticate")
 		if wwwAuth == "" {
-			return "", "", fmt.Errorf("mirror %s 返回 401 但未携带 Www-Authenticate", mirrorHost)
+			return nil, "", "", "", fmt.Errorf("mirror %s 返回 401 但未携带 Www-Authenticate", ep.HostWithPrefix())
 		}
-		token, terr := c.acquireMirrorToken(wwwAuth, repoPath)
+		token, terr := c.acquireMirrorToken(ctx, wwwAuth, mirrorRepoPath)
 		if terr != nil {
-			return "", "", fmt.Errorf("mirror %s 认证失败: %w", mirrorHost, terr)
+			return nil, "", "", "", fmt.Errorf("mirror %s 认证失败: %w", ep.HostWithPrefix(), terr)
 		}
-		body, headers, status, err = c.requestManifest(manifestURL, token)
+		bearer = token
+		body, headers, status, err = c.requestManifest(ctx, manifestURL, bearer)
 		if err != nil {
-			return "", "", err
+			return nil, "", "", "", err
 		}
 	}
 
 	if status != http.StatusOK {
-		return "", "", fmt.Errorf("获取 manifest 失败 (状态码: %d): %s", status, truncate(string(body), 200))
+		return nil, "", "", "", fmt.Errorf("获取 manifest 失败 (状态码: %d): %s", status, truncate(string(body), 200))
 	}
 
 	digest = headers.Get("Docker-Content-Digest")
 	if digest == "" {
-		// 缺省时按响应体计算 sha256（registry 规范允许）
 		sum := sha256.Sum256(body)
 		digest = "sha256:" + hex.EncodeToString(sum[:])
 	}
-	return string(body), digest, nil
+	return body, digest, bearer, mirrorRepoPath, nil
 }
 
-// requestManifest 发起一次带 manifest Accept 头的 GET 请求，返回响应体与状态码。
-func (c *Client) requestManifest(manifestURL, bearer string) ([]byte, http.Header, int, error) {
-	req, err := http.NewRequest("GET", manifestURL, nil)
+func (c *Client) fetchChildManifestConfigDigest(ctx context.Context, ep dockercli.MirrorEndpoint, mirrorRepoPath, childDigest, bearer string) string {
+	if childDigest == "" {
+		return ""
+	}
+	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/%s", ep.BaseURL(), mirrorRepoPath, childDigest)
+	body, headers, status, err := c.requestManifest(ctx, manifestURL, bearer)
+	if err == nil && status == http.StatusUnauthorized {
+		if wwwAuth := headers.Get("Www-Authenticate"); wwwAuth != "" {
+			if tok, terr := c.acquireMirrorToken(ctx, wwwAuth, mirrorRepoPath); terr == nil {
+				body, _, status, err = c.requestManifest(ctx, manifestURL, tok)
+			}
+		}
+	}
+	if err != nil || status != http.StatusOK {
+		return ""
+	}
+	var m struct {
+		Config struct {
+			Digest string `json:"digest"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(body, &m); err == nil {
+		return m.Config.Digest
+	}
+	return ""
+}
+
+func (c *Client) requestManifest(ctx context.Context, manifestURL, bearer string) ([]byte, http.Header, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("创建请求失败: %w", err)
 	}
@@ -105,55 +155,56 @@ func (c *Client) requestManifest(manifestURL, bearer string) ([]byte, http.Heade
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
-	httpClient := c.mirrorHTTPClient()
-	resp, err := httpClient.Do(req)
+	resp, err := c.mirrorHTTPClient().Do(req)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if err != nil {
 		return nil, resp.Header, resp.StatusCode, fmt.Errorf("读取响应失败: %w", err)
 	}
 	return body, resp.Header, resp.StatusCode, nil
 }
 
-// acquireMirrorToken 通过 WWW-Authenticate 提供的 realm/service/scope 获取 token。
-// 若解析出的 scope 缺省，则使用 repository:{path}:pull 兜底。
-func (c *Client) acquireMirrorToken(wwwAuth, repoPath string) (string, error) {
-	realm, service, scope, err := manifestpkg.ParseWWWAuthenticate(wwwAuth)
+func (c *Client) acquireMirrorToken(ctx context.Context, wwwAuth, repoPath string) (string, error) {
+	realm, service, scope, err := parseWWWAuthenticate(wwwAuth)
 	if err != nil {
 		return "", err
+	}
+	realmURL, err := url.Parse(realm)
+	if err != nil || realmURL == nil || realmURL.Host == "" ||
+		(!strings.EqualFold(realmURL.Scheme, "https") && !strings.EqualFold(realmURL.Scheme, "http")) {
+		return "", fmt.Errorf("非法的认证 realm: %s", realm)
 	}
 	if scope == "" {
 		scope = fmt.Sprintf("repository:%s:pull", repoPath)
 	}
 
-	authURL := realm
-	q := url.Values{}
+	q := realmURL.Query()
 	if service != "" {
 		q.Set("service", service)
 	}
 	if scope != "" {
 		q.Set("scope", scope)
 	}
-	if len(q) > 0 {
-		if strings.Contains(authURL, "?") {
-			authURL += "&" + q.Encode()
-		} else {
-			authURL += "?" + q.Encode()
-		}
-	}
+	realmURL.RawQuery = q.Encode()
 
-	req, err := http.NewRequest("GET", authURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, realmURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("创建认证请求失败: %w", err)
 	}
 
-	// 如果配置了 docker.io 的凭据，带上 Basic Auth（部分镜像需要登录）
-	if cred, ok := c.manifestClient.GetCredential(manifestpkg.DockerHubKey); ok && cred.Username != "" && cred.Token != "" {
-		req.SetBasicAuth(cred.Username, cred.Token)
+	// 仅向官方 auth.docker.io HTTPS 端点发送 Docker Hub 凭据；其余仅在显式匹配该 host 且安全传输时发送
+	if strings.EqualFold(realmURL.Scheme, "https") && strings.EqualFold(realmURL.Hostname(), "auth.docker.io") {
+		if cred, ok := c.getCredentialForHost("index.docker.io"); ok && cred.Username != "" && cred.Password != "" {
+			req.SetBasicAuth(cred.Username, cred.Password)
+		}
+	} else if cred, ok := c.getCredentialForHost(realmURL.Host); ok && cred.Username != "" && cred.Password != "" {
+		if strings.EqualFold(realmURL.Scheme, "https") || c.isHostExplicitHTTP(realmURL.Host) {
+			req.SetBasicAuth(cred.Username, cred.Password)
+		}
 	}
 
 	resp, err := c.mirrorHTTPClient().Do(req)
@@ -162,7 +213,7 @@ func (c *Client) acquireMirrorToken(wwwAuth, repoPath string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("认证失败 (状态码: %d): %s", resp.StatusCode, truncate(string(body), 200))
 	}
@@ -180,50 +231,57 @@ func (c *Client) acquireMirrorToken(wwwAuth, repoPath string) (string, error) {
 	return "", fmt.Errorf("认证响应中没有 token")
 }
 
-// mirrorHTTPClient 返回带超时的 http 客户端，遵循全局代理配置。
-func (c *Client) mirrorHTTPClient() *http.Client {
-	cfg := config.Get()
-	transport := &http.Transport{}
-	if cfg != nil && strings.TrimSpace(cfg.Proxy.URL) != "" {
-		if proxyURL, err := url.Parse(cfg.Proxy.URL); err == nil {
-			transport.Proxy = http.ProxyURL(proxyURL)
+func (c *Client) queryDigestViaMirrors(ctx context.Context, imageRef string, mirrors []dockercli.MirrorEndpoint, targetOS, targetArch, targetVariant string, needConfig bool) (indexDigest, childDigest, configDigest string, ok bool) {
+	for _, ep := range mirrors {
+		body, dig, bearer, mirrorRepoPath, err := c.fetchManifestFromMirror(ctx, ep, imageRef)
+		if err != nil || dig == "" {
+			if err != nil {
+				logger.Logger.Debug("mirror 获取 digest 失败，尝试下一个",
+					zap.String("image", imageRef),
+					zap.String("mirror", ep.HostWithPrefix()),
+					zap.Error(err))
+			}
+			continue
 		}
-	} else {
-		transport.Proxy = http.ProxyFromEnvironment
-	}
-	return &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: transport,
-	}
-}
 
-// queryDigestViaMirrors 按顺序尝试每个 mirror，第一个返回成功的即采用。
-// 仅当 imageRef 是 docker.io 镜像且配置了启用的 mirror 时才会被调用。
-func (c *Client) queryDigestViaMirrors(imageRef string, mirrors []string) (manifest string, digest string, ok bool) {
-	for _, host := range mirrors {
-		body, dig, err := c.fetchManifestFromMirror(host, imageRef)
-		if err == nil && dig != "" {
+		var m struct {
+			Config struct {
+				Digest string `json:"digest"`
+			} `json:"config"`
+			Manifests []json.RawMessage `json:"manifests"`
+		}
+		_ = json.Unmarshal(body, &m)
+
+		if len(m.Manifests) > 0 {
+			childDig, _ := parseManifest(body, targetOS, targetArch, targetVariant)
+			var cfgDig string
+			if needConfig {
+				if childDig != "" && mirrorRepoPath != "" {
+					cfgDig = c.fetchChildManifestConfigDigest(ctx, ep, mirrorRepoPath, childDig, bearer)
+				}
+				if cfgDig == "" {
+					logger.Logger.Debug("mirror 未能获取到子 manifest config digest，尝试下一个或回退",
+						zap.String("image", imageRef),
+						zap.String("mirror", ep.HostWithPrefix()))
+					continue
+				}
+			}
 			logger.Logger.Debug("通过 mirror 获取 digest 成功",
 				zap.String("image", imageRef),
-				zap.String("mirror", host),
+				zap.String("mirror", ep.HostWithPrefix()),
 				zap.String("digest", dig))
-			return body, dig, true
+			return dig, childDig, cfgDig, true
 		}
-		if err != nil {
-			logger.Logger.Debug("mirror 获取 digest 失败，尝试下一个",
-				zap.String("image", imageRef),
-				zap.String("mirror", host),
-				zap.Error(err))
-		}
-	}
-	return "", "", false
-}
 
-func mirrorBaseURL(host string) string {
-	if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
-		return strings.TrimRight(host, "/")
+		if needConfig && m.Config.Digest == "" {
+			logger.Logger.Debug("mirror manifest 缺少 config digest，尝试下一个或回退",
+				zap.String("image", imageRef),
+				zap.String("mirror", ep.HostWithPrefix()))
+			continue
+		}
+		return dig, dig, m.Config.Digest, true
 	}
-	return "https://" + strings.TrimRight(host, "/")
+	return "", "", "", false
 }
 
 func truncate(s string, n int) string {
