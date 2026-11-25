@@ -4,16 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/client"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"github.com/moby/moby/client"
 	"go.uber.org/zap"
 )
 
@@ -27,44 +27,190 @@ func NewClient(docker *client.Client) *Client {
 	}
 }
 
+var (
+	validProjectNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+	// ErrSymlinkPath 表示路径自身或其 Compose 文件为符号链接
+	ErrSymlinkPath = errors.New("拒绝访问符号链接路径")
+	// ErrTraversalPath 表示路径包含非法目录穿越片段
+	ErrTraversalPath = errors.New("非法的目录穿越路径")
+)
+
+// ValidateProjectName 严格校验 Compose 项目名称，禁止路径分隔符、上级引用或以 - 开头
+func ValidateProjectName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return errors.New("项目名称不能为空")
+	}
+	if trimmed == "." || trimmed == ".." || strings.Contains(trimmed, "..") {
+		return errors.New("非法的项目名称")
+	}
+	if strings.ContainsAny(trimmed, "/\\\x00") {
+		return errors.New("项目名称不能包含路径分隔符")
+	}
+	if !validProjectNameRe.MatchString(trimmed) {
+		return errors.New("项目名称只能包含字母、数字、点、下划线和连字符，且必须以字母或数字开头")
+	}
+	return nil
+}
+
+func resolveAppRoot() (string, error) {
+	appPath := strings.TrimSpace(conf.EnvCfg.APP_PATH)
+	if appPath == "" {
+		return "", errors.New("APP_PATH 未设置，禁止操作外部目录")
+	}
+	absApp, err := filepath.Abs(appPath)
+	if err != nil {
+		return "", fmt.Errorf("解析 APP_PATH 失败: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(absApp); err == nil {
+		absApp = resolved
+	}
+	return filepath.Clean(absApp), nil
+}
+
+func resolvePathCheckingSymlinks(target string) (string, error) {
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(absTarget); err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	// 目标尚不存在时解析其父目录符号链接
+	parent := filepath.Dir(absTarget)
+	base := filepath.Base(absTarget)
+	if resolvedParent, err := filepath.EvalSymlinks(parent); err == nil {
+		return filepath.Clean(filepath.Join(resolvedParent, base)), nil
+	}
+	return filepath.Clean(absTarget), nil
+}
+
+func ensureSubdirOfAppRoot(dir string) (string, error) {
+	appRoot, err := resolveAppRoot()
+	if err != nil {
+		return "", err
+	}
+	resolvedDir, err := resolvePathCheckingSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("解析项目目录失败: %w", err)
+	}
+	rel, err := filepath.Rel(appRoot, resolvedDir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) || strings.ContainsRune(rel, filepath.Separator) {
+		return "", fmt.Errorf("拒绝访问 APP_PATH 之外或非一级子目录路径: %s", dir)
+	}
+	return resolvedDir, nil
+}
+
+// ValidateProjectDir 校验项目目录必须严格位于 APP_PATH 一级子目录内，且目录本身不为符号链接
+func ValidateProjectDir(dir string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", errors.New("项目目录不能为空")
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("解析项目目录失败: %w", err)
+	}
+	if fi, lerr := os.Lstat(absDir); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%w: %s", ErrSymlinkPath, absDir)
+	} else if lerr != nil && !os.IsNotExist(lerr) {
+		return "", fmt.Errorf("检查项目目录失败: %w", lerr)
+	}
+	return ensureSubdirOfAppRoot(absDir)
+}
+
+func hasPathTraversalSegment(rawPath string) bool {
+	slashed := filepath.ToSlash(strings.TrimSpace(rawPath))
+	for _, seg := range strings.Split(slashed, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateComposeFilePath 校验 composeFile 必须位于 APP_PATH 一级子目录内，文件名为合法的 compose 文件且非符号链接
+func ValidateComposeFilePath(composeFile string) (projectDir string, cleanFile string, err error) {
+	trimmed := strings.TrimSpace(composeFile)
+	if trimmed == "" {
+		return "", "", errors.New("composeFile 不能为空")
+	}
+	if strings.ContainsRune(trimmed, 0) {
+		return "", "", errors.New("非法的 composeFile 路径")
+	}
+	if hasPathTraversalSegment(trimmed) {
+		return "", "", fmt.Errorf("%w: %s", ErrTraversalPath, composeFile)
+	}
+	// docker compose ls 可能返回逗号分隔的多个路径，只允许操作受控单文件
+	if strings.Contains(trimmed, ",") {
+		return "", "", errors.New("不支持同时指定多个 composeFile")
+	}
+	absFile, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", "", fmt.Errorf("解析 composeFile 路径失败: %w", err)
+	}
+	base := filepath.Base(absFile)
+	if !isComposeFileName(base) {
+		return "", "", fmt.Errorf("非法 compose 文件名: %s", base)
+	}
+	if fi, lerr := os.Lstat(absFile); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", "", fmt.Errorf("%w: %s", ErrSymlinkPath, absFile)
+	} else if lerr != nil && !os.IsNotExist(lerr) {
+		return "", "", fmt.Errorf("检查 composeFile 失败: %w", lerr)
+	}
+	rawDir := filepath.Dir(absFile)
+	if fi, lerr := os.Lstat(rawDir); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", "", fmt.Errorf("%w: %s", ErrSymlinkPath, rawDir)
+	} else if lerr != nil && !os.IsNotExist(lerr) {
+		return "", "", fmt.Errorf("检查项目目录失败: %w", lerr)
+	}
+	validDir, err := ensureSubdirOfAppRoot(rawDir)
+	if err != nil {
+		return "", "", err
+	}
+	cleanFile = filepath.Join(validDir, base)
+	if fi, lerr := os.Lstat(cleanFile); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", "", fmt.Errorf("%w: %s", ErrSymlinkPath, cleanFile)
+	} else if lerr != nil && !os.IsNotExist(lerr) {
+		return "", "", fmt.Errorf("检查 composeFile 失败: %w", lerr)
+	}
+	return validDir, cleanFile, nil
+}
+
 // ScanProjects 扫描发现 Compose 项目
 func (c *Client) ScanProjects(ctx context.Context) []ComposeProject {
 	var projects []ComposeProject
-	appPath := conf.EnvCfg.APP_PATH
-	if appPath == "" {
+	appPath, err := resolveAppRoot()
+	if err != nil {
 		return projects
 	}
 
-	const maxDepth = 2 // 最大遍历深度
+	const maxDepth = 2
 
-	err := filepath.Walk(appPath, func(curPath string, info os.FileInfo, err error) error {
+	err = filepath.Walk(appPath, func(curPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			logger.Logger.Error("扫描项目失败", logger.ZapErr(err))
-			return nil // 忽略错误，继续扫描
+			return nil
 		}
 
-		// 计算当前路径相对于 appPath 的深度
 		relPath, err := filepath.Rel(appPath, curPath)
 		if err != nil {
 			return nil
 		}
 
-		// 计算深度（根目录为 0）
 		depth := 0
 		if relPath != "." {
 			depth = len(strings.Split(relPath, string(os.PathSeparator)))
 		}
 
-		// 如果是目录且深度已达到限制，跳过该目录
 		if info.IsDir() && depth >= maxDepth {
 			return filepath.SkipDir
 		}
 
-		// 查找 compose 文件
-		if c.isComposeFile(info.Name()) {
-			logger.Logger.Debug("扫描到项目", zap.String("curPath", curPath), zap.String("name", path.Base(path.Dir(curPath))))
+		if !info.IsDir() && info.Mode().IsRegular() && isComposeFileName(info.Name()) && depth == maxDepth {
+			projectName := filepath.Base(filepath.Dir(curPath))
+			logger.Logger.Debug("扫描到项目", zap.String("curPath", curPath), zap.String("name", projectName))
 			project := ComposeProject{
-				Name:         path.Base(path.Dir(curPath)),
+				Name:         projectName,
 				ComposeFile:  curPath,
 				Status:       StatusDraft,
 				RunningCount: 0,
@@ -83,25 +229,19 @@ func (c *Client) ScanProjects(ctx context.Context) []ComposeProject {
 	return projects
 }
 
-// isComposeFile 检查是否是 compose 文件
-func (c *Client) isComposeFile(filename string) bool {
-	composeFiles := []string{
-		"docker-compose.yml",
-		"docker-compose.yaml",
-		"compose.yml",
-		"compose.yaml",
+func isComposeFileName(filename string) bool {
+	switch filename {
+	case "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml":
+		return true
+	default:
+		return false
 	}
-
-	for _, cf := range composeFiles {
-		if filename == cf {
-			return true
-		}
-	}
-	return false
 }
 
-// findComposeFileInDir 在指定目录中查找 compose 文件
-// 如果找到返回完整路径，否则返回默认的 docker-compose.yaml 路径
+func (c *Client) isComposeFile(filename string) bool {
+	return isComposeFileName(filename)
+}
+
 func (c *Client) findComposeFileInDir(dir string) string {
 	composeFiles := []string{
 		"docker-compose.yml",
@@ -117,25 +257,20 @@ func (c *Client) findComposeFileInDir(dir string) string {
 		}
 	}
 
-	// 如果没有找到，返回默认的 docker-compose.yaml
 	return filepath.Join(dir, "docker-compose.yaml")
 }
 
-// parseStatusInfo 解析 oStatus 字符串，提取状态信息
-// oStatus 格式示例：
-// "exited(2),running(2)" 或 "running" 或 "exited"
 func parseStatusInfo(oStatus string) (status StackStatus, runningCount int, exitedCount int, createdCount int) {
 	if oStatus == "" {
 		return "unknown", 0, 0, 0
 	}
 
-	// 使用正则表达式匹配状态和数量
 	re := regexp.MustCompile(`(\w+)(?:\((\d+)\))?`)
 	matches := re.FindAllStringSubmatch(oStatus, -1)
 
 	for _, match := range matches {
 		statusName := match[1]
-		count := 1 // 默认为1，如果没有括号中的数字
+		count := 1
 
 		if len(match) > 2 && match[2] != "" {
 			if c, err := strconv.Atoi(match[2]); err == nil {
@@ -152,11 +287,10 @@ func parseStatusInfo(oStatus string) (status StackStatus, runningCount int, exit
 		}
 	}
 
-	// 确定总体状态：如果有运行的容器，状态为 running，否则根据退出容器确定
 	if strings.HasPrefix(oStatus, "created") {
 		status = StatusCreatedStack
 	} else if runningCount > 0 && exitedCount > 0 {
-		status = StatusPartial // 部分运行
+		status = StatusPartial
 	} else if runningCount > 0 {
 		status = StatusRunning
 	} else if exitedCount > 0 {
@@ -174,24 +308,125 @@ type ListOutput struct {
 	ConfigFiles string `json:"ConfigFiles"`
 }
 
-// ScanProjects 扫描发现 Compose 项目
-func (c *Client) ListProjects(ctx context.Context) ([]ComposeProject, error) {
-	projects := c.ScanProjects(ctx)
+func (c *Client) listRuntimeProjects(ctx context.Context) ([]ListOutput, error) {
 	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
-		ExecPath:      ".",
+		ExecPath:      "",
 		Args:          []string{"ls", "-a", "--format", "json"},
-		OperationName: "start project",
+		OperationName: "list projects",
 		NeedOutput:    true,
 	})
-	output := string(res.Output)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	output := strings.TrimSpace(string(res.Output))
 	var listOutput []ListOutput
-	err := json.Unmarshal([]byte(output), &listOutput)
+	if output != "" {
+		if err := json.Unmarshal([]byte(output), &listOutput); err != nil {
+			logger.Logger.Error("解析项目列表失败", zap.String("output", output), logger.ZapErr(err))
+			return nil, err
+		}
+	}
+	return listOutput, nil
+}
+
+// FindRuntimeProject 检查指定项目名是否存在于 docker compose 运行时列表中
+func (c *Client) FindRuntimeProject(ctx context.Context, projectName string) (string, bool, error) {
+	if err := ValidateProjectName(projectName); err != nil {
+		return "", false, err
+	}
+	runtimeList, err := c.listRuntimeProjects(ctx)
 	if err != nil {
-		logger.Logger.Error("解析项目列表失败", zap.String("output", output), logger.ZapErr(err))
-		return nil, err
+		return "", false, err
+	}
+	for _, item := range runtimeList {
+		if strings.EqualFold(item.Name, strings.TrimSpace(projectName)) {
+			if err := ValidateProjectName(item.Name); err != nil {
+				continue
+			}
+			return item.Name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// ResolveComposeTarget 解析 Compose 生命周期执行目标：
+// 1. 优先校验 composeFile 位于 APP_PATH 内且非符号链接，直接返回 (projectDir, nil)；
+// 2. 若路径包含 .. 穿越直接拒绝；若路径位于 APP_PATH 内但为符号链接或非法文件名也直接拒绝，不回退到 -p 模式；
+// 3. 若 APP_PATH 未设置或 composeFile 为空/位于 APP_PATH 之外（包括使用自定义 -f 文件名的外部运行时栈），验证 projectName 存在于 docker compose 运行时列表后，
+//    返回 ("", []string{"-p", runtimeName}) 以支持外部/运行时 Compose 栈的启停、日志与下线。
+func isPathWithinAppRoot(rawPath string) bool {
+	appPath := strings.TrimSpace(conf.EnvCfg.APP_PATH)
+	if appPath == "" || strings.TrimSpace(rawPath) == "" {
+		return false
+	}
+	absTarget, err := filepath.Abs(strings.TrimSpace(rawPath))
+	if err != nil {
+		return false
+	}
+	absApp, err := filepath.Abs(appPath)
+	if err != nil {
+		return false
+	}
+	isSub := func(base, target string) bool {
+		rel, rerr := filepath.Rel(filepath.Clean(base), filepath.Clean(target))
+		return rerr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+	}
+	if isSub(absApp, absTarget) {
+		return true
+	}
+	if resolvedApp, rerr := resolveAppRoot(); rerr == nil {
+		if resolvedTarget, terr := resolvePathCheckingSymlinks(absTarget); terr == nil && isSub(resolvedApp, resolvedTarget) {
+			return true
+		}
+		if isSub(resolvedApp, absTarget) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) ResolveComposeTarget(ctx context.Context, projectName, composeFile string) (string, []string, error) {
+	trimmedFile := strings.TrimSpace(composeFile)
+	if trimmedFile != "" {
+		projectPath, cleanFile, err := ValidateComposeFilePath(trimmedFile)
+		if err == nil {
+			if fi, lerr := os.Lstat(cleanFile); lerr == nil && fi.Mode().IsRegular() {
+				return projectPath, nil, nil
+			} else if lerr != nil && !os.IsNotExist(lerr) {
+				return "", nil, fmt.Errorf("检查 composeFile 失败: %w", lerr)
+			}
+		} else {
+			if errors.Is(err, ErrTraversalPath) ||
+				(isPathWithinAppRoot(trimmedFile) && (errors.Is(err, ErrSymlinkPath) || strings.HasPrefix(err.Error(), "非法 compose 文件名"))) {
+				return "", nil, err
+			}
+		}
+	}
+
+	if strings.TrimSpace(projectName) != "" {
+		runtimeName, found, err := c.FindRuntimeProject(ctx, projectName)
+		if err == nil && found {
+			return "", []string{"-p", runtimeName}, nil
+		}
+	}
+
+	if trimmedFile != "" {
+		_, _, err := ValidateComposeFilePath(trimmedFile)
+		if err != nil {
+			return "", nil, err
+		}
+		return "", nil, errors.New("compose 文件不存在")
+	}
+	return "", nil, errors.New("项目不存在或未指定合法的 composeFile")
+}
+
+func (c *Client) ListProjects(ctx context.Context) ([]ComposeProject, error) {
+	projects := c.ScanProjects(ctx)
+	listOutput, err := c.listRuntimeProjects(ctx)
+	if err != nil {
+		return projects, err
 	}
 	result := mergeComposeProjects(projects, listOutput)
-	logger.Logger.Info("list projects", zap.String("output", output))
 	return result, nil
 }
 
@@ -246,6 +481,9 @@ func normalizeComposePath(composeFile string) string {
 	if err != nil {
 		return filepath.Clean(composeFile)
 	}
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		return filepath.Clean(resolved)
+	}
 	return filepath.Clean(absPath)
 }
 
@@ -261,48 +499,46 @@ func composeProjectFromListOutput(item ListOutput) ComposeProject {
 	}
 }
 
-// StartProject 使用 Docker API 启动项目
-func (c *Client) StartProject(ctx context.Context, composeFile string) error {
-	projectPath := path.Dir(composeFile)
+func (c *Client) runProjectCommand(ctx context.Context, projectName, composeFile, opName, logLabel string, opArgs []string) error {
+	projectPath, argsPrefix, err := c.ResolveComposeTarget(ctx, projectName, composeFile)
+	if err != nil {
+		return err
+	}
+	args := append(append([]string(nil), argsPrefix...), opArgs...)
 	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
 		ExecPath:      projectPath,
-		Args:          []string{"start"},
-		OperationName: "start project",
+		Args:          args,
+		OperationName: opName,
 		NeedOutput:    true,
 	})
-	logger.Logger.Info("启动APP", zap.String("output", string(res.Output)))
+	logger.Logger.Info(logLabel, zap.String("output", string(res.Output)))
 	return res.Error
+}
+
+// StartProject 启动 Compose 项目（APP_PATH 内基于目录，外部运行时项目基于 -p <name>）
+func (c *Client) StartProject(ctx context.Context, projectName, composeFile string) error {
+	return c.runProjectCommand(ctx, projectName, composeFile, "start project", "启动APP", []string{"start"})
 }
 
 // StopProject 停止项目中的所有服务
-func (c *Client) StopProject(ctx context.Context, composeFile string) error {
-	projectPath := path.Dir(composeFile)
-	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
-		ExecPath:      projectPath,
-		Args:          []string{"stop"},
-		OperationName: "stop project",
-		NeedOutput:    true,
-	})
-	logger.Logger.Info("停止APP", zap.String("output", string(res.Output)))
-	return res.Error
+func (c *Client) StopProject(ctx context.Context, projectName, composeFile string) error {
+	return c.runProjectCommand(ctx, projectName, composeFile, "stop project", "停止APP", []string{"stop"})
 }
 
-// RestartProject 重新创建项目
-func (c *Client) RestartProject(ctx context.Context, composeFile string) error {
-	projectPath := path.Dir(composeFile)
-	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
-		ExecPath:      projectPath,
-		Args:          []string{"restart"},
-		OperationName: "restart project",
-		NeedOutput:    true,
-	})
-	logger.Logger.Info("重启APP", zap.String("output", string(res.Output)))
-	return res.Error
+// RestartProject 重启项目
+func (c *Client) RestartProject(ctx context.Context, projectName, composeFile string) error {
+	return c.runProjectCommand(ctx, projectName, composeFile, "restart project", "重启APP", []string{"restart"})
 }
 
 // PullProject 拉取项目镜像
 func (c *Client) PullProject(ctx context.Context, composeFile string) error {
-	projectPath := path.Dir(composeFile)
+	projectPath, cleanFile, err := ValidateComposeFilePath(composeFile)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(cleanFile); err != nil {
+		return errors.New("compose 文件不存在: " + err.Error())
+	}
 	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
 		ExecPath:      projectPath,
 		Args:          []string{"pull"},
@@ -313,89 +549,73 @@ func (c *Client) PullProject(ctx context.Context, composeFile string) error {
 	return res.Error
 }
 
-// DeleteProject 删除项目及其所有资源
-// 如果是 draft 状态，直接删除配置文件和目录
-// 如果是其他状态，只执行 docker-compose down 清理 Docker 资源，不删除目录
-func (c *Client) DeleteProject(ctx context.Context, composeFile string, status StackStatus) error {
-	projectPath := path.Dir(composeFile)
-	projectName := path.Base(projectPath)
-
-	// 如果不是 draft 状态，只执行 docker-compose down 清理容器、网络和卷，不删除目录
+// DeleteProject 删除项目及其所有资源（StatusDraft 目录删除严格要求位于 APP_PATH 内且 compose 文件为常规文件）
+func (c *Client) DeleteProject(ctx context.Context, projectName, composeFile string, status StackStatus) error {
 	if status != StatusDraft {
-		res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
-			ExecPath:      projectPath,
-			Args:          []string{"down", "--volumes", "--remove-orphans"},
-			OperationName: "delete project",
-			NeedOutput:    true,
-		})
-		logger.Logger.Info("删除APP（Docker资源）", zap.String("output", string(res.Output)))
-		if res.Error != nil {
-			return res.Error
-		}
-
-		logger.Logger.Info("删除项目成功（仅清理Docker资源，保留目录）",
-			zap.String("projectPath", projectPath),
-			zap.String("status", string(status)))
-		return nil
+		return c.runProjectCommand(ctx, projectName, composeFile, "delete project", "删除APP（Docker资源）", []string{"down", "--volumes", "--remove-orphans"})
 	}
 
-	// 如果是 draft 状态，在删除目录前再次确认项目的实际状态，避免竞态条件
-	// 重新查询项目列表，确认当前实际状态
+	projectPath, cleanFile, err := ValidateComposeFilePath(composeFile)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Lstat(cleanFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.New("compose 文件不存在")
+		}
+		return errors.New("检查 compose 文件失败: " + err.Error())
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s", ErrSymlinkPath, cleanFile)
+	}
+	dirName := filepath.Base(projectPath)
+
 	projects, err := c.ListProjects(ctx)
 	if err != nil {
-		logger.Logger.Error("查询项目状态失败", zap.String("project", projectName), logger.ZapErr(err))
+		logger.Logger.Error("查询项目状态失败", zap.String("project", dirName), logger.ZapErr(err))
 		return errors.New("查询项目状态失败: " + err.Error())
 	}
 
-	// 查找当前项目的实际状态
 	currentStatus := StatusDraft
+	normalizedClean := normalizeComposePath(cleanFile)
 	for _, p := range projects {
-		if p.Name == projectName {
+		if strings.EqualFold(p.Name, dirName) || (normalizedClean != "" && normalizeComposePath(p.ComposeFile) == normalizedClean) {
 			currentStatus = p.Status
 			break
 		}
 	}
 
-	// 如果项目状态已经不是 draft，只清理 Docker 资源，不删除目录
 	if currentStatus != StatusDraft {
-		logger.Logger.Warn("项目状态已变更，只清理Docker资源，不删除目录",
-			zap.String("project", projectName),
-			zap.String("originalStatus", string(status)),
-			zap.String("currentStatus", string(currentStatus)))
-
 		res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
 			ExecPath:      projectPath,
 			Args:          []string{"down", "--volumes", "--remove-orphans"},
 			OperationName: "delete project (status changed)",
 			NeedOutput:    true,
 		})
-		logger.Logger.Info("删除APP（Docker资源，状态变更）", zap.String("output", string(res.Output)))
 		if res.Error != nil {
 			return res.Error
 		}
-
-		logger.Logger.Info("删除项目成功（状态已变更，仅清理Docker资源，保留目录）",
-			zap.String("projectPath", projectPath),
-			zap.String("currentStatus", string(currentStatus)))
 		return nil
 	}
 
-	// 确认仍然是 draft 状态，删除项目目录
 	logger.Logger.Info("删除项目目录", zap.String("path", projectPath), zap.String("status", string(currentStatus)))
 	if err := os.RemoveAll(projectPath); err != nil {
 		logger.Logger.Error("删除项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
 		return errors.New("删除项目目录失败: " + err.Error())
 	}
 
-	logger.Logger.Info("删除项目成功（删除目录）",
-		zap.String("projectPath", projectPath),
-		zap.String("status", string(status)))
-
 	return nil
 }
 
 func (c *Client) CreateProject(ctx context.Context, composeFile string, isRuning bool, isBuild bool) error {
-	projectPath := path.Dir(composeFile)
+	projectPath, cleanFile, err := ValidateComposeFilePath(composeFile)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(cleanFile); err != nil {
+		return errors.New("compose 文件不存在: " + err.Error())
+	}
 	args := []string{"up", "-d", "--remove-orphans"}
 	if isRuning {
 		args = append(args, "--force-recreate")
@@ -406,76 +626,85 @@ func (c *Client) CreateProject(ctx context.Context, composeFile string, isRuning
 	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
 		ExecPath:      projectPath,
 		Args:          args,
-		OperationName: "delete project",
+		OperationName: "create project",
 		NeedOutput:    true,
 	})
 	logger.Logger.Info("创建APP", zap.String("output", string(res.Output)))
 	return res.Error
 }
 
-// SaveNewProject 保存新的 Compose 项目（创建目录和 YAML 文件）
+// SaveNewProject 保存新的 Compose 项目（严格校验项目名称及位于 APP_PATH 内，拒绝符号链接）
 func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent string, force bool) (string, error) {
-	appPath := conf.EnvCfg.APP_PATH
-	if appPath == "" {
-		return "", errors.New("APP_PATH 未设置，无法创建项目")
+	if err := ValidateProjectName(name); err != nil {
+		return "", err
+	}
+	appRoot, err := resolveAppRoot()
+	if err != nil {
+		return "", err
 	}
 
-	// 创建项目目录
-	projectPath := filepath.Join(appPath, name)
+	projectPath, err := ValidateProjectDir(filepath.Join(appRoot, name))
+	if err != nil {
+		return "", err
+	}
 
-	// 检查项目是否已存在
-	if stat, err := os.Stat(projectPath); err == nil && stat.IsDir() {
-		// 项目目录已存在
+	if stat, err := os.Lstat(projectPath); err == nil {
+		if stat.Mode()&os.ModeSymlink != 0 || !stat.IsDir() {
+			return "", fmt.Errorf("%w: %s", ErrSymlinkPath, projectPath)
+		}
 		if !force {
 			logger.Logger.Warn("项目已存在，需要 force=true 才能覆盖", zap.String("path", projectPath))
 			return "", errors.New("项目已存在，如需覆盖请使用强制模式")
 		}
 		logger.Logger.Info("项目已存在，将覆盖 compose 文件", zap.String("path", projectPath))
+	} else if !os.IsNotExist(err) {
+		return "", errors.New("检查项目目录失败: " + err.Error())
 	} else {
-		// 项目目录不存在，创建目录
 		if err := os.MkdirAll(projectPath, 0755); err != nil {
 			logger.Logger.Error("创建项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
 			return "", errors.New("创建项目目录失败: " + err.Error())
 		}
-		logger.Logger.Info("创建项目目录成功", zap.String("path", projectPath))
 	}
 
-	// 查找目录中是否已存在 compose 文件，如果存在则使用已有的文件名
 	composeFile := c.findComposeFileInDir(projectPath)
+	if fi, err := os.Lstat(composeFile); err == nil && (fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular()) {
+		return "", fmt.Errorf("%w: %s", ErrSymlinkPath, composeFile)
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", errors.New("检查 Compose 文件失败: " + err.Error())
+	}
 
-	// 写入 compose 文件（如果已存在会被覆盖）
 	if err := os.WriteFile(composeFile, []byte(yamlContent), 0644); err != nil {
 		logger.Logger.Error("写入 Compose 文件失败", zap.String("file", composeFile), logger.ZapErr(err))
 		return "", errors.New("写入 Compose 文件失败: " + err.Error())
 	}
 
-	logger.Logger.Info("项目文件保存成功",
-		zap.String("name", name),
-		zap.String("path", projectPath),
-		zap.String("composeFile", composeFile),
-		zap.Bool("force", force))
-
 	return composeFile, nil
 }
 
-// GetProjectYaml 读取项目的 docker-compose.yaml 文件内容
+// GetProjectYaml 读取项目的 compose YAML 文件内容（严格校验位于 APP_PATH 内且拒绝符号链接）
 func (c *Client) GetProjectYaml(file string) (string, error) {
-
-	dir := path.Dir(file)
-	composeFile := c.findComposeFileInDir(dir)
-	// 检查文件是否存在
-	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
-		logger.Logger.Error("Compose 文件不存在", zap.String("file", composeFile))
-		return "", errors.New("compose 文件不存在")
+	_, cleanFile, err := ValidateComposeFilePath(file)
+	if err != nil {
+		return "", err
 	}
 
-	// 读取文件内容
-	content, err := os.ReadFile(composeFile)
+	fi, err := os.Lstat(cleanFile)
 	if err != nil {
-		logger.Logger.Error("读取 Compose 文件失败", zap.String("file", composeFile), logger.ZapErr(err))
+		if os.IsNotExist(err) {
+			logger.Logger.Error("Compose 文件不存在", zap.String("file", cleanFile))
+			return "", errors.New("compose 文件不存在")
+		}
+		return "", errors.New("读取 Compose 文件失败: " + err.Error())
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("%w: %s", ErrSymlinkPath, cleanFile)
+	}
+
+	content, err := os.ReadFile(cleanFile)
+	if err != nil {
+		logger.Logger.Error("读取 Compose 文件失败", zap.String("file", cleanFile), logger.ZapErr(err))
 		return "", errors.New("读取 Compose 文件失败: " + err.Error())
 	}
 
-	logger.Logger.Info("读取 Compose 文件成功", zap.String("file", composeFile))
 	return string(content), nil
 }

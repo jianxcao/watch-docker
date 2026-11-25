@@ -1,6 +1,13 @@
 package composecli
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/jianxcao/watch-docker/backend/internal/conf"
+)
 
 func TestMergeComposeProjectsMatchesConfigPathAndPreservesDirectoryName(t *testing.T) {
 	scanned := []ComposeProject{{
@@ -98,5 +105,103 @@ func TestMergeComposeProjectsAppendsUnmatchedRuntimeProject(t *testing.T) {
 	}
 	if got[0].Status != StatusCreatedStack || got[0].CreatedCount != 3 {
 		t.Fatalf("unexpected runtime project status: %#v", got[0])
+	}
+}
+
+func TestComposePathTraversalBlocked(t *testing.T) {
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	outsideDir := filepath.Join(tmpRoot, "outside-secret")
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outsideDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	outsideCompose := filepath.Join(outsideDir, "docker-compose.yaml")
+	if err := os.WriteFile(outsideCompose, []byte("services: {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origAppPath := conf.EnvCfg.APP_PATH
+	conf.EnvCfg.APP_PATH = appDir
+	defer func() { conf.EnvCfg.APP_PATH = origAppPath }()
+
+	c := &Client{}
+
+	// 1. ValidateProjectName rejects traversal
+	for _, bad := range []string{"", "..", "../evil", "a/b", "a\\b", "-flag"} {
+		if err := ValidateProjectName(bad); err == nil {
+			t.Fatalf("expected ValidateProjectName(%q) to fail", bad)
+		}
+	}
+	if _, err := c.SaveNewProject(context.Background(), "../../outside-secret", "services: {}\n", true); err == nil {
+		t.Fatalf("expected SaveNewProject traversal to fail")
+	}
+
+	// 2. GetProjectYaml / DeleteProject reject outside path
+	if _, err := c.GetProjectYaml(outsideCompose); err == nil {
+		t.Fatalf("expected GetProjectYaml outside APP_PATH to fail")
+	}
+	if err := c.DeleteProject(context.Background(), "", outsideCompose, StatusDraft); err == nil {
+		t.Fatalf("expected DeleteProject outside APP_PATH to fail")
+	}
+	if _, err := os.Stat(outsideCompose); err != nil {
+		t.Fatalf("expected outside compose directory to remain intact, stat err=%v", err)
+	}
+
+	// 3. Root APP_PATH and nested depth-2 subdirs cannot be used/deleted
+	rootCompose := filepath.Join(appDir, "docker-compose.yaml")
+	if _, _, err := ValidateComposeFilePath(rootCompose); err == nil {
+		t.Fatalf("expected compose file directly under APP_PATH root to be rejected")
+	}
+	nestedCompose := filepath.Join(appDir, "a", "b", "docker-compose.yaml")
+	if _, _, err := ValidateComposeFilePath(nestedCompose); err == nil {
+		t.Fatalf("expected nested depth-2 compose path under APP_PATH to be rejected")
+	}
+
+	// 4. Valid project subdir succeeds
+	saved, err := c.SaveNewProject(context.Background(), "valid-app", "services: {}\n", false)
+	if err != nil {
+		t.Fatalf("expected valid SaveNewProject to succeed, got %v", err)
+	}
+	if _, _, err := ValidateComposeFilePath(saved); err != nil {
+		t.Fatalf("expected ValidateComposeFilePath(%q) to succeed, got %v", saved, err)
+	}
+
+	// 5. Symlinked compose file and symlinked project dir are rejected
+	symDir := filepath.Join(appDir, "sym-proj")
+	if err := os.MkdirAll(symDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	symCompose := filepath.Join(symDir, "docker-compose.yaml")
+	if err := os.Symlink(outsideCompose, symCompose); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ValidateComposeFilePath(symCompose); err == nil {
+		t.Fatalf("expected symlink compose file to be rejected")
+	}
+	if _, err := c.GetProjectYaml(symCompose); err == nil {
+		t.Fatalf("expected GetProjectYaml on symlink compose file to fail")
+	}
+	if err := c.DeleteProject(context.Background(), "sym-proj", symCompose, StatusDraft); err == nil {
+		t.Fatalf("expected DeleteProject(StatusDraft) on symlink compose file to fail")
+	}
+	symProjDir := filepath.Join(appDir, "sym-dir-link")
+	if err := os.Symlink(outsideDir, symProjDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateProjectDir(symProjDir); err == nil {
+		t.Fatalf("expected symlink project directory to be rejected")
+	}
+
+	// 6. Custom filename inside APP_PATH fails immediately while outside path checks runtime
+	insideCustom := filepath.Join(appDir, "valid-app", "docker-compose.prod.yml")
+	if !isPathWithinAppRoot(insideCustom) {
+		t.Fatalf("expected inside custom compose filename to be treated as inside APP_PATH")
+	}
+	outsideCustom := filepath.Join(outsideDir, "docker-compose.prod.yml")
+	if isPathWithinAppRoot(outsideCustom) {
+		t.Fatalf("expected outside custom compose filename not to be treated as inside APP_PATH")
 	}
 }
