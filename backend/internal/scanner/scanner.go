@@ -244,13 +244,14 @@ func (s *Scanner) ScanOnce(ctx context.Context, includeStopped bool, concurrency
 }
 
 func compareDigests(currentDigests []string, remoteDigest string) bool {
-	if remoteDigest == "" {
+	remote := extractDigest(remoteDigest)
+	if remote == "" {
 		return false
 	}
 
 	for _, d := range currentDigests {
 		localDigest := extractDigest(d)
-		if localDigest != "" && localDigest == remoteDigest {
+		if localDigest != "" && strings.EqualFold(localDigest, remote) {
 			return true
 		}
 	}
@@ -270,7 +271,8 @@ func extractDigest(value string) string {
 		}
 	}
 
-	if strings.HasPrefix(v, "sha256:") {
+	lower := strings.ToLower(v)
+	if strings.HasPrefix(lower, "sha256:") || strings.HasPrefix(lower, "sha384:") || strings.HasPrefix(lower, "sha512:") {
 		return v
 	}
 

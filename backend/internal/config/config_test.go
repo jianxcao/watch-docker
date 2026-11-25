@@ -584,4 +584,29 @@ func TestWhitespacePaddedProxyURLMasksSecretAndRoundTrips(t *testing.T) {
 	if incoming.Proxy.URL != "http://user:secret123@127.0.0.1:7890" {
 		t.Fatalf("expected restored Proxy.URL secret, got %q", incoming.Proxy.URL)
 	}
+
+	// 协议降级（https -> http）不得还原旧密码
+	httpsNotifyPrev := defaults()
+	httpsNotifyPrev.Notify.URL = "https://user:secret123@notify.example.com/hook"
+	downgradedNotify := httpsNotifyPrev.MaskedCopy()
+	downgradedNotify.Notify.URL = "http://user:******@notify.example.com/hook"
+	MergeMaskedSecrets(downgradedNotify, httpsNotifyPrev)
+	if strings.Contains(downgradedNotify.Notify.URL, "secret123") {
+		t.Fatalf("expected Notify.URL secret NOT restored across https->http downgrade, got %q", downgradedNotify.Notify.URL)
+	}
+	if err := Validate(downgradedNotify); err == nil {
+		t.Fatalf("expected Validate to reject downgraded Notify.URL with unresolved placeholder")
+	}
+
+	httpsProxyPrev := defaults()
+	httpsProxyPrev.Proxy.URL = "https://user:secret123@127.0.0.1:7890"
+	downgradedProxy := httpsProxyPrev.MaskedCopy()
+	downgradedProxy.Proxy.URL = "http://user:******@127.0.0.1:7890"
+	MergeMaskedSecrets(downgradedProxy, httpsProxyPrev)
+	if strings.Contains(downgradedProxy.Proxy.URL, "secret123") {
+		t.Fatalf("expected Proxy.URL secret NOT restored across https->http downgrade, got %q", downgradedProxy.Proxy.URL)
+	}
+	if err := Validate(downgradedProxy); err == nil {
+		t.Fatalf("expected Validate to reject downgraded Proxy.URL with unresolved placeholder")
+	}
 }

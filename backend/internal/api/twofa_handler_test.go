@@ -13,6 +13,7 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
+	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	"github.com/pquerna/otp/totp"
 	"go.uber.org/zap"
 )
@@ -292,5 +293,41 @@ func TestExtractValidatedRPIDAndOriginSecurityAndProxy(t *testing.T) {
 	}
 	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("docker.example.com:9443", "")); ok {
 		t.Fatalf("expected disallowed port with empty Origin rejected by host:port whitelist")
+	}
+
+	// 8. scheme://host:port 白名单同时通过 Origin 与 isAllowedDomain(rpid)
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = "https://docker.example.com:8443"
+	rpid, origin, ok = extractValidatedRPIDAndOrigin(makeCtx("127.0.0.1:8080", "https://docker.example.com:8443"))
+	if !ok || rpid != "docker.example.com" || origin != "https://docker.example.com:8443" {
+		t.Fatalf("expected scheme://host:port whitelist accepted, got (%q, %q, ok=%v)", rpid, origin, ok)
+	}
+	if !isAllowedDomain("docker.example.com") {
+		t.Fatalf("expected isAllowedDomain(rpid) to extract hostname from scheme://host:port")
+	}
+
+	// 9. TWOFA_ALLOWED_DOMAINS 为空且请求 Host 缺失 hostname 时 fail-closed 拒绝任意 Origin
+	conf.EnvCfg.TWOFA_ALLOWED_DOMAINS = ""
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx(":8080", "https://evil.example.com")); ok {
+		t.Fatalf("expected empty hostname in Host (:8080) with Origin rejected")
+	}
+	if _, _, ok := extractValidatedRPIDAndOrigin(makeCtx("", "https://evil.example.com")); ok {
+		t.Fatalf("expected empty Host with Origin rejected")
+	}
+
+	// 10. NewRouterWithLifecycle 使用 ParseTrustedProxies 防止 [::1] 或单个非法项破坏 c.ClientIP()
+	conf.EnvCfg.TRUSTED_PROXIES = "[::1],invalid-entry,127.0.0.1"
+	routerEngine, cleanupFn := NewRouterWithLifecycle(zap.NewNop(), &dockercli.Client{}, nil, nil, nil, nil)
+	defer cleanupFn()
+	var seenClientIP string
+	routerEngine.GET("/test-client-ip", func(c *gin.Context) {
+		seenClientIP = c.ClientIP()
+		c.Status(http.StatusOK)
+	})
+	ipReq := httptest.NewRequest(http.MethodGet, "/test-client-ip", nil)
+	ipReq.RemoteAddr = "127.0.0.1:50000"
+	ipReq.Header.Set("X-Forwarded-For", "203.0.113.9")
+	routerEngine.ServeHTTP(httptest.NewRecorder(), ipReq)
+	if seenClientIP != "203.0.113.9" {
+		t.Fatalf("expected Gin c.ClientIP() == 203.0.113.9 despite [::1]/invalid entry, got %q", seenClientIP)
 	}
 }

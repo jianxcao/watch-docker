@@ -148,10 +148,9 @@ import type { ComposeProject } from '@/common/types'
 import {
   buildComposeListQuery,
   parseComposeListQuery,
-  type ComposeListState,
   type ComposeSortOrder,
-  type ComposeStatusFilter,
 } from './composeListQuery'
+import { useRouteListState } from './listQuery'
 
 const route = useRoute()
 const router = useRouter()
@@ -165,25 +164,12 @@ const composeStore = useComposeStore()
 const { handleRefresh } = useCompose()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 
-const composeListState = computed(() => parseComposeListQuery(route.query))
-
-const updateComposeListState = (patch: Partial<ComposeListState>) => {
-  const state = { ...composeListState.value, ...patch }
-  void router.replace({ query: buildComposeListQuery(route.query, state) })
-}
-
-const searchKeyword = computed({
-  get: () => composeListState.value.search,
-  set: (search: string) => updateComposeListState({ search }),
+const { searchKeyword, statusFilter, sortBy, sortOrder } = useRouteListState({
+  route,
+  router,
+  parse: parseComposeListQuery,
+  build: buildComposeListQuery,
 })
-
-const statusFilter = computed({
-  get: () => composeListState.value.statusFilter,
-  set: (statusFilter: ComposeStatusFilter) => updateComposeListState({ statusFilter }),
-})
-
-const sortBy = computed(() => composeListState.value.sortBy)
-const sortOrder = computed(() => composeListState.value.sortOrder)
 
 const handleViewLogs = (project: ComposeProject) => {
   currentProject.value = project
@@ -299,7 +285,8 @@ const handleSortSelect = (key: string | number) => {
   }
   const nextOrder: ComposeSortOrder =
     sortBy.value === key ? (sortOrder.value === 'asc' ? 'desc' : 'asc') : 'asc'
-  updateComposeListState({ sortBy: key, sortOrder: nextOrder })
+  sortBy.value = key
+  sortOrder.value = nextOrder
 }
 
 // 组件挂载后加载数据

@@ -79,7 +79,16 @@ else
 fi
 
 mkdir -p "$CONFIG_PATH" "$APP_PATH"
+CONFIG_PATH="$(cd "$CONFIG_PATH" && pwd)"
+APP_PATH="$(cd "$APP_PATH" && pwd)"
 STATIC_DIR="${STATIC_DIR:-$ROOT_DIR/frontend/dist}"
+if [[ "$STATIC_DIR" != /* ]]; then
+  if [[ -d "$STATIC_DIR" ]]; then
+    STATIC_DIR="$(cd "$STATIC_DIR" && pwd)"
+  else
+    STATIC_DIR="$(pwd)/${STATIC_DIR#./}"
+  fi
+fi
 
 echo ""
 echo "[2/2] 正在启动 Watch Docker 本地测试服务..."

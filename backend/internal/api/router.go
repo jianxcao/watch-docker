@@ -54,13 +54,9 @@ func NewRouterWithLifecycle(log *zap.Logger, docker *dockercli.Client, reg *regi
 	r.Use(gin.Recovery())
 	r.Use(auth.SecurityHeadersMiddleware())
 
-	var trustedProxies []string
-	if raw := strings.TrimSpace(conf.EnvCfg.TRUSTED_PROXIES); raw != "" {
-		for _, entry := range strings.Split(raw, ",") {
-			if p := strings.TrimSpace(entry); p != "" {
-				trustedProxies = append(trustedProxies, p)
-			}
-		}
+	trustedProxies, invalidProxies := auth.ParseTrustedProxies(conf.EnvCfg.TRUSTED_PROXIES)
+	if len(invalidProxies) > 0 {
+		log.Warn("ignoring invalid trusted proxies entries", zap.Strings("invalid", invalidProxies))
 	}
 	if err := r.SetTrustedProxies(trustedProxies); err != nil {
 		log.Warn("set trusted proxies failed", zap.Error(err))

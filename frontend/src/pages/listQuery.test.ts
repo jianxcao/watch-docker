@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { nextTick, reactive } from 'vue'
+import { describe, expect, it, vi } from 'vitest'
+import type { LocationQuery, Router } from 'vue-router'
 import {
   buildContainerListQuery,
   buildNetworkListQuery,
   parseContainerListQuery,
   parseNetworkListQuery,
+  useRouteListState,
 } from './listQuery'
 
 describe('parseContainerListQuery', () => {
@@ -171,5 +174,46 @@ describe('buildNetworkListQuery', () => {
         { search: '', statusFilter: '', sortBy: 'name', sortOrder: 'asc' },
       ),
     ).toEqual({ foo: 'bar' })
+  })
+})
+
+describe('useRouteListState', () => {
+  it('syncs rapid change-and-revert across ticks even while an earlier router.replace is pending', async () => {
+    const route = reactive<{ query: LocationQuery }>({ query: {} })
+    const resolvers: Array<() => void> = []
+    const replaceMock = vi.fn(({ query }: { query: LocationQuery }) => {
+      return new Promise<void>((resolve) => {
+        resolvers.push(() => {
+          route.query = { ...query }
+          resolve()
+        })
+      })
+    })
+    const router = { replace: replaceMock } as unknown as Router
+
+    const { searchKeyword } = useRouteListState({
+      route: route as any,
+      router,
+      parse: parseContainerListQuery,
+      build: buildContainerListQuery,
+    })
+
+    searchKeyword.value = 'nginx'
+    await nextTick()
+    expect(replaceMock).toHaveBeenCalledTimes(1)
+    expect(replaceMock).toHaveBeenLastCalledWith({ query: { search: 'nginx' } })
+
+    // Revert before first async router.replace commits route.query
+    searchKeyword.value = ''
+    await nextTick()
+    expect(replaceMock).toHaveBeenCalledTimes(2)
+    expect(replaceMock).toHaveBeenLastCalledWith({ query: {} })
+
+    while (resolvers.length > 0) {
+      resolvers.shift()?.()
+      await nextTick()
+    }
+    expect(route.query).toEqual({})
+    expect(searchKeyword.value).toBe('')
   })
 })

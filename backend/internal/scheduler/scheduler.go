@@ -22,21 +22,33 @@ type Scheduler struct {
 	updater             *updater.Updater
 	notificationManager *notificationmanager.Manager
 
-	mu      sync.Mutex
-	runMu   sync.Mutex
-	stopped bool
-	cancel  context.CancelFunc
-	cron    *cron.Cron
-	entryID cron.EntryID
+	mu         sync.Mutex
+	runMu      sync.Mutex
+	stopped    bool
+	cancel     context.CancelFunc
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+	cron       *cron.Cron
+	entryID    cron.EntryID
 }
 
 func New(logger *zap.Logger, sc *scanner.Scanner, up *updater.Updater, nm *notificationmanager.Manager) *Scheduler {
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		logger:              logger,
 		scanner:             sc,
 		updater:             up,
 		notificationManager: nm,
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
 	}
+}
+
+func (s *Scheduler) ensureStopCtxLocked() context.Context {
+	if s.stopCtx == nil {
+		s.stopCtx, s.stopCancel = context.WithCancel(context.Background())
+	}
+	return s.stopCtx
 }
 
 // Start 启动调度器；同时兼容 5 段与 6 段（含秒）Cron 表达式，并跳过未完成的重叠执行。
@@ -125,17 +137,22 @@ func (s *Scheduler) RemoveTask() {
 	s.removeTaskLocked()
 }
 
-// StopCron 停止并等待 cron 调度器彻底退出
+// StopCron 停止并等待 cron 调度器以及进行中的扫描/更新任务彻底退出
 func (s *Scheduler) StopCron() {
 	s.mu.Lock()
 	s.stopped = true
 	c := s.cron
 	cancel := s.cancel
+	stopCancel := s.stopCancel
 	s.cron = nil
 	s.entryID = 0
 	s.cancel = nil
+	s.stopCancel = nil
 	s.mu.Unlock()
 
+	if stopCancel != nil {
+		stopCancel()
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -144,6 +161,9 @@ func (s *Scheduler) StopCron() {
 		<-stopCtx.Done()
 		s.logger.Info("cron 调度器已停止")
 	}
+	// 等待经 HTTP update-all 或 cron 触发的在途 RunScanAndUpdate 完整退出（避免容器更新/回滚中途被 shutdown 中断）
+	s.runMu.Lock()
+	s.runMu.Unlock()
 }
 
 // Restart 重启调度器，重新读取配置
@@ -174,17 +194,43 @@ func (s *Scheduler) GetTaskInfo() (bool, int, string) {
 }
 
 func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
+	s.mu.Lock()
+	stopped := s.stopped
+	stopCtx := s.ensureStopCtxLocked()
+	s.mu.Unlock()
+	if stopped || stopCtx.Err() != nil {
+		return
+	}
+
 	if !s.runMu.TryLock() {
 		s.logger.Info("上一次扫描更新任务仍在运行，跳过本次触发")
 		return
 	}
 	defer s.runMu.Unlock()
 
+	runCtx, runCancel := context.WithCancel(ctx)
+	stopDone := make(chan struct{})
+	go func() {
+		select {
+		case <-stopCtx.Done():
+			runCancel()
+		case <-runCtx.Done():
+		case <-stopDone:
+		}
+	}()
+	defer func() {
+		close(stopDone)
+		runCancel()
+	}()
+	if runCtx.Err() != nil {
+		return
+	}
+
 	s.logger.Info("开始执行扫描更新任务")
 	cfg := config.Get()
 	includeStopped := cfg.Docker.IncludeStopped
 	conc := cfg.Scan.Concurrency
-	statuses, err := s.scanner.ScanOnce(ctx, includeStopped, conc, true, true)
+	statuses, err := s.scanner.ScanOnce(runCtx, includeStopped, conc, true, true)
 	if err != nil {
 		s.logger.Error("scan failed", zap.Error(err))
 		return
@@ -200,7 +246,7 @@ func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
 			}
 		}
 		if len(updateAvailableContainers) > 0 {
-			if err := s.notificationManager.NotifyUpdateAvailable(ctx, updateAvailableContainers); err != nil {
+			if err := s.notificationManager.NotifyUpdateAvailable(runCtx, updateAvailableContainers); err != nil {
 				s.logger.Error("发送更新可用通知失败", zap.Error(err))
 			}
 		}
@@ -228,20 +274,20 @@ func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
 
 	s.logger.Info("开始执行批量更新任务")
 	for _, st := range updateStatuses {
-		if ctx.Err() != nil {
+		if runCtx.Err() != nil {
 			break
 		}
-		uctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		uctx, cancel := context.WithTimeout(runCtx, 10*time.Minute)
 		s.logger.Info(fmt.Sprintf("开始执行更新任务: %s", st.Name))
 		if _, err := s.updater.UpdateContainer(uctx, st.ID, st.Image); err != nil {
 			cancel()
-			if ctx.Err() != nil {
+			if runCtx.Err() != nil {
 				s.logger.Info(fmt.Sprintf("更新任务随调度器停止而中断: %s", st.Name))
 				break
 			}
 			s.logger.Error(fmt.Sprintf("更新任务失败: %s", st.Name), zap.Error(err))
 			if s.notificationManager != nil {
-				if notifyErr := s.notificationManager.NotifyUpdateFailed(ctx, st.Name, st.Image, err.Error()); notifyErr != nil {
+				if notifyErr := s.notificationManager.NotifyUpdateFailed(runCtx, st.Name, st.Image, err.Error()); notifyErr != nil {
 					s.logger.Error("发送更新失败通知失败", zap.Error(notifyErr))
 				}
 			}
@@ -250,7 +296,7 @@ func (s *Scheduler) RunScanAndUpdate(ctx context.Context) {
 		cancel()
 		s.logger.Info(fmt.Sprintf("更新任务完成: %s", st.Name))
 		if s.notificationManager != nil {
-			if notifyErr := s.notificationManager.NotifyUpdateSuccess(ctx, st.Name, st.Image); notifyErr != nil {
+			if notifyErr := s.notificationManager.NotifyUpdateSuccess(runCtx, st.Name, st.Image); notifyErr != nil {
 				s.logger.Error("发送更新成功通知失败", zap.Error(notifyErr))
 			}
 		}

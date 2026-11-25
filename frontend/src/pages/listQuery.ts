@@ -158,6 +158,7 @@ export function useRouteListState<Status extends string, SortBy extends string>(
   const sortOrder = ref<ListSortOrder>(initial.sortOrder)
 
   let pendingReplaceCount = 0
+  let lastSyncedState: ListState<Status, SortBy> = { ...initial }
 
   watch([searchKeyword, statusFilter, sortBy, sortOrder], ([search, status, sort, order]) => {
     const currentState: ListState<Status, SortBy> = {
@@ -166,9 +167,10 @@ export function useRouteListState<Status extends string, SortBy extends string>(
       sortBy: sort,
       sortOrder: order,
     }
-    if (isSameListState(currentState, parse(route.query))) {
+    if (isSameListState(currentState, lastSyncedState)) {
       return
     }
+    lastSyncedState = currentState
     pendingReplaceCount += 1
     void router.replace({ query: build(route.query, currentState) }).finally(() => {
       pendingReplaceCount = Math.max(0, pendingReplaceCount - 1)
@@ -182,6 +184,7 @@ export function useRouteListState<Status extends string, SortBy extends string>(
         return
       }
       const next = parse(newQuery)
+      lastSyncedState = next
       if (searchKeyword.value !== next.search) {
         searchKeyword.value = next.search
       }

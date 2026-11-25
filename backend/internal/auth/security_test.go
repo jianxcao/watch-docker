@@ -89,6 +89,29 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 	if !CheckWebSocketOrigin(makeReq("127.0.0.1:8080", "http://[::1]:8080")) {
 		t.Fatal("bracketed IPv6 in TWOFA_ALLOWED_DOMAINS should allow http://[::1]:8080")
 	}
+
+	// MatchAllowedDomain 默认端口 (80/443) 与完整 scheme://host 端口约束
+	if !MatchAllowedDomain("https://docker.example.com:443", "docker.example.com", "docker.example.com", "https") {
+		t.Fatal("expected https://docker.example.com:443 to match implicit HTTPS default port")
+	}
+	if !MatchAllowedDomain("https://docker.example.com:443", "docker.example.com:443", "docker.example.com", "https") {
+		t.Fatal("expected https://docker.example.com:443 to match explicit :443")
+	}
+	if !MatchAllowedDomain("docker.example.com:443", "docker.example.com", "docker.example.com", "https") {
+		t.Fatal("expected docker.example.com:443 to match implicit https")
+	}
+	if MatchAllowedDomain("docker.example.com:443", "docker.example.com:443", "docker.example.com", "http") {
+		t.Fatal("expected docker.example.com:443 to reject cleartext http scheme")
+	}
+	if MatchAllowedDomain("https://docker.example.com", "docker.example.com:9443", "docker.example.com", "https") {
+		t.Fatal("expected https://docker.example.com to reject non-default port 9443")
+	}
+
+	// ParseTrustedProxies 清洗带方括号 IPv6 并剔除非法项
+	validProxies, invalidProxies := ParseTrustedProxies("[::1],invalid-entry,127.0.0.1,10.0.0.0/8")
+	if len(validProxies) != 3 || validProxies[0] != "::1" || validProxies[1] != "127.0.0.1" || validProxies[2] != "10.0.0.0/8" || len(invalidProxies) != 1 || invalidProxies[0] != "invalid-entry" {
+		t.Fatalf("unexpected ParseTrustedProxies output: valid=%#v invalid=%#v", validProxies, invalidProxies)
+	}
 }
 
 func TestLoginRateLimiterKeepsActiveLockoutAcrossWindowBoundary(t *testing.T) {

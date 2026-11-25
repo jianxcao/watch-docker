@@ -246,6 +246,33 @@ func EffectiveRequestScheme(r *http.Request) string {
 	return "http"
 }
 
+// ParseTrustedProxies 解析逗号分隔的 TRUSTED_PROXIES 配置，分别返回合法 IP/CIDR（兼容带方括号 IPv6）与被忽略的非法项。
+func ParseTrustedProxies(raw string) (valid []string, invalid []string) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	for _, item := range strings.Split(raw, ",") {
+		entry := strings.TrimSpace(item)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			if _, ipNet, err := net.ParseCIDR(entry); err == nil && ipNet != nil {
+				valid = append(valid, ipNet.String())
+			} else {
+				invalid = append(invalid, entry)
+			}
+			continue
+		}
+		if ip := net.ParseIP(strings.Trim(entry, "[]")); ip != nil {
+			valid = append(valid, ip.String())
+		} else {
+			invalid = append(invalid, entry)
+		}
+	}
+	return valid, invalid
+}
+
 // MatchAllowedDomain 按 host、host:port 或 scheme://host[:port] 规则匹配 TWOFA_ALLOWED_DOMAINS 白名单。
 func MatchAllowedDomain(allowedDomainsStr, candidateHostWithPort, candidateHostOnly, scheme string) bool {
 	if strings.TrimSpace(allowedDomainsStr) == "" {
@@ -255,7 +282,7 @@ func MatchAllowedDomain(allowedDomainsStr, candidateHostWithPort, candidateHostO
 		return false
 	}
 	_, candPort := splitRequestHostPort(candidateHostWithPort)
-	normCandPort := normalizeSchemePort(candPort, strings.ToLower(scheme))
+	candEffectivePort := effectiveSchemePort(candPort, scheme)
 
 	for _, raw := range strings.Split(allowedDomainsStr, ",") {
 		entry := strings.TrimSpace(raw)
@@ -263,30 +290,69 @@ func MatchAllowedDomain(allowedDomainsStr, candidateHostWithPort, candidateHostO
 			continue
 		}
 		if strings.Contains(entry, "://") {
-			if eu, err := url.Parse(entry); err == nil && eu != nil && eu.Hostname() != "" {
-				if scheme != "" && !strings.EqualFold(eu.Scheme, scheme) {
+			if eu, err := url.Parse(entry); err == nil && eu != nil && eu.User == nil &&
+				eu.Hostname() != "" && (strings.EqualFold(eu.Scheme, "http") || strings.EqualFold(eu.Scheme, "https")) {
+				if scheme == "" || !strings.EqualFold(eu.Scheme, scheme) {
 					continue
 				}
-				if eu.Port() != "" {
-					if strings.EqualFold(eu.Hostname(), candidateHostOnly) && eu.Port() == normCandPort {
-						return true
-					}
-					continue
-				}
-				if strings.EqualFold(eu.Hostname(), candidateHostOnly) {
+				entryEffectivePort := effectiveSchemePort(eu.Port(), eu.Scheme)
+				if strings.EqualFold(eu.Hostname(), candidateHostOnly) && candEffectivePort != "" && entryEffectivePort == candEffectivePort {
 					return true
 				}
 			}
 			continue
 		}
 		if entryHost, entryPort, err := net.SplitHostPort(entry); err == nil {
-			if strings.EqualFold(entryHost, candidateHostOnly) && normCandPort != "" && entryPort == normCandPort {
+			if entryHost == "" || entryPort == "" {
+				continue
+			}
+			if (entryPort == "443" && scheme != "" && !strings.EqualFold(scheme, "https")) ||
+				(entryPort == "80" && scheme != "" && !strings.EqualFold(scheme, "http")) {
+				continue
+			}
+			if strings.EqualFold(entryHost, candidateHostOnly) && candEffectivePort != "" && entryPort == candEffectivePort {
 				return true
 			}
 			continue
 		}
 		entryHost, _ := splitRequestHostPort(entry)
-		if entryHost != "" && strings.EqualFold(entryHost, candidateHostOnly) {
+		if entryHost != "" && !strings.ContainsAny(entryHost, "/ \t@") && strings.EqualFold(entryHost, candidateHostOnly) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchAllowedRPID 按 hostname 维度校验 RPID 是否符合 TWOFA_ALLOWED_DOMAINS（支持 host、host:port 与 scheme://host[:port]）。
+func MatchAllowedRPID(allowedDomainsStr, rpid string) bool {
+	if strings.TrimSpace(allowedDomainsStr) == "" {
+		return true
+	}
+	rpid = strings.TrimSpace(rpid)
+	if rpid == "" {
+		return false
+	}
+	for _, raw := range strings.Split(allowedDomainsStr, ",") {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "://") {
+			if eu, err := url.Parse(entry); err == nil && eu != nil && eu.User == nil &&
+				(strings.EqualFold(eu.Scheme, "http") || strings.EqualFold(eu.Scheme, "https")) &&
+				eu.Hostname() != "" && strings.EqualFold(eu.Hostname(), rpid) {
+				return true
+			}
+			continue
+		}
+		if entryHost, entryPort, err := net.SplitHostPort(entry); err == nil {
+			if entryHost != "" && entryPort != "" && strings.EqualFold(entryHost, rpid) {
+				return true
+			}
+			continue
+		}
+		entryHost, _ := splitRequestHostPort(entry)
+		if entryHost != "" && !strings.ContainsAny(entryHost, "/ \t@") && strings.EqualFold(entryHost, rpid) {
 			return true
 		}
 	}
@@ -356,4 +422,18 @@ func normalizeSchemePort(port, scheme string) string {
 		return ""
 	}
 	return port
+}
+
+func effectiveSchemePort(port, scheme string) string {
+	if port != "" {
+		return port
+	}
+	switch strings.ToLower(scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
 }

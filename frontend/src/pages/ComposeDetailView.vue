@@ -222,6 +222,8 @@ import YamlEditor from '@/components/YamlEditor/index.vue'
 import ComposeCreateProgress from '@/components/ComposeCreateProgress.vue'
 import ComposePullLogsModal from '@/components/ComposePullLogsModal.vue'
 import { useCompose } from '@/hooks/useCompose'
+import { buildComposeListQuery, parseComposeListQuery } from './composeListQuery'
+import { canNavigateBackInApp } from './listQuery'
 
 const route = useRoute()
 const router = useRouter()
@@ -579,7 +581,14 @@ const handleViewContainerLogs = (container: ContainerStatus) => {
 
 // 返回
 const handleBack = () => {
-  router.push({ name: 'compose', query: route.query })
+  if (canNavigateBackInApp()) {
+    router.back()
+    return
+  }
+  void router.push({
+    name: 'compose',
+    query: buildComposeListQuery({}, parseComposeListQuery(route.query)),
+  })
 }
 
 // 监听项目名称变化

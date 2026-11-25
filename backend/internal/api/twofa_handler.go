@@ -159,7 +159,7 @@ func extractValidatedRPIDAndOrigin(c *gin.Context) (rpid string, origin string, 
 			}
 			return reqHostOnly, "", false
 		}
-		if reqHostOnly == "" || strings.EqualFold(originHostOnly, reqHostOnly) {
+		if reqHostOnly != "" && strings.EqualFold(originHostOnly, reqHostOnly) {
 			return originHostOnly, normalizedOrigin, true
 		}
 		return reqHostOnly, "", false
@@ -186,22 +186,7 @@ func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
 }
 
 func isAllowedDomain(domain string) bool {
-	allowedDomainsStr := conf.EnvCfg.TWOFA_ALLOWED_DOMAINS
-	if allowedDomainsStr == "" {
-		return true
-	}
-
-	allowedDomains := strings.Split(allowedDomainsStr, ",")
-	for _, allowed := range allowedDomains {
-		entry := strings.TrimSpace(allowed)
-		if entry == "" {
-			continue
-		}
-		if strings.EqualFold(extractHostNameOnly(entry), domain) {
-			return true
-		}
-	}
-	return false
+	return auth.MatchAllowedRPID(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS, domain)
 }
 
 func upgradeTokenFromContext(c *gin.Context) (string, error) {

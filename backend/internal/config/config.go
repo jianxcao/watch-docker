@@ -279,8 +279,8 @@ func restoreMaskedURLPassword(nextURL, prevURL string) string {
 	if err != nil || prevU.User == nil {
 		return nextTrimmed
 	}
-	// 仅在 host 与 username 未变化时才还原旧密码，防止修改主机时把旧密码外泄到新目标
-	if !strings.EqualFold(u.Host, prevU.Host) || u.User.Username() != prevU.User.Username() {
+	// 仅在 scheme、host 与 username 均未变化时才还原旧密码，防止修改目标主机或协议降级外泄凭据
+	if !strings.EqualFold(u.Scheme, prevU.Scheme) || !strings.EqualFold(u.Host, prevU.Host) || u.User.Username() != prevU.User.Username() {
 		return nextTrimmed
 	}
 	if oldPass, ok := prevU.User.Password(); ok && oldPass != "" {

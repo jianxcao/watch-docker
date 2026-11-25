@@ -458,3 +458,47 @@ func TestHandleCreateContainerRespectsPrimaryNetwork(t *testing.T) {
 		t.Fatalf("padded host mode mismatch: res=%+v create=%#v connects=%#v", res, lastCreate, connects)
 	}
 }
+
+func TestHandleUpdateContainerEmptyFallbackImageReturnsImageRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	srvHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/") && strings.HasSuffix(r.URL.Path, "/json") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id":     "cid-empty-image",
+				"Name":   "/empty-img",
+				"Config": map[string]any{"Image": "   "},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srvHTTP.Close()
+
+	cli, err := dockercli.New(context.Background(), "tcp://"+srvHTTP.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("create dockercli: %v", err)
+	}
+	defer cli.Close()
+
+	srv := &Server{
+		docker: cli,
+		logger: zap.NewNop(),
+	}
+	r := gin.New()
+	r.POST("/containers/:id/update", srv.handleUpdateContainer())
+
+	updBody, _ := json.Marshal(map[string]any{"image": "   "})
+	req := httptest.NewRequest(http.MethodPost, "/containers/cid-empty-image/update", bytes.NewReader(updBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	var res BaseRes
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode response failed: %v, body=%s", err, rec.Body.String())
+	}
+	if res.Code != CodeImageRequired {
+		t.Fatalf("expected CodeImageRequired (%d), got %+v", CodeImageRequired, res)
+	}
+}

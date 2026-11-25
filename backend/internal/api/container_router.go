@@ -746,6 +746,10 @@ func (s *Server) handleUpdateContainer() gin.HandlerFunc {
 				body.Image = strings.TrimSpace(info.Config.Image)
 			}
 		}
+		if body.Image == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeImageRequired, "image required"))
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Minute)
 		defer cancel()
 		newID, err := s.updater.UpdateContainer(ctx, id, body.Image)
