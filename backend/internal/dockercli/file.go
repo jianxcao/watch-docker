@@ -77,16 +77,21 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 
 // ExecContainer 在容器中执行命令并返回 stdout 输出（限制最大缓冲 16MB 防止异常输出触发 OOM）
 func (c *Client) ExecContainer(ctx context.Context, containerID string, cmd []string) (string, error) {
-	return c.execContainerWithLimit(ctx, containerID, cmd, 16*1024*1024)
+	return c.execContainerWithEnvAndLimit(ctx, containerID, cmd, nil, 16*1024*1024)
 }
 
 func (c *Client) execContainerWithLimit(ctx context.Context, containerID string, cmd []string, maxStdoutBytes int64) (string, error) {
+	return c.execContainerWithEnvAndLimit(ctx, containerID, cmd, nil, maxStdoutBytes)
+}
+
+func (c *Client) execContainerWithEnvAndLimit(ctx context.Context, containerID string, cmd, env []string, maxStdoutBytes int64) (string, error) {
 	execConfig := client.ExecCreateOptions{
 		AttachStdin:  false,
 		AttachStdout: true,
 		AttachStderr: true,
 		TTY:          false,
 		Cmd:          cmd,
+		Env:          env,
 	}
 
 	execResp, err := c.docker.ExecCreate(ctx, containerID, execConfig)
@@ -173,8 +178,13 @@ var (
 // parseLsOutput 解析 ls -la 命令输出，逐字保留条目名和链接目标中的前后空格。
 // 遇到无法明确判定日期边界或符号链接分隔符有歧义的行时返回错误，触发上层回退到 Docker Archive API。
 func parseLsOutput(output string) ([]FileEntry, error) {
+	return parseLsOutputAt(output, time.Now().UTC())
+}
+
+func parseLsOutputAt(output string, now time.Time) ([]FileEntry, error) {
 	lines := strings.Split(output, "\n")
 	entries := []FileEntry{}
+	refNow := now.UTC()
 
 	timeRegexes := []*regexp.Regexp{
 		lsFullTimeRe,
@@ -261,7 +271,11 @@ func parseLsOutput(output string) ([]FileEntry, error) {
 			}
 		}
 
-		modified := parseFileTime(dateStr)
+		modified, err := parseFileTimeAt(dateStr, refNow)
+		if err != nil {
+			logger.Logger.Debug("parse time failed, using reference time", zap.String("time", dateStr), zap.Error(err))
+			modified = refNow.Format(time.RFC3339)
+		}
 
 		entries = append(entries, FileEntry{
 			Name:        name,
@@ -280,59 +294,120 @@ func parseLsOutput(output string) ([]FileEntry, error) {
 }
 
 var (
-	reSpaces     = regexp.MustCompile(`\s+`)
-	reNano       = regexp.MustCompile(`(\d{2}:\d{2}:\d{2})\.\d+ `)
-	reMMDD       = regexp.MustCompile(`^(\d{2})-(\d{2})$`)
-	reMMDDHHMM   = regexp.MustCompile(`^(\d{2})-(\d{2}) (\d{2}:\d{2})$`)
-	reYYYYMMDD   = regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`)
+	reSpaces   = regexp.MustCompile(`\s+`)
+	reNano     = regexp.MustCompile(`(\d{2}:\d{2}:\d{2})\.\d+ `)
+	reMMDD     = regexp.MustCompile(`^(\d{2})-(\d{2})$`)
+	reMMDDHHMM = regexp.MustCompile(`^(\d{2})-(\d{2}) (\d{2}:\d{2})$`)
+	reYYYYMMDD = regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`)
 )
 
-// parseFileTime 解析文件时间
+// parseFileTime 解析文件时间（使用当前 UTC 时间推断缺省年份）。
 func parseFileTime(timeStr string) string {
+	now := time.Now().UTC()
+	if formatted, err := parseFileTimeAt(timeStr, now); err == nil {
+		return formatted
+	}
+	return now.Format(time.RFC3339)
+}
+
+func inferYearlessTime(ref time.Time, parseForYear func(year int) (time.Time, error)) (time.Time, error) {
+	ref = ref.UTC()
+	refYear := ref.Year()
+	if t, err := parseForYear(refYear); err == nil {
+		if !t.After(ref.Add(time.Hour)) {
+			return t, nil
+		}
+		prev, perr := parseForYear(refYear - 1)
+		if perr != nil {
+			return time.Time{}, perr
+		}
+		return prev, nil
+	}
+	// 仅当当前年无该日历日（如非闰年中的 Feb 29）时才尝试上一年，防止将去年同日误丢弃
+	prev, err := parseForYear(refYear - 1)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if prev.After(ref.Add(time.Hour)) {
+		return time.Time{}, fmt.Errorf("inferred previous-year time %s is after reference %s", prev, ref)
+	}
+	return prev, nil
+}
+
+// parseFileTimeAt 按给定参考时刻解析 ls 时间戳并统一返回 RFC3339（UTC）。
+func parseFileTimeAt(timeStr string, now time.Time) (string, error) {
 	timeStr = strings.TrimSpace(timeStr)
 	timeStr = reSpaces.ReplaceAllString(timeStr, " ")
 	timeStr = reNano.ReplaceAllString(timeStr, "${1} ")
+	ref := now.UTC()
 
-	formats := []string{
-		"2006-01-02 15:04:05 -0700",
+	if t, err := time.Parse("2006-01-02 15:04:05 -0700", timeStr); err == nil {
+		return t.UTC().Format(time.RFC3339), nil
+	}
+
+	explicitUTCLayouts := []string{
 		"2006-01-02 15:04:05",
 		"2006-01-02 15:04",
-		"Jan 2 15:04:05",
-		"Jan 2 15:04",
 		"Jan 2 2006",
 	}
-
-	for _, format := range formats {
-		if t, err := time.Parse(format, timeStr); err == nil {
-			return t.Format(time.RFC3339)
-		}
-	}
-
-	if matched := reMMDDHHMM.FindStringSubmatch(timeStr); len(matched) == 4 {
-		currentYear := time.Now().Year()
-		dateStr := fmt.Sprintf("%d-%s-%s %s", currentYear, matched[1], matched[2], matched[3])
-		if t, err := time.Parse("2006-01-02 15:04", dateStr); err == nil {
-			return t.Format(time.RFC3339)
-		}
-	}
-
-	if matched := reMMDD.FindStringSubmatch(timeStr); len(matched) == 3 {
-		currentYear := time.Now().Year()
-		dateStr := fmt.Sprintf("%d-%s-%s 00:00", currentYear, matched[1], matched[2])
-		if t, err := time.Parse("2006-01-02 15:04", dateStr); err == nil {
-			return t.Format(time.RFC3339)
+	for _, layout := range explicitUTCLayouts {
+		if t, err := time.ParseInLocation(layout, timeStr, time.UTC); err == nil {
+			return t.UTC().Format(time.RFC3339), nil
 		}
 	}
 
 	if matched := reYYYYMMDD.FindStringSubmatch(timeStr); len(matched) == 4 {
 		dateStr := fmt.Sprintf("%s-%s-%s 00:00", matched[1], matched[2], matched[3])
-		if t, err := time.Parse("2006-01-02 15:04", dateStr); err == nil {
-			return t.Format(time.RFC3339)
+		if t, err := time.ParseInLocation("2006-01-02 15:04", dateStr, time.UTC); err == nil {
+			return t.UTC().Format(time.RFC3339), nil
+		}
+		return "", fmt.Errorf("invalid YYYY-MM-DD date %q", timeStr)
+	}
+
+	for _, pair := range []struct {
+		checkLayout string
+		withYear    string
+	}{
+		{"Jan 2 15:04:05", "2006 Jan 2 15:04:05"},
+		{"Jan 2 15:04", "2006 Jan 2 15:04"},
+	} {
+		// 仅筛选格式结构匹配无年份英文月日的输入；用 2004（闰年）避免先验过滤 Feb 29
+		if _, err := time.Parse(pair.checkLayout, timeStr); err == nil || strings.HasPrefix(strings.ToLower(timeStr), "feb 29 ") {
+			if _, febCheckErr := time.Parse(pair.withYear, "2004 "+timeStr); febCheckErr == nil {
+				t, ierr := inferYearlessTime(ref, func(year int) (time.Time, error) {
+					return time.ParseInLocation(pair.withYear, fmt.Sprintf("%04d %s", year, timeStr), time.UTC)
+				})
+				if ierr != nil {
+					return "", ierr
+				}
+				return t.UTC().Format(time.RFC3339), nil
+			}
 		}
 	}
 
-	logger.Logger.Debug("parse time failed, using current time", zap.String("time", timeStr))
-	return time.Now().Format(time.RFC3339)
+	if matched := reMMDDHHMM.FindStringSubmatch(timeStr); len(matched) == 4 {
+		t, err := inferYearlessTime(ref, func(year int) (time.Time, error) {
+			dateStr := fmt.Sprintf("%04d-%s-%s %s", year, matched[1], matched[2], matched[3])
+			return time.ParseInLocation("2006-01-02 15:04", dateStr, time.UTC)
+		})
+		if err != nil {
+			return "", err
+		}
+		return t.UTC().Format(time.RFC3339), nil
+	}
+
+	if matched := reMMDD.FindStringSubmatch(timeStr); len(matched) == 3 {
+		t, err := inferYearlessTime(ref, func(year int) (time.Time, error) {
+			dateStr := fmt.Sprintf("%04d-%s-%s 00:00", year, matched[1], matched[2])
+			return time.ParseInLocation("2006-01-02 15:04", dateStr, time.UTC)
+		})
+		if err != nil {
+			return "", err
+		}
+		return t.UTC().Format(time.RFC3339), nil
+	}
+
+	return "", fmt.Errorf("unrecognized file timestamp: %q", timeStr)
 }
 
 // ListContainerDirectory 列出容器目录内容
@@ -349,12 +424,13 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, rawPat
 		{"ls", "-la", "--full-time", safePath},
 		{"ls", "-la", safePath},
 	}
+	lsEnv := []string{"TZ=UTC0", "LC_ALL=C"}
 
 	var output string
 	var lastErr error
 
 	for i, cmd := range commands {
-		output, lastErr = c.ExecContainer(ctx, containerID, cmd)
+		output, lastErr = c.execContainerWithEnvAndLimit(ctx, containerID, cmd, lsEnv, 16*1024*1024)
 		if lastErr == nil {
 			break
 		}
@@ -373,7 +449,7 @@ func (c *Client) ListContainerDirectory(ctx context.Context, containerID, rawPat
 		return c.listContainerDirectoryFromArchive(ctx, containerID, safePath)
 	}
 
-	entries, err := parseLsOutput(output)
+	entries, err := parseLsOutputAt(output, time.Now().UTC())
 	if err != nil {
 		logger.Logger.Info("ls output ambiguous, falling back to archive API",
 			zap.String("container", containerID),

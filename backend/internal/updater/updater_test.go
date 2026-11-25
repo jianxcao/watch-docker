@@ -258,4 +258,56 @@ func TestBuildNewContainerConfigsDestinationOnlyBind(t *testing.T) {
 			t.Fatalf("expected zero duplicate Mounts, got %#v", newHostCfg.Mounts)
 		}
 	})
+
+	t.Run("normalizes unclean POSIX destination-only binds against inspect destination", func(t *testing.T) {
+		for _, rawBind := range []string{"/var/./data", "/var//data", "/var/data/"} {
+			for _, rw := range []bool{true, false} {
+				uctx := &updateContext{oldInfo: container.InspectResponse{
+					Config:     &container.Config{},
+					HostConfig: &container.HostConfig{Binds: []string{rawBind}},
+					Mounts: []container.MountPoint{
+						{
+							Type:        mount.TypeVolume,
+							Name:        "original",
+							Destination: "/var/data",
+							RW:          rw,
+						},
+					},
+				}}
+
+				_, newHostCfg, _, _, _ := u.buildNewContainerConfigs(uctx)
+				wantBind := "original:/var/data"
+				if !rw {
+					wantBind += ":ro"
+				}
+				if len(newHostCfg.Binds) != 1 || newHostCfg.Binds[0] != wantBind {
+					t.Fatalf("rawBind=%q rw=%v: got Binds=%#v, want [%q]", rawBind, rw, newHostCfg.Binds, wantBind)
+				}
+				if len(newHostCfg.Mounts) != 0 {
+					t.Fatalf("rawBind=%q rw=%v: expected no duplicate Mounts, got %#v", rawBind, rw, newHostCfg.Mounts)
+				}
+				if uctx.oldInfo.HostConfig.Binds[0] != rawBind {
+					t.Fatalf("expected old HostConfig.Binds untouched, got %#v", uctx.oldInfo.HostConfig.Binds)
+				}
+			}
+		}
+
+		// 带来源的未规范化 POSIX 绑定也应去重，不再追加重复挂载
+		namedUnclean := &updateContext{oldInfo: container.InspectResponse{
+			Config:     &container.Config{},
+			HostConfig: &container.HostConfig{Binds: []string{"myvol:/var/./data:ro"}},
+			Mounts: []container.MountPoint{
+				{
+					Type:        mount.TypeVolume,
+					Name:        "myvol",
+					Destination: "/var/data",
+					RW:          false,
+				},
+			},
+		}}
+		_, namedHostCfg, _, _, _ := u.buildNewContainerConfigs(namedUnclean)
+		if len(namedHostCfg.Binds) != 1 || namedHostCfg.Binds[0] != "myvol:/var/./data:ro" || len(namedHostCfg.Mounts) != 0 {
+			t.Fatalf("expected named unclean bind deduplicated, got binds=%#v mounts=%#v", namedHostCfg.Binds, namedHostCfg.Mounts)
+		}
+	})
 }

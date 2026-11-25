@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path"
 	"reflect"
 	"slices"
 	"sort"
@@ -273,6 +274,13 @@ func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) 
 	return false, nil
 }
 
+func mountTargetKey(target string) string {
+	if path.IsAbs(target) {
+		return path.Clean(target)
+	}
+	return target
+}
+
 func splitBindSourceAndTarget(bind string) (source, target string) {
 	parts := strings.Split(bind, ":")
 	if len(parts) < 2 {
@@ -381,8 +389,9 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 		}, len(uctx.oldInfo.Mounts))
 		for _, m := range uctx.oldInfo.Mounts {
 			volName := dockercli.ResolveMountVolumeName(m)
-			if volName != "" && m.Destination != "" {
-				volByDest[m.Destination] = struct {
+			destKey := mountTargetKey(m.Destination)
+			if volName != "" && destKey != "" {
+				volByDest[destKey] = struct {
 					name string
 					rw   bool
 					dest string
@@ -393,10 +402,7 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 			if strings.Contains(b, ":") {
 				continue
 			}
-			v, ok := volByDest[b]
-			if !ok && strings.HasPrefix(b, "/") && b != "/" {
-				v, ok = volByDest[strings.TrimRight(b, "/")]
-			}
+			v, ok := volByDest[mountTargetKey(b)]
 			if !ok {
 				continue
 			}
@@ -411,8 +417,8 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 	existingTargets := make(map[string]struct{})
 	existingSources := make(map[string]struct{})
 	for _, m := range newHostCfg.Mounts {
-		if m.Target != "" {
-			existingTargets[m.Target] = struct{}{}
+		if tgtKey := mountTargetKey(m.Target); tgtKey != "" {
+			existingTargets[tgtKey] = struct{}{}
 		}
 		if m.Source != "" {
 			existingSources[m.Source] = struct{}{}
@@ -420,8 +426,8 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 	}
 	for _, b := range newHostCfg.Binds {
 		src, tgt := splitBindSourceAndTarget(b)
-		if tgt != "" {
-			existingTargets[tgt] = struct{}{}
+		if tgtKey := mountTargetKey(tgt); tgtKey != "" {
+			existingTargets[tgtKey] = struct{}{}
 		}
 		if src != "" {
 			existingSources[src] = struct{}{}
@@ -431,8 +437,9 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 	if !newHostCfg.AutoRemove && len(newHostCfg.VolumesFrom) == 0 {
 		for _, m := range uctx.oldInfo.Mounts {
 			volName := dockercli.ResolveMountVolumeName(m)
-			if volName != "" && m.Destination != "" {
-				_, hasTarget := existingTargets[m.Destination]
+			destKey := mountTargetKey(m.Destination)
+			if volName != "" && destKey != "" {
+				_, hasTarget := existingTargets[destKey]
 				_, hasSource := existingSources[volName]
 				if !hasTarget && !hasSource {
 					newHostCfg.Mounts = append(newHostCfg.Mounts, mount.Mount{
@@ -441,7 +448,7 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 						Target:   m.Destination,
 						ReadOnly: !m.RW,
 					})
-					existingTargets[m.Destination] = struct{}{}
+					existingTargets[destKey] = struct{}{}
 					existingSources[volName] = struct{}{}
 				}
 			}

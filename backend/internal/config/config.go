@@ -625,11 +625,40 @@ func Validate(cfg *Config) error {
 	return nil
 }
 
+func resolveConfigWritePath(configPath string) (string, error) {
+	info, err := os.Lstat(configPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return configPath, nil
+		}
+		return "", fmt.Errorf("stat config path %s: %w", configPath, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return configPath, nil
+	}
+	resolved, err := filepath.EvalSymlinks(configPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve config symlink %s: %w", configPath, err)
+	}
+	targetInfo, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("stat resolved config target %s (from %s): %w", resolved, configPath, err)
+	}
+	if targetInfo.IsDir() {
+		return "", fmt.Errorf("resolved config target %s (from %s) is a directory", resolved, configPath)
+	}
+	return resolved, nil
+}
+
 func writeConfigAtomic(configPath string, cfg *Config) error {
 	if strings.TrimSpace(configPath) == "" || configPath == "." {
 		return nil
 	}
-	dir := filepath.Dir(configPath)
+	writePath, err := resolveConfigWritePath(configPath)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(writePath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -660,14 +689,14 @@ func writeConfigAtomic(configPath string, cfg *Config) error {
 		cleanup()
 		return fmt.Errorf("close temp config file: %w", err)
 	}
-	if err := os.Rename(tmpPath, configPath); err != nil {
+	if err := os.Rename(tmpPath, writePath); err != nil {
 		// 单文件 bind mount 时 os.Rename 会返回 EBUSY/EXDEV，尝试原地覆写并保持 0600
 		if errors.Is(err, syscall.EBUSY) || errors.Is(err, syscall.EXDEV) {
 			cleanup()
-			if werr := os.WriteFile(configPath, yamlData, 0600); werr != nil {
+			if werr := os.WriteFile(writePath, yamlData, 0600); werr != nil {
 				return fmt.Errorf("write config file in place: %w", werr)
 			}
-			_ = os.Chmod(configPath, 0600)
+			_ = os.Chmod(writePath, 0600)
 			return nil
 		}
 		cleanup()

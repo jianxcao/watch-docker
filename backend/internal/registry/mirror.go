@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,10 +14,13 @@ import (
 	"strings"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
 )
+
+const maxManifestBytes = 4 << 20
 
 var mirrorManifestAccept = []string{
 	"application/vnd.docker.distribution.manifest.v2+json",
@@ -108,11 +112,12 @@ func (c *Client) fetchManifestFromMirror(ctx context.Context, ep dockercli.Mirro
 		return nil, "", "", "", fmt.Errorf("获取 manifest 失败 (状态码: %d): %s", status, truncate(string(body), 200))
 	}
 
-	digest = headers.Get("Docker-Content-Digest")
-	if digest == "" {
-		sum := sha256.Sum256(body)
-		digest = "sha256:" + hex.EncodeToString(sum[:])
+	sum := sha256.Sum256(body)
+	bodyDigest := "sha256:" + hex.EncodeToString(sum[:])
+	if hdrDigest := strings.TrimSpace(headers.Get("Docker-Content-Digest")); hdrDigest != "" && !strings.EqualFold(hdrDigest, bodyDigest) {
+		return nil, "", "", "", fmt.Errorf("mirror %s 返回的 Docker-Content-Digest (%s) 与响应体校验和不匹配 (%s)", ep.HostWithPrefix(), hdrDigest, bodyDigest)
 	}
+	digest = bodyDigest
 	return body, digest, bearer, mirrorRepoPath, nil
 }
 
@@ -161,7 +166,18 @@ func (c *Client) requestManifest(ctx context.Context, manifestURL, bearer string
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if resp.StatusCode == http.StatusOK {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes+1))
+		if err != nil {
+			return nil, resp.Header, resp.StatusCode, fmt.Errorf("读取响应失败: %w", err)
+		}
+		if len(body) > maxManifestBytes {
+			return nil, resp.Header, resp.StatusCode, fmt.Errorf("manifest 大小超过上限 (%d bytes)", maxManifestBytes)
+		}
+		return body, resp.Header, resp.StatusCode, nil
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes))
 	if err != nil {
 		return nil, resp.Header, resp.StatusCode, fmt.Errorf("读取响应失败: %w", err)
 	}
@@ -244,15 +260,37 @@ func (c *Client) queryDigestViaMirrors(ctx context.Context, imageRef string, mir
 			continue
 		}
 
+		trimmed := bytes.TrimSpace(body)
+		if len(trimmed) == 0 || trimmed[0] != '{' {
+			logger.Logger.Debug("mirror 返回非 JSON 对象 manifest，尝试下一个",
+				zap.String("image", imageRef),
+				zap.String("mirror", ep.HostWithPrefix()))
+			continue
+		}
+
 		var m struct {
 			Config struct {
 				Digest string `json:"digest"`
 			} `json:"config"`
 			Manifests []json.RawMessage `json:"manifests"`
 		}
-		_ = json.Unmarshal(body, &m)
+		if err := json.Unmarshal(body, &m); err != nil {
+			logger.Logger.Debug("mirror 返回损坏的 manifest JSON，尝试下一个",
+				zap.String("image", imageRef),
+				zap.String("mirror", ep.HostWithPrefix()),
+				zap.Error(err))
+			continue
+		}
 
 		if len(m.Manifests) > 0 {
+			var im v1.IndexManifest
+			if err := json.Unmarshal(body, &im); err != nil {
+				logger.Logger.Debug("mirror 返回损坏的 index manifest JSON，尝试下一个",
+					zap.String("image", imageRef),
+					zap.String("mirror", ep.HostWithPrefix()),
+					zap.Error(err))
+				continue
+			}
 			childDig, _ := parseManifest(body, targetOS, targetArch, targetVariant)
 			var cfgDig string
 			if needConfig {

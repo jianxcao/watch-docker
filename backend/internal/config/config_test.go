@@ -360,3 +360,112 @@ func TestLegacyNotifyURLAtPrefixCompatibility(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdatePreservesConfigSymlink(t *testing.T) {
+	cfgPath := setupTempConfigEnv(t)
+	dir := filepath.Dir(cfgPath)
+	managedDir := filepath.Join(dir, "managed")
+	if err := os.MkdirAll(managedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	target1 := filepath.Join(managedDir, "settings.yaml")
+	if err := os.WriteFile(target1, []byte("logging:\n  level: info\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("managed/settings.yaml", cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(cfgPath); err != nil {
+		t.Fatalf("Load symlink config failed: %v", err)
+	}
+	if err := Update(func(cfg *Config) error {
+		cfg.Logging.Level = "debug"
+		return nil
+	}); err != nil {
+		t.Fatalf("Update symlink config failed: %v", err)
+	}
+
+	linkTarget, err := os.Readlink(cfgPath)
+	if err != nil {
+		t.Fatalf("expected %s to remain a symlink, got err: %v", cfgPath, err)
+	}
+	if linkTarget != "managed/settings.yaml" {
+		t.Fatalf("symlink target = %q, want %q", linkTarget, "managed/settings.yaml")
+	}
+	raw1, err := os.ReadFile(target1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw1), "level: debug") {
+		t.Fatalf("expected managed/settings.yaml updated with debug level, got:\n%s", string(raw1))
+	}
+	reloaded, err := Load(cfgPath)
+	if err != nil || reloaded.Logging.Level != "debug" {
+		t.Fatalf("expected reload via symlink to see debug level, got %+v err=%v", reloaded, err)
+	}
+
+	// 将入口重新指向另一个已存在的目标，再次保存只应更新新目标
+	target2 := filepath.Join(managedDir, "settings-v2.yaml")
+	if err := os.WriteFile(target2, []byte("logging:\n  level: info\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(cfgPath)
+	if err := os.Symlink("managed/settings-v2.yaml", cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(func(cfg *Config) error {
+		cfg.Logging.Level = "warn"
+		return nil
+	}); err != nil {
+		t.Fatalf("Update repointed symlink failed: %v", err)
+	}
+	raw2, err := os.ReadFile(target2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw2), "level: warn") {
+		t.Fatalf("expected settings-v2.yaml updated with warn, got:\n%s", string(raw2))
+	}
+	raw1After, _ := os.ReadFile(target1)
+	if !strings.Contains(string(raw1After), "level: debug") || strings.Contains(string(raw1After), "level: warn") {
+		t.Fatalf("expected previous target settings.yaml untouched, got:\n%s", string(raw1After))
+	}
+
+	// 悬空链接和循环链接应报错并保留符号链接，同时不发布内存新值
+	_ = os.Remove(cfgPath)
+	if err := os.Symlink("managed/missing.yaml", cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	err = Update(func(cfg *Config) error {
+		cfg.Logging.Level = "error"
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), cfgPath) {
+		t.Fatalf("expected error containing %q for dangling symlink, got %v", cfgPath, err)
+	}
+	if lt, rerr := os.Readlink(cfgPath); rerr != nil || lt != "managed/missing.yaml" {
+		t.Fatalf("expected dangling symlink preserved, readlink=(%q, %v)", lt, rerr)
+	}
+	if Get().Logging.Level != "warn" {
+		t.Fatalf("expected failed Update not to publish error level, got %q", Get().Logging.Level)
+	}
+
+	loopA := filepath.Join(dir, "loop-a.yaml")
+	loopB := filepath.Join(dir, "loop-b.yaml")
+	_ = os.Remove(cfgPath)
+	_ = os.Symlink("loop-b.yaml", loopA)
+	_ = os.Symlink("loop-a.yaml", loopB)
+	_ = os.Symlink("loop-a.yaml", cfgPath)
+	err = Update(func(cfg *Config) error {
+		cfg.Logging.Level = "error"
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), cfgPath) {
+		t.Fatalf("expected error containing %q for symlink loop, got %v", cfgPath, err)
+	}
+	if Get().Logging.Level != "warn" {
+		t.Fatalf("expected failed loop Update not to publish error level, got %q", Get().Logging.Level)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/client"
 )
@@ -191,6 +192,7 @@ func TestListContainerDirectorySpecialFilesSkipArchiveFallback(t *testing.T) {
 	}, "\n") + "\n"
 
 	archiveHits := 0
+	var execEnv []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/events"):
@@ -216,6 +218,11 @@ func TestListContainerDirectorySpecialFilesSkipArchiveFallback(t *testing.T) {
 			_, _ = rw.Write(payload)
 			_ = rw.Flush()
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/exec"):
+			var body struct {
+				Env []string `json:"Env"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			execEnv = body.Env
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-special"})
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/") && strings.HasSuffix(r.URL.Path, "/json"):
@@ -265,6 +272,9 @@ func TestListContainerDirectorySpecialFilesSkipArchiveFallback(t *testing.T) {
 	if res.Entries[5].Name != "backup.tar" || res.Entries[5].Type != "file" || res.Entries[5].Size != 4294967296 {
 		t.Fatalf("unexpected large file entry: %#v", res.Entries[5])
 	}
+	if len(execEnv) != 2 || execEnv[0] != "TZ=UTC0" || execEnv[1] != "LC_ALL=C" {
+		t.Fatalf("expected ls exec env [TZ=UTC0 LC_ALL=C], got %#v", execEnv)
+	}
 }
 
 func TestPutSingleFileStreamPreservesTrailingSpaceFilename(t *testing.T) {
@@ -312,5 +322,90 @@ func TestPutSingleFileStreamPreservesTrailingSpaceFilename(t *testing.T) {
 		if err := cli.PutSingleFileStream(context.Background(), "cid-1", "/tmp", bad, 0, strings.NewReader("")); err == nil {
 			t.Fatalf("expected error for invalid filename %q", bad)
 		}
+	}
+}
+
+func TestParseFileTimeAtInfersYearAndRejectsInvalidDates(t *testing.T) {
+	got := parseFileTime("Apr  1 09:05")
+	if strings.HasPrefix(got, "0000-") {
+		t.Fatalf("expected non-zero year for BusyBox timestamp, got %q", got)
+	}
+
+	cases := []struct {
+		name    string
+		now     time.Time
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "same year",
+			now:   time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
+			input: "Apr  1 09:05",
+			want:  "2026-04-01T09:05:00Z",
+		},
+		{
+			name:  "year rollover Dec in Jan",
+			now:   time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC),
+			input: "Dec 31 23:58",
+			want:  "2025-12-31T23:58:00Z",
+		},
+		{
+			name:  "within 1h tolerance",
+			now:   time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC),
+			input: "Apr  1 09:05",
+			want:  "2026-04-01T09:05:00Z",
+		},
+		{
+			name:  "leap day in leap year",
+			now:   time.Date(2024, 3, 1, 12, 0, 0, 0, time.UTC),
+			input: "Feb 29 08:10",
+			want:  "2024-02-29T08:10:00Z",
+		},
+		{
+			name:  "leap day from previous leap year",
+			now:   time.Date(2025, 2, 1, 12, 0, 0, 0, time.UTC),
+			input: "Feb 29 08:10",
+			want:  "2024-02-29T08:10:00Z",
+		},
+		{
+			name:  "explicit year",
+			now:   time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC),
+			input: "Dec 31 2023",
+			want:  "2023-12-31T00:00:00Z",
+		},
+		{
+			name:  "numeric MM-DD HH:MM rollover",
+			now:   time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC),
+			input: "12-31 23:58",
+			want:  "2025-12-31T23:58:00Z",
+		},
+		{
+			name:    "reject Feb 29 when neither year is leap",
+			now:     time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+			input:   "Feb 29 08:10",
+			wantErr: true,
+		},
+		{
+			name:    "reject invalid Feb 30",
+			now:     time.Date(2024, 3, 1, 12, 0, 0, 0, time.UTC),
+			input:   "Feb 30 08:10",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := parseFileTimeAt(tc.input, tc.now)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for input=%q at now=%v, got %q", tc.input, tc.now, res)
+				}
+				return
+			}
+			if err != nil || res != tc.want {
+				t.Fatalf("parseFileTimeAt(%q, %v) = (%q, %v), want (%q, nil)", tc.input, tc.now, res, err, tc.want)
+			}
+		})
 	}
 }
