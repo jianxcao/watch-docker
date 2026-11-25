@@ -292,10 +292,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { networkApi } from '@/common/api'
 import type { NetworkDetailResponse, NetworkContainer } from '@/common/types'
+import {
+  buildNetworkListQuery,
+  canNavigateBackInApp,
+  parseNetworkListQuery,
+} from './listQuery'
 import NetworkIcon from '@/assets/svg/network.svg?component'
 import HashtagIcon from '@/assets/svg/hashtag.svg?component'
 import RouterIcon from '@/assets/svg/router.svg?component'
@@ -345,10 +350,11 @@ const hasIPAMConfig = computed(() => {
 
 // 格式化创建时间
 const formatCreatedTime = (created: string): string => {
-  if (!created) {
+  if (!created || created.startsWith('0001-01-01')) {
     return '-'
   }
-  return dayjs(created).format('YYYY-MM-DD HH:mm:ss')
+  const d = dayjs(created)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
 // 获取驱动类型标签类型
@@ -373,6 +379,11 @@ const getScopeLabel = (scope: string): string => {
   return labelMap[scope] || scope
 }
 
+const fallbackNetworksLocation = () => ({
+  name: 'networks',
+  query: buildNetworkListQuery({}, parseNetworkListQuery(route.query)),
+})
+
 // 获取网络详情
 const fetchNetworkDetail = async () => {
   loading.value = true
@@ -382,11 +393,11 @@ const fetchNetworkDetail = async () => {
       networkDetail.value = response.data
     } else {
       message.error(`获取网络详情失败：${response.msg}`)
-      router.push('/networks')
+      void router.replace(fallbackNetworksLocation())
     }
   } catch (error: any) {
     message.error(`获取网络详情失败：${error.message || '未知错误'}`)
-    router.push('/networks')
+    void router.replace(fallbackNetworksLocation())
   } finally {
     loading.value = false
   }
@@ -394,7 +405,11 @@ const fetchNetworkDetail = async () => {
 
 // 处理返回
 const handleBack = () => {
-  router.push('/networks')
+  if (canNavigateBackInApp()) {
+    router.back()
+    return
+  }
+  void router.push(fallbackNetworksLocation())
 }
 
 // 处理刷新
@@ -427,7 +442,7 @@ const handleDelete = () => {
         const response = await networkApi.deleteNetwork(networkName.value)
         if (response.code === 0) {
           message.success('网络删除成功')
-          router.push('/networks')
+          void router.replace(fallbackNetworksLocation())
         } else {
           message.error(`删除失败：${response.msg}`)
         }
@@ -442,6 +457,13 @@ const handleDelete = () => {
 const handleContainerClick = (container: NetworkContainer) => {
   router.push(`/containers/${container.id}`)
 }
+
+// 监听路由参数变化
+watch(networkName, (newName, oldName) => {
+  if (newName && newName !== oldName) {
+    void fetchNetworkDetail()
+  }
+})
 
 // 页面初始化
 onMounted(async () => {
@@ -472,7 +494,7 @@ onMounted(async () => {
 
     .info-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 24px 32px;
       .info-item {
         display: flex;

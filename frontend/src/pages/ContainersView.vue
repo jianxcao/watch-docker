@@ -157,7 +157,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useContainerStore } from '@/store/container'
 import { useContainer } from '@/hooks/useContainer'
 import { useResponsive } from '@/hooks/useResponsive'
@@ -167,6 +167,13 @@ import ContainerImportModal from '@/components/ContainerImportModal.vue'
 import ContainerLogsModal from '@/components/ContainerLogsModal.vue'
 import BatchUpdateModal from '@/components/BatchUpdateModal.vue'
 import type { ContainerStatus } from '@/common/types'
+import {
+  buildContainerListQuery,
+  parseContainerListQuery,
+  useRouteListState,
+  type ContainerSortBy,
+  type ContainerStatusFilter,
+} from './listQuery'
 import {
   SearchOutline,
   RefreshOutline,
@@ -187,6 +194,7 @@ import {
 } from '@vicons/ionicons5'
 import { useAppStore } from '@/store/app'
 
+const route = useRoute()
 const router = useRouter()
 const containerStore = useContainerStore()
 const containerHooks = useContainer()
@@ -194,11 +202,13 @@ const { showBatchUpdateModal } = containerHooks
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 const appStore = useAppStore()
 
-// 搜索和过滤
-const searchKeyword = ref('')
-const statusFilter = ref<string | null>(null)
-const sortBy = ref<string>('name') // 默认按名称排序
-const sortOrder = ref<'asc' | 'desc'>('asc') // 排序方向，默认升序
+// 搜索和过滤（与浏览器地址栏 query 双向同步）
+const { searchKeyword, statusFilter, sortBy, sortOrder } = useRouteListState({
+  route,
+  router,
+  parse: parseContainerListQuery,
+  build: buildContainerListQuery,
+})
 const showImportModal = ref(false)
 const showLogsModal = ref(false)
 const currentContainer = ref<ContainerStatus | null>(null)
@@ -209,7 +219,7 @@ const wsConnectionState = computed(() => containerStore.wsConnectionState)
 const statusFilterMenuOptions = computed(() => [
   {
     label: '全部',
-    key: null,
+    key: '',
     icon: renderIcon(AppsOutline),
   },
   {
@@ -265,7 +275,7 @@ const sortMenuOptions = computed(() => [
 
 // 处理过滤器菜单选择
 const handleFilterSelect = (key: string | null) => {
-  statusFilter.value = key
+  statusFilter.value = (key || '') as ContainerStatusFilter
 }
 
 // 判断排序按钮是否应该显示为主色（激活状态）
@@ -281,7 +291,7 @@ const handleSortSelect = (key: string) => {
     sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
   } else {
     // 如果选择的是不同字段，设置新字段并默认为升序
-    sortBy.value = key
+    sortBy.value = key as ContainerSortBy
     sortOrder.value = 'asc'
   }
 }
@@ -331,8 +341,16 @@ const filteredContainers = computed(() => {
     })
   }
 
-  // 排序
-  return containers.sort((a, b) => {
+  // 排序（使用副本避免修改 store 原数组）
+  const parseTime = (value?: string) => {
+    if (!value || value.startsWith('0001-01-01')) {
+      return 0
+    }
+    const ts = new Date(value).getTime()
+    return Number.isNaN(ts) ? 0 : ts
+  }
+
+  return [...containers].sort((a, b) => {
     let result = 0
 
     switch (sortBy.value) {
@@ -340,7 +358,7 @@ const filteredContainers = computed(() => {
         result = a.name.localeCompare(b.name)
         break
       case 'created':
-        result = new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
+        result = parseTime(a.startedAt) - parseTime(b.startedAt)
         break
       case 'status':
         // 按状态排序：运行中 > 已停止 > 其他
@@ -378,7 +396,7 @@ const handleLogs = async (container: ContainerStatus) => {
 }
 
 const handleDetail = (container: ContainerStatus) => {
-  router.push({ name: 'container-detail', params: { id: container.id } })
+  router.push({ name: 'container-detail', params: { id: container.id }, query: route.query })
 }
 
 const handleCreateContainer = () => {
@@ -461,19 +479,19 @@ onMounted(async () => {
     gap: 16px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

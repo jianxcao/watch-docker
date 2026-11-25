@@ -30,6 +30,7 @@ const router = createRouter({
         },
         {
           path: '/containers',
+          name: 'containers',
           component: () => import('@/pages/ContainersView.vue'),
           meta: { title: '容器管理', requiresAuth: true, layoutClass: 'layout-containers' },
         },
@@ -146,13 +147,8 @@ const router = createRouter({
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
 
-  // 如果还在检查认证状态，等待完成
-  if (authStore.checkingAuth) {
-    // 等待认证检查完成
-    while (authStore.checkingAuth) {
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-  }
+  // 等待初始化认证状态完成
+  await authStore.waitForInit()
 
   // 如果是登录页面
   if (to.path === '/login') {
