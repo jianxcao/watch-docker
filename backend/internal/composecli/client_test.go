@@ -698,7 +698,7 @@ exit 1`)
 
 func clearDotEnvTestProcessVars(t *testing.T) {
 	t.Helper()
-	keys := []string{"COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "COMPOSE_DISABLE_ENV_FILE", "COMPOSE_ENV_FILES", "LOCAL_STAGE"}
+	keys := []string{"COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "COMPOSE_DISABLE_ENV_FILE", "COMPOSE_ENV_FILES", "LOCAL_STAGE", "STAGE", "NOTES"}
 	for _, k := range keys {
 		key := k
 		if orig, had := os.LookupEnv(key); had {
@@ -1143,4 +1143,159 @@ func TestSaveNewProjectCreatesMissingAppRoot(t *testing.T) {
 			t.Fatalf("final file content=%q err=%v, want %q", string(got), err, winnerRes.yaml)
 		}
 	})
+}
+
+func TestDotEnvMultilineAssignment(t *testing.T) {
+	clearDotEnvTestProcessVars(t)
+	ctx := context.Background()
+
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	projDir := filepath.Join(resolvedAppDir, "multi-proj")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composeFile := filepath.Join(projDir, "compose.yaml")
+	prodFile := filepath.Join(projDir, "prod.yaml")
+	envFile := filepath.Join(projDir, ".env")
+	if err := os.WriteFile(composeFile, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prodFile, []byte("services:\n  worker:\n    image: alpine:3.20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			return nil, nil
+		},
+	}
+
+	// 1. 多行单引号 NOTES 内部包含 "COMPOSE_FILE: prod.yaml"，不应额外定义 COMPOSE_FILE
+	multilineNotes := "NOTES='example\nCOMPOSE_FILE: prod.yaml\nend'\n"
+	if err := os.WriteFile(envFile, []byte(multilineNotes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envMap := make(map[string]string)
+	if err := parseDotEnvFileInto(envFile, true, envMap); err != nil {
+		t.Fatalf("parse multiline single-quote .env failed: %v", err)
+	}
+	wantNotes := "example\nCOMPOSE_FILE: prod.yaml\nend"
+	if envMap["NOTES"] != wantNotes {
+		t.Fatalf("NOTES=%q, want %q", envMap["NOTES"], wantNotes)
+	}
+	if val, exists := envMap["COMPOSE_FILE"]; exists {
+		t.Fatalf("expected COMPOSE_FILE absent inside multiline NOTES, got %q", val)
+	}
+	plan1, err := cli.ResolveDeployPlan(ctx, "multi-proj", "")
+	if err != nil {
+		t.Fatalf("ResolveDeployPlan failed: %v", err)
+	}
+	if !slices.Equal(plan1.DeployFiles, []string{composeFile}) {
+		t.Fatalf("expected [compose.yaml] when COMPOSE_FILE is inside multiline NOTES, got %#v", plan1.DeployFiles)
+	}
+
+	// 2. 在同一多行 NOTES 后追加真实顶层赋值 COMPOSE_FILE: prod.yaml，此时选中 prod.yaml
+	withTopLevel := multilineNotes + "COMPOSE_FILE: prod.yaml\n"
+	if err := os.WriteFile(envFile, []byte(withTopLevel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envMap2 := make(map[string]string)
+	if err := parseDotEnvFileInto(envFile, true, envMap2); err != nil {
+		t.Fatalf("parse multiline + top-level .env failed: %v", err)
+	}
+	if envMap2["COMPOSE_FILE"] != "prod.yaml" {
+		t.Fatalf("COMPOSE_FILE=%q, want prod.yaml", envMap2["COMPOSE_FILE"])
+	}
+	plan2, err := cli.ResolveDeployPlan(ctx, "multi-proj", "")
+	if err != nil {
+		t.Fatalf("ResolveDeployPlan failed: %v", err)
+	}
+	if !slices.Equal(plan2.DeployFiles, []string{prodFile}) {
+		t.Fatalf("expected [prod.yaml], got %#v", plan2.DeployFiles)
+	}
+
+	// 3. 多行双引号、UTF-8 BOM / CRLF、${STAGE:-prod} 展开与含等号文件名
+	stageEqualsYaml := filepath.Join(projDir, "stage=x.yaml")
+	if err := os.WriteFile(stageEqualsYaml, []byte("services:\n  stage_svc:\n    image: busybox:1.36\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bomCRLF := "\xef\xbb\xbfNOTES=\"line1\r\nline2\"\r\nDEFAULTED: ${STAGE:-prod}.yaml\r\nCOMPOSE_FILE: \"stage=x.yaml\"\r\n"
+	if err := os.WriteFile(envFile, []byte(bomCRLF), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envMap3 := make(map[string]string)
+	if err := parseDotEnvFileInto(envFile, true, envMap3); err != nil {
+		t.Fatalf("parse BOM/CRLF multiline double-quote failed: %v", err)
+	}
+	if envMap3["NOTES"] != "line1\r\nline2" && envMap3["NOTES"] != "line1\nline2" {
+		t.Fatalf("unexpected BOM/CRLF NOTES=%q", envMap3["NOTES"])
+	}
+	if envMap3["DEFAULTED"] != "prod.yaml" {
+		t.Fatalf("expected ${STAGE:-prod}.yaml == prod.yaml, got %q", envMap3["DEFAULTED"])
+	}
+	if envMap3["COMPOSE_FILE"] != "stage=x.yaml" {
+		t.Fatalf("expected stage=x.yaml, got %q", envMap3["COMPOSE_FILE"])
+	}
+
+	// 4. 第二份 env 文件重新赋值后同文件内再次引用该变量
+	firstEnv := filepath.Join(projDir, "first.env")
+	secondEnv := filepath.Join(projDir, "second.env")
+	if err := os.WriteFile(firstEnv, []byte("STAGE=prod\nKEEP=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondEnv, []byte("STAGE=override\nCOMPOSE_FILE=${STAGE}.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overrideTarget := filepath.Join(projDir, "override.yaml")
+	if err := os.WriteFile(overrideTarget, []byte("services:\n  ov:\n    image: busybox:1.36\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chainedMap := make(map[string]string)
+	if err := parseDotEnvFileInto(firstEnv, true, chainedMap); err != nil {
+		t.Fatalf("parse first.env failed: %v", err)
+	}
+	if err := parseDotEnvFileInto(secondEnv, true, chainedMap); err != nil {
+		t.Fatalf("parse second.env failed: %v", err)
+	}
+	if chainedMap["COMPOSE_FILE"] != "override.yaml" || chainedMap["KEEP"] != "1" {
+		t.Fatalf("chained env reassignment mismatch: %#v", chainedMap)
+	}
+	t.Run("COMPOSE_ENV_FILES chained reassignment selects override.yaml", func(t *testing.T) {
+		t.Setenv("COMPOSE_ENV_FILES", "first.env,second.env")
+		chainedPlan, perr := cli.ResolveDeployPlan(ctx, "multi-proj", "")
+		if perr != nil {
+			t.Fatalf("ResolveDeployPlan with chained COMPOSE_ENV_FILES failed: %v", perr)
+		}
+		if !slices.Equal(chainedPlan.DeployFiles, []string{overrideTarget}) {
+			t.Fatalf("expected [override.yaml], got %#v", chainedPlan.DeployFiles)
+		}
+	})
+
+	// 5. 未闭合引号必须返回错误，且不得部分修改调用方 envMap
+	badEnv := filepath.Join(projDir, "bad-quote.env")
+	if err := os.WriteFile(badEnv, []byte("GOOD_KEY=after\nNOTES=\"unterminated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preservedMap := map[string]string{"EXISTING": "preserve-me"}
+	if err := parseDotEnvFileInto(badEnv, true, preservedMap); err == nil {
+		t.Fatal("expected unterminated quote error")
+	}
+	if len(preservedMap) != 1 || preservedMap["EXISTING"] != "preserve-me" {
+		t.Fatalf("expected preservedMap untouched on parse failure, got %#v", preservedMap)
+	}
 }

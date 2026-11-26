@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/blang/semver/v4 v4.0.0
+	github.com/compose-spec/compose-go/v2 v2.14.0
 	github.com/containerd/errdefs v1.0.0
 	github.com/creack/pty v1.1.24
 	github.com/distribution/reference v0.6.0

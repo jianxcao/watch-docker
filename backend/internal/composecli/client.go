@@ -1,10 +1,12 @@
 package composecli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/moby/moby/client"
@@ -1073,223 +1076,6 @@ func (c *Client) lookupRuntimeCandidate(ctx context.Context, name, projectPath, 
 	}, nil
 }
 
-func isComposeVarStart(ch byte) bool {
-	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
-}
-
-func isComposeVarChar(ch byte) bool {
-	return isComposeVarStart(ch) || (ch >= '0' && ch <= '9')
-}
-
-// expandComposeVars 按 Compose 规范展开 $$、$VAR 与 ${VAR[:][-/?/+]...}（支持嵌套与默认值语义）
-func expandComposeVars(input string, lookup func(string) (string, bool)) (string, error) {
-	var sb strings.Builder
-	i := 0
-	for i < len(input) {
-		rel := strings.IndexByte(input[i:], '$')
-		if rel < 0 {
-			sb.WriteString(input[i:])
-			break
-		}
-		sb.WriteString(input[i : i+rel])
-		i += rel + 1
-		if i >= len(input) {
-			sb.WriteByte('$')
-			break
-		}
-		ch := input[i]
-		if ch == '$' {
-			sb.WriteByte('$')
-			i++
-			continue
-		}
-		if ch == '{' {
-			depth := 1
-			j := i + 1
-			for j < len(input) && depth > 0 {
-				switch input[j] {
-				case '{':
-					depth++
-				case '}':
-					depth--
-				}
-				if depth == 0 {
-					break
-				}
-				j++
-			}
-			if depth != 0 {
-				return "", fmt.Errorf("无效的变量表达式: %s", input[i-1:])
-			}
-			expr := input[i+1 : j]
-			if expr == "" || !isComposeVarStart(expr[0]) {
-				return "", fmt.Errorf("无效的变量表达式: ${%s}", expr)
-			}
-			nameEnd := 1
-			for nameEnd < len(expr) && isComposeVarChar(expr[nameEnd]) {
-				nameEnd++
-			}
-			varName := expr[:nameEnd]
-			rest := expr[nameEnd:]
-			val, exists := lookup(varName)
-
-			if rest == "" {
-				sb.WriteString(val)
-				i = j + 1
-				continue
-			}
-
-			var op, arg string
-			for _, candidateOp := range []string{":-", "-", ":+", "+", ":?", "?"} {
-				if strings.HasPrefix(rest, candidateOp) {
-					op = candidateOp
-					arg = rest[len(candidateOp):]
-					break
-				}
-			}
-			if op == "" {
-				return "", fmt.Errorf("不支持的变量替换语法: ${%s}", expr)
-			}
-
-			switch op {
-			case ":-":
-				if !exists || val == "" {
-					expandedArg, err := expandComposeVars(arg, lookup)
-					if err != nil {
-						return "", err
-					}
-					sb.WriteString(expandedArg)
-				} else {
-					sb.WriteString(val)
-				}
-			case "-":
-				if !exists {
-					expandedArg, err := expandComposeVars(arg, lookup)
-					if err != nil {
-						return "", err
-					}
-					sb.WriteString(expandedArg)
-				} else {
-					sb.WriteString(val)
-				}
-			case ":+":
-				if exists && val != "" {
-					expandedArg, err := expandComposeVars(arg, lookup)
-					if err != nil {
-						return "", err
-					}
-					sb.WriteString(expandedArg)
-				}
-			case "+":
-				if exists {
-					expandedArg, err := expandComposeVars(arg, lookup)
-					if err != nil {
-						return "", err
-					}
-					sb.WriteString(expandedArg)
-				}
-			case ":?":
-				if !exists || val == "" {
-					msg, err := expandComposeVars(arg, lookup)
-					if err != nil {
-						return "", err
-					}
-					if msg == "" {
-						msg = "未设置或为空"
-					}
-					return "", fmt.Errorf("环境变量 %s %s", varName, msg)
-				}
-				sb.WriteString(val)
-			case "?":
-				if !exists {
-					msg, err := expandComposeVars(arg, lookup)
-					if err != nil {
-						return "", err
-					}
-					if msg == "" {
-						msg = "未设置"
-					}
-					return "", fmt.Errorf("环境变量 %s %s", varName, msg)
-				}
-				sb.WriteString(val)
-			}
-			i = j + 1
-			continue
-		}
-		if isComposeVarStart(ch) {
-			j := i + 1
-			for j < len(input) && isComposeVarChar(input[j]) {
-				j++
-			}
-			val, _ := lookup(input[i:j])
-			sb.WriteString(val)
-			i = j
-			continue
-		}
-		sb.WriteByte('$')
-	}
-	return sb.String(), nil
-}
-
-func parseDotEnvValue(raw string, envMap map[string]string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", nil
-	}
-	lookup := func(key string) (string, bool) {
-		if v, ok := os.LookupEnv(key); ok {
-			return v, true
-		}
-		v, ok := envMap[key]
-		return v, ok
-	}
-
-	if len(trimmed) >= 2 && trimmed[0] == '\'' {
-		if end := strings.IndexByte(trimmed[1:], '\''); end >= 0 {
-			return trimmed[1 : 1+end], nil
-		}
-	}
-	if len(trimmed) >= 2 && trimmed[0] == '"' {
-		var sb strings.Builder
-		escaped := false
-		for i := 1; i < len(trimmed); i++ {
-			ch := trimmed[i]
-			if escaped {
-				switch ch {
-				case 'n':
-					sb.WriteByte('\n')
-				case 'r':
-					sb.WriteByte('\r')
-				case 't':
-					sb.WriteByte('\t')
-				case '$':
-					sb.WriteString("$$")
-				default:
-					sb.WriteByte(ch)
-				}
-				escaped = false
-				continue
-			}
-			if ch == '\\' {
-				escaped = true
-				continue
-			}
-			if ch == '"' {
-				return expandComposeVars(sb.String(), lookup)
-			}
-			sb.WriteByte(ch)
-		}
-	}
-
-	for i := 0; i < len(trimmed); i++ {
-		if trimmed[i] == '#' && i > 0 && (trimmed[i-1] == ' ' || trimmed[i-1] == '\t') {
-			trimmed = strings.TrimSpace(trimmed[:i])
-			break
-		}
-	}
-	return expandComposeVars(trimmed, lookup)
-}
-
 func parseDotEnvFileInto(envPath string, requireExists bool, envMap map[string]string) error {
 	fi, err := os.Lstat(envPath)
 	if err != nil {
@@ -1309,32 +1095,22 @@ func parseDotEnvFileInto(envPath string, requireExists bool, envMap map[string]s
 	if err != nil {
 		return fmt.Errorf("读取环境文件失败: %w", err)
 	}
-	text := strings.TrimPrefix(string(raw), "\xef\xbb\xbf")
-	text = strings.ReplaceAll(text, "\r\n", "\n")
 
-	for _, line := range strings.Split(text, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "export") && len(trimmed) > len("export") && (trimmed[6] == ' ' || trimmed[6] == '\t') {
-			trimmed = strings.TrimSpace(trimmed[6:])
-		}
-		sep := strings.IndexAny(trimmed, "=:")
-		if sep < 0 {
-			continue
-		}
-		key := strings.TrimSpace(trimmed[:sep])
-		if key == "" {
-			continue
-		}
-		rawVal := trimmed[sep+1:]
-		val, perr := parseDotEnvValue(rawVal, envMap)
-		if perr != nil {
-			return fmt.Errorf("解析环境文件 %s 中的变量 %s 失败: %w", envPath, key, perr)
-		}
-		envMap[key] = val
+	next := maps.Clone(envMap)
+	if next == nil {
+		next = make(map[string]string)
 	}
+	lookup := func(key string) (string, bool) {
+		if value, ok := os.LookupEnv(key); ok {
+			return value, true
+		}
+		value, ok := next[key]
+		return value, ok
+	}
+	if err := dotenv.ParseWithFormat(bytes.NewReader(raw), envPath, next, lookup, dotenv.DotEnv); err != nil {
+		return fmt.Errorf("解析环境文件 %s 失败: %w", envPath, err)
+	}
+	maps.Copy(envMap, next)
 	return nil
 }
 

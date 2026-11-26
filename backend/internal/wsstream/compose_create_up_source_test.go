@@ -1226,3 +1226,132 @@ func TestComposeLogsSourceUsesArgsPrefixWithManagedProjectDir(t *testing.T) {
 		t.Fatalf("ComposeLogsSource args=%#v, want %#v", gotArgs, wantArgs)
 	}
 }
+
+func TestComposeDeployMultilineDotEnv(t *testing.T) {
+	for _, k := range []string{"COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "COMPOSE_DISABLE_ENV_FILE", "COMPOSE_ENV_FILES", "STAGE", "NOTES"} {
+		key := k
+		if orig, had := os.LookupEnv(key); had {
+			t.Cleanup(func() { _ = os.Setenv(key, orig) })
+			_ = os.Unsetenv(key)
+		} else {
+			t.Cleanup(func() { _ = os.Unsetenv(key) })
+		}
+	}
+
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	projDir := filepath.Join(resolvedAppDir, "multiline-ws")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composeYaml := filepath.Join(projDir, "compose.yaml")
+	prodYaml := filepath.Join(projDir, "prod.yaml")
+	envFile := filepath.Join(projDir, ".env")
+
+	origWeb := "services:\n  web:\n    image: nginx:1.25\n"
+	origWorker := "services:\n  worker:\n    image: alpine:3.20\n"
+	if err := os.WriteFile(composeYaml, []byte(origWeb), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prodYaml, []byte(origWorker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	draftCli := &composecli.Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+			return nil, nil
+		},
+	}
+
+	// 1. 多行 NOTES 中的 COMPOSE_FILE 不应生效，部署命令与原生 CLI 均只含 web
+	multilineOnly := "NOTES='example\nCOMPOSE_FILE: prod.yaml\nend'\n"
+	if err := os.WriteFile(envFile, []byte(multilineOnly), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exec1, calls1 := okStreamExecutor()
+	out1 := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+		ProjectName:    "multiline-ws",
+		ComposeFile:    composeYaml,
+		YamlContent:    "services:\n  web:\n    image: nginx:1.27\n",
+		Force:          true,
+		ComposeDir:     projDir,
+		ComposeClient:  draftCli,
+		StreamExecutor: exec1,
+	}))
+	if !strings.Contains(out1, `"status":"success"`) {
+		t.Fatalf("expected multiline NOTES deploy to succeed on compose.yaml, got: %s", out1)
+	}
+	if len(*calls1) < 1 {
+		t.Fatalf("expected executor call, got %#v", *calls1)
+	}
+	gotSvcs1 := runComposeConfigServices(t, projDir, (*calls1)[0].Args)
+	nativeSvcs1 := runComposeConfigServices(t, projDir, nil)
+	if !reflect.DeepEqual(gotSvcs1, []string{"web"}) || !reflect.DeepEqual(gotSvcs1, nativeSvcs1) {
+		t.Fatalf("services mismatch for multiline NOTES: got=%v native=%v want=[web]", gotSvcs1, nativeSvcs1)
+	}
+
+	// 2. 追加真实顶层 COMPOSE_FILE: prod.yaml 后，部署命令与原生 CLI 均只含 worker
+	if err := os.WriteFile(envFile, []byte(multilineOnly+"COMPOSE_FILE: prod.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exec2, calls2 := okStreamExecutor()
+	out2 := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+		ProjectName:    "multiline-ws",
+		ComposeFile:    prodYaml,
+		YamlContent:    "services:\n  worker:\n    image: alpine:3.21\n",
+		Force:          true,
+		ComposeDir:     projDir,
+		ComposeClient:  draftCli,
+		StreamExecutor: exec2,
+	}))
+	if !strings.Contains(out2, `"status":"success"`) {
+		t.Fatalf("expected prod.yaml deploy to succeed after top-level assignment, got: %s", out2)
+	}
+	gotSvcs2 := runComposeConfigServices(t, projDir, (*calls2)[0].Args)
+	nativeSvcs2 := runComposeConfigServices(t, projDir, nil)
+	if !reflect.DeepEqual(gotSvcs2, []string{"worker"}) || !reflect.DeepEqual(gotSvcs2, nativeSvcs2) {
+		t.Fatalf("services mismatch for top-level COMPOSE_FILE: got=%v native=%v want=[worker]", gotSvcs2, nativeSvcs2)
+	}
+
+	// 3. 未闭合引号 .env：SaveProjectPlanForDeploy 不改写已有 YAML，部署执行器调用数为 0
+	if err := os.WriteFile(envFile, []byte("COMPOSE_FILE: \"unclosed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	savedBefore, _ := os.ReadFile(prodYaml)
+	if _, err := draftCli.SaveProjectPlanForDeploy(context.Background(), "multiline-ws", prodYaml, "services:\n  worker:\n    image: alpine:3.99\n", true); err == nil {
+		t.Fatal("expected SaveProjectPlanForDeploy to fail on unterminated dotenv quote")
+	}
+	if gotAfter, _ := os.ReadFile(prodYaml); string(gotAfter) != string(savedBefore) {
+		t.Fatalf("prod.yaml overwritten despite unterminated dotenv quote: %q", string(gotAfter))
+	}
+	execBad, callsBad := okStreamExecutor()
+	outBad := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+		ProjectName:    "multiline-ws",
+		ComposeFile:    prodYaml,
+		YamlContent:    "services:\n  worker:\n    image: alpine:3.99\n",
+		Force:          true,
+		ComposeDir:     projDir,
+		ComposeClient:  draftCli,
+		StreamExecutor: execBad,
+	}))
+	if !strings.Contains(outBad, `"status":"error"`) {
+		t.Fatalf("expected error status on unterminated dotenv quote, got: %s", outBad)
+	}
+	if len(*callsBad) != 0 {
+		t.Fatalf("expected 0 executor calls on unterminated dotenv quote, got %#v", *callsBad)
+	}
+}
