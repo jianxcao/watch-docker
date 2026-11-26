@@ -749,6 +749,13 @@ func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent st
 	if err != nil {
 		return "", err
 	}
+	if err := os.MkdirAll(appRoot, 0755); err != nil {
+		return "", fmt.Errorf("创建 APP_PATH %s 失败: %w", appRoot, err)
+	}
+	appRoot, err = resolveAppRoot()
+	if err != nil {
+		return "", err
+	}
 	projectPath, err := ValidateProjectDir(filepath.Join(appRoot, name))
 	if err != nil {
 		return "", err

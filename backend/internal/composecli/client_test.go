@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -967,6 +968,179 @@ func TestResolveComposeTargetCustomRuntimeFile(t *testing.T) {
 		}
 		if _, _, err := ambiguousCli.ResolveComposeTarget(ctx, "site", prodFile); err == nil {
 			t.Fatal("expected ambiguous multiple runtime matches for same file to fail")
+		}
+	})
+}
+
+func TestSaveNewProjectCreatesMissingAppRoot(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("creates missing nested APP_PATH offline and rejects duplicate or invalid names", func(t *testing.T) {
+		baseDir := t.TempDir()
+		missingRoot := filepath.Join(baseDir, "data", "compose")
+
+		origEnv := conf.EnvCfg
+		testEnv := *origEnv
+		testEnv.APP_PATH = missingRoot
+		conf.EnvCfg = &testEnv
+		t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+		var listerCalls atomic.Int32
+		cli := &Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+				listerCalls.Add(1)
+				return nil, errors.New("docker daemon offline")
+			},
+		}
+
+		// 非法项目名失败时不得创建缺失的 APP_PATH
+		if _, err := cli.SaveNewProject(ctx, "../bad", "services: {}\n", false); err == nil {
+			t.Fatal("expected invalid project name to fail")
+		}
+		if _, statErr := os.Stat(missingRoot); !os.IsNotExist(statErr) {
+			t.Fatalf("missing APP_PATH must not be created on invalid project name, stat err=%v", statErr)
+		}
+
+		yaml1 := "services:\n  demo:\n    image: nginx:1.27\n"
+		saved, err := cli.SaveNewProject(ctx, "demo", yaml1, false)
+		if err != nil {
+			t.Fatalf("expected SaveNewProject to initialize missing APP_PATH, got %v", err)
+		}
+		if listerCalls.Load() != 0 {
+			t.Fatalf("expected 0 runtime lister calls, got %d", listerCalls.Load())
+		}
+		resolvedRoot, err := filepath.EvalSymlinks(missingRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantFile := filepath.Join(resolvedRoot, "demo", "docker-compose.yaml")
+		if saved != wantFile {
+			t.Fatalf("saved path=%q, want %q", saved, wantFile)
+		}
+		if got, err := os.ReadFile(saved); err != nil || string(got) != yaml1 {
+			t.Fatalf("saved content=%q err=%v, want %q", string(got), err, yaml1)
+		}
+
+		// 第二次同名保存应拒绝覆盖且保持首次内容不变
+		if _, err := cli.SaveNewProject(ctx, "demo", "services:\n  demo:\n    image: alpine:3.20\n", false); err == nil {
+			t.Fatal("expected duplicate SaveNewProject to fail")
+		}
+		if got, _ := os.ReadFile(saved); string(got) != yaml1 {
+			t.Fatalf("duplicate SaveNewProject overwrote file: %q", string(got))
+		}
+		if listerCalls.Load() != 0 {
+			t.Fatalf("expected 0 runtime lister calls after duplicate save, got %d", listerCalls.Load())
+		}
+
+		// 验证运行时查询失败仍阻止已有草稿的 SaveProjectPlanForDeploy
+		if _, err := cli.SaveProjectPlanForDeploy(ctx, "demo", saved, "services:\n  demo:\n    image: busybox:1.36\n", true); err == nil {
+			t.Fatal("expected SaveProjectPlanForDeploy to fail when runtime query errors")
+		}
+		if got, _ := os.ReadFile(saved); string(got) != yaml1 {
+			t.Fatalf("SaveProjectPlanForDeploy modified file despite runtime error: %q", string(got))
+		}
+	})
+
+	t.Run("symlinked APP_PATH with missing leaf resolves cleanly", func(t *testing.T) {
+		baseDir := t.TempDir()
+		realParent := filepath.Join(baseDir, "real")
+		linkParent := filepath.Join(baseDir, "link")
+		if err := os.MkdirAll(realParent, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realParent, linkParent); err != nil {
+			t.Fatal(err)
+		}
+
+		origEnv := conf.EnvCfg
+		testEnv := *origEnv
+		testEnv.APP_PATH = filepath.Join(linkParent, "compose-root")
+		conf.EnvCfg = &testEnv
+		t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+		cli := &Client{}
+		saved, err := cli.SaveNewProject(ctx, "sym-demo", "services:\n  app:\n    image: alpine:3.20\n", false)
+		if err != nil {
+			t.Fatalf("expected symlinked APP_PATH creation to succeed: %v", err)
+		}
+		resolvedParent, _ := filepath.EvalSymlinks(realParent)
+		wantPrefix := filepath.Join(resolvedParent, "compose-root", "sym-demo", "docker-compose.yaml")
+		if saved != wantPrefix {
+			t.Fatalf("saved path=%q, want canonical %q", saved, wantPrefix)
+		}
+	})
+
+	t.Run("regular file APP_PATH fails with path error", func(t *testing.T) {
+		baseDir := t.TempDir()
+		fileRoot := filepath.Join(baseDir, "not-a-dir")
+		if err := os.WriteFile(fileRoot, []byte("blocker"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		origEnv := conf.EnvCfg
+		testEnv := *origEnv
+		testEnv.APP_PATH = fileRoot
+		conf.EnvCfg = &testEnv
+		t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+		cli := &Client{}
+		_, err := cli.SaveNewProject(ctx, "demo", "services: {}\n", false)
+		if err == nil || !strings.Contains(err.Error(), "not-a-dir") {
+			t.Fatalf("expected error mentioning %q, got %v", fileRoot, err)
+		}
+	})
+
+	t.Run("concurrent duplicate SaveNewProject yields exact one winner", func(t *testing.T) {
+		baseDir := t.TempDir()
+		missingRoot := filepath.Join(baseDir, "concurrent-root")
+
+		origEnv := conf.EnvCfg
+		testEnv := *origEnv
+		testEnv.APP_PATH = missingRoot
+		conf.EnvCfg = &testEnv
+		t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+		cli := &Client{}
+		yamlA := "services:\n  a:\n    image: nginx:1.25\n"
+		yamlB := "services:\n  b:\n    image: nginx:1.27\n"
+
+		type res struct {
+			path string
+			yaml string
+			err  error
+		}
+		start := make(chan struct{})
+		results := make(chan res, 2)
+		var wg sync.WaitGroup
+		for _, y := range []string{yamlA, yamlB} {
+			payload := y
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				p, err := cli.SaveNewProject(ctx, "race-demo", payload, false)
+				results <- res{path: p, yaml: payload, err: err}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+
+		var winners, losers int
+		var winnerRes res
+		for r := range results {
+			if r.err == nil {
+				winners++
+				winnerRes = r
+			} else {
+				losers++
+			}
+		}
+		if winners != 1 || losers != 1 {
+			t.Fatalf("expected 1 winner and 1 loser, got winners=%d losers=%d", winners, losers)
+		}
+		if got, err := os.ReadFile(winnerRes.path); err != nil || string(got) != winnerRes.yaml {
+			t.Fatalf("final file content=%q err=%v, want %q", string(got), err, winnerRes.yaml)
 		}
 	})
 }
