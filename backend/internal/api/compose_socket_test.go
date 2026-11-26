@@ -72,6 +72,15 @@ func readRecordedDockerCalls(t *testing.T, logPath string) []recordedDockerCall 
 
 func TestManagedComposeCardWebSockets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	for _, k := range []string{"COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "COMPOSE_DISABLE_ENV_FILE", "COMPOSE_ENV_FILES"} {
+		key := k
+		if orig, had := os.LookupEnv(key); had {
+			t.Cleanup(func() { _ = os.Setenv(key, orig) })
+			_ = os.Unsetenv(key)
+		} else {
+			t.Cleanup(func() { _ = os.Unsetenv(key) })
+		}
+	}
 
 	tmpRoot := t.TempDir()
 	appDir := filepath.Join(tmpRoot, "apps")
@@ -214,7 +223,128 @@ func TestManagedComposeCardWebSockets(t *testing.T) {
 		})
 	}
 
+	t.Run("draft card uses dotenv COMPOSE_FILE list", func(t *testing.T) {
+		draftDir := filepath.Join(resolvedAppDir, "draft-site")
+		if err := os.MkdirAll(draftDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		draftCompose := filepath.Join(draftDir, "compose.yaml")
+		draftProd := filepath.Join(draftDir, "prod.yaml")
+		draftOv := filepath.Join(draftDir, "site-override.yaml")
+		origDraftCompose := "services:\n  web:\n    image: nginx:1.25\n"
+		if err := os.WriteFile(draftCompose, []byte(origDraftCompose), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(draftProd, []byte("services:\n  production:\n    image: nginx:1.26\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(draftOv, []byte("services:\n  production:\n    restart: always\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(draftDir, ".env"), []byte("COMPOSE_FILE=prod.yaml:site-override.yaml\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Setenv("COMPOSE_PATH_SEPARATOR", ":")
+		prevLister := cli.RuntimeProjectsLister
+		cli.RuntimeProjectsLister = func(ctx context.Context) ([]composecli.ListOutput, error) {
+			return nil, nil
+		}
+		defer func() { cli.RuntimeProjectsLister = prevLister }()
+
+		cards, lerr := cli.ListProjects(context.Background())
+		if lerr != nil {
+			t.Fatalf("ListProjects failed: %v", lerr)
+		}
+		var targetCard composecli.ComposeProject
+		foundCard := false
+		for _, card := range cards {
+			if card.Name == "draft-site" {
+				targetCard = card
+				foundCard = true
+				break
+			}
+		}
+		if !foundCard || targetCard.ComposeFile != draftCompose {
+			t.Fatalf("expected draft-site card pointing to %q, got %#v (cards=%#v)", draftCompose, targetCard, cards)
+		}
+
+		draftPrefix := []string{"-f", draftProd, "-f", draftOv}
+		wantDraftUpArgs := append(append([]string{"compose"}, draftPrefix...), "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate")
+		wantDraftPsArgs := append(append([]string{"compose"}, draftPrefix...), "ps")
+		wantDraftPullArgs := append(append([]string{"compose"}, draftPrefix...), "--ansi", "always", "pull")
+
+		upLog := filepath.Join(t.TempDir(), "draft-up.log")
+		installFakeDockerForCardTest(t, upLog)
+		uUp := wsBase + "/api/v1/compose/up/" + url.PathEscape(targetCard.Name) + "/ws?composeFile=" + url.QueryEscape(targetCard.ComposeFile)
+		upConn, _, derr := websocket.DefaultDialer.Dial(uUp, nil)
+		if derr != nil {
+			t.Fatalf("dial draft up ws failed: %v", derr)
+		}
+		_ = upConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var upFrames []string
+		for {
+			_, msg, rerr := upConn.ReadMessage()
+			if len(msg) > 0 {
+				upFrames = append(upFrames, string(msg))
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		_ = upConn.Close()
+
+		upCalls := readRecordedDockerCalls(t, upLog)
+		if len(upCalls) != 2 {
+			t.Fatalf("expected 2 docker calls (up + ps) for draft card, got %d: %#v (frames=%q)", len(upCalls), upCalls, strings.Join(upFrames, ""))
+		}
+		if upCalls[0].pwd != draftDir || !slices.Equal(upCalls[0].args, wantDraftUpArgs) {
+			t.Fatalf("draft up call mismatch: got=(pwd=%q args=%#v) want=(pwd=%q args=%#v)", upCalls[0].pwd, upCalls[0].args, draftDir, wantDraftUpArgs)
+		}
+		if upCalls[1].pwd != draftDir || !slices.Equal(upCalls[1].args, wantDraftPsArgs) {
+			t.Fatalf("draft ps call mismatch: got=(pwd=%q args=%#v) want=(pwd=%q args=%#v)", upCalls[1].pwd, upCalls[1].args, draftDir, wantDraftPsArgs)
+		}
+
+		pullLog := filepath.Join(t.TempDir(), "draft-pull.log")
+		installFakeDockerForCardTest(t, pullLog)
+		uPull := wsBase + "/api/v1/compose/pull/" + url.PathEscape(targetCard.Name) + "/ws?composeFile=" + url.QueryEscape(targetCard.ComposeFile)
+		pullConn, _, derr := websocket.DefaultDialer.Dial(uPull, nil)
+		if derr != nil {
+			t.Fatalf("dial draft pull ws failed: %v", derr)
+		}
+		_ = pullConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var pullFrames []string
+		for {
+			_, msg, rerr := pullConn.ReadMessage()
+			if len(msg) > 0 {
+				pullFrames = append(pullFrames, string(msg))
+			}
+			if calls := readRecordedDockerCalls(t, pullLog); len(calls) > 0 {
+				_ = pullConn.Close()
+				break
+			}
+			if rerr != nil {
+				_ = pullConn.Close()
+				break
+			}
+		}
+		pullCalls := readRecordedDockerCalls(t, pullLog)
+		if len(pullCalls) != 1 || pullCalls[0].pwd != draftDir || !slices.Equal(pullCalls[0].args, wantDraftPullArgs) {
+			t.Fatalf("draft pull call mismatch: calls=%#v want=(pwd=%q args=%#v) frames=%q", pullCalls, draftDir, wantDraftPullArgs, strings.Join(pullFrames, ""))
+		}
+
+		// 显式编辑未列入 COMPOSE_FILE 的 compose.yaml 仍报成员冲突且不改写磁盘原文件
+		if _, serr := cli.SaveProjectPlanForDeploy(context.Background(), "draft-site", draftCompose, "services:\n  tampered:\n    image: busybox:1.36\n", true); serr == nil {
+			t.Fatal("expected SaveProjectPlanForDeploy conflict when explicitly editing compose.yaml absent from COMPOSE_FILE")
+		}
+		if gotBytes, rerr := os.ReadFile(draftCompose); rerr != nil || string(gotBytes) != origDraftCompose {
+			t.Fatalf("compose.yaml modified despite membership conflict: err=%v content=%q", rerr, string(gotBytes))
+		}
+	})
+
 	t.Run("failed card requests execute zero docker commands", func(t *testing.T) {
+		prevLister := cli.RuntimeProjectsLister
+		defer func() { cli.RuntimeProjectsLister = prevLister }()
 		extFile := filepath.Join(tmpRoot, "external", "compose.yaml")
 		if err := os.MkdirAll(filepath.Dir(extFile), 0o755); err != nil {
 			t.Fatal(err)

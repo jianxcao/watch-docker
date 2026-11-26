@@ -1425,3 +1425,97 @@ func TestResolveManagedCardPlan(t *testing.T) {
 		t.Fatal("expected runtime query error to fail")
 	}
 }
+
+func TestManagedDraftCardUsesEnvFiles(t *testing.T) {
+	clearDotEnvTestProcessVars(t)
+	ctx := context.Background()
+
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	// 1. site 同时拥有 compose.yaml、prod.yaml 与声明 COMPOSE_FILE=prod.yaml 的 .env：
+	// 从 ListProjects 返回的卡片直接调用 ResolveManagedCardPlan，应采用 prod.yaml
+	siteDir := filepath.Join(resolvedAppDir, "site")
+	if err := os.MkdirAll(siteDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composeFile := filepath.Join(siteDir, "compose.yaml")
+	prodFile := filepath.Join(siteDir, "prod.yaml")
+	otherFile := filepath.Join(siteDir, "other.yaml")
+	for _, item := range []struct {
+		path    string
+		content string
+	}{
+		{path: composeFile, content: "services:\n  web:\n    image: nginx:1.25\n"},
+		{path: prodFile, content: "services:\n  production:\n    image: nginx:1.25\n"},
+		{path: otherFile, content: "services:\n  other:\n    image: alpine:3.20\n"},
+	} {
+		if err := os.WriteFile(item.path, []byte(item.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(siteDir, ".env"), []byte("COMPOSE_FILE=prod.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			return nil, nil
+		},
+	}
+
+	cards, err := cli.ListProjects(ctx)
+	if err != nil || len(cards) != 1 {
+		t.Fatalf("ListProjects() = %v, %v", cards, err)
+	}
+	if cards[0].Name != "site" || cards[0].ComposeFile != composeFile {
+		t.Fatalf("unexpected draft card from ListProjects: %#v (want ComposeFile=%q)", cards[0], composeFile)
+	}
+	plan, err := cli.ResolveManagedCardPlan(ctx, cards[0].Name, cards[0].ComposeFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.ComposeArgsPrefix(); !slices.Equal(got, []string{"-f", prodFile}) {
+		t.Fatalf("ComposeArgsPrefix() = %v, want %v", got, []string{"-f", prodFile})
+	}
+
+	// 传入不在 COMPOSE_FILE 中的自定义非标准文件名，依然必须报成员冲突
+	if _, err := cli.ResolveManagedCardPlan(ctx, "site", otherFile); err == nil {
+		t.Fatal("expected conflict when custom non-primary file is absent from .env COMPOSE_FILE")
+	}
+
+	// 2. 无 .env COMPOSE_FILE 时，双标准主文件目录按各卡片选中的主文件部署
+	dualDir := filepath.Join(resolvedAppDir, "dual-no-env")
+	if err := os.MkdirAll(dualDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dualCompose := filepath.Join(dualDir, "compose.yaml")
+	dualLegacy := filepath.Join(dualDir, "docker-compose.yml")
+	for _, f := range []string{dualCompose, dualLegacy} {
+		if err := os.WriteFile(f, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, selected := range []string{dualCompose, dualLegacy} {
+		dualPlan, derr := cli.ResolveManagedCardPlan(ctx, "dual-no-env", selected)
+		if derr != nil {
+			t.Fatalf("dual-no-env ResolveManagedCardPlan(%q) failed: %v", selected, derr)
+		}
+		if !slices.Equal(dualPlan.ComposeArgsPrefix(), []string{"-f", selected}) {
+			t.Fatalf("dual-no-env prefix=%v, want [-f %s]", dualPlan.ComposeArgsPrefix(), selected)
+		}
+	}
+}

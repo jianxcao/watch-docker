@@ -1273,24 +1273,35 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 	}
 
 	// Tier 2 + Tier 3: 复用无运行时记录时的草稿部署文件解析逻辑
-	plan, err := resolveDraftDeployPlan(projectPath, name, cleanExplicitFile, forWrite)
+	plan, err := resolveDraftDeployPlan(projectPath, name, cleanExplicitFile, draftSelectionExplicit, forWrite)
 	if err != nil {
 		return DeployProjectPlan{}, false, err
 	}
 	return plan, true, nil
 }
 
-func resolveDraftDeployPlan(projectPath, name, cleanExplicitFile string, forWrite bool) (DeployProjectPlan, error) {
+type draftSelectionSource uint8
+
+const (
+	draftSelectionExplicit draftSelectionSource = iota
+	draftSelectionCard
+)
+
+func resolveDraftDeployPlan(projectPath, name, cleanExplicitFile string, source draftSelectionSource, forWrite bool) (DeployProjectPlan, error) {
 	// Tier 2: 草稿目录若在 .env（或进程环境）中声明了 COMPOSE_FILE，遵循其文件列表与顺序
 	envFiles, hasEnvFiles, err := resolveDraftEnvComposeFiles(projectPath, name)
 	if err != nil {
 		return DeployProjectPlan{}, err
 	}
 	if hasEnvFiles {
-		if cleanExplicitFile != "" && !slices.Contains(envFiles, cleanExplicitFile) {
+		adoptEnvFilesFromCard := !forWrite && source == draftSelectionCard && cleanExplicitFile != "" && isPrimaryComposeFileName(filepath.Base(cleanExplicitFile))
+		if cleanExplicitFile != "" && !adoptEnvFilesFromCard && !slices.Contains(envFiles, cleanExplicitFile) {
 			return DeployProjectPlan{}, fmt.Errorf("目标配置文件 %s 与 COMPOSE_FILE 配置文件列表 [%s] 冲突", cleanExplicitFile, strings.Join(envFiles, ", "))
 		}
 		savedFile := cleanExplicitFile
+		if adoptEnvFilesFromCard {
+			savedFile = ""
+		}
 		if forWrite && savedFile == "" {
 			if len(envFiles) > 1 {
 				return DeployProjectPlan{}, fmt.Errorf("COMPOSE_FILE 包含多个配置文件 [%s]，请指定 composeFile", strings.Join(envFiles, ", "))
@@ -1456,7 +1467,7 @@ func (c *Client) ResolveManagedCardPlan(ctx context.Context, projectName, compos
 		return DeployProjectPlan{}, fmt.Errorf("草稿项目名称 %s 与目录名称 %s 不匹配", trimmedName, dirName)
 	}
 
-	plan, err := resolveDraftDeployPlan(projectDir, dirName, selectedFiles[0], false)
+	plan, err := resolveDraftDeployPlan(projectDir, dirName, selectedFiles[0], draftSelectionCard, false)
 	if err != nil {
 		return DeployProjectPlan{}, err
 	}
