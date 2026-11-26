@@ -635,6 +635,13 @@ func (c *Client) CreateProject(ctx context.Context, composeFile string, isRuning
 
 // SaveNewProject 保存新的 Compose 项目（严格校验项目名称及位于 APP_PATH 内，拒绝符号链接）
 func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent string, force bool) (string, error) {
+	return c.SaveProject(ctx, name, "", yamlContent, force)
+}
+
+// SaveProject 保存或更新指定 Compose 项目的配置文件，并返回实际写入的文件路径。
+// 对已有项目提供 composeFile 时会校验其位于 APP_PATH 内、存在且归属目标项目；
+// 省略 composeFile 时若已有目录仅有一份合法配置则直接写入，若存在多份则在写入前报错。
+func (c *Client) SaveProject(ctx context.Context, name string, composeFile string, yamlContent string, force bool) (string, error) {
 	if err := ValidateProjectName(name); err != nil {
 		return "", err
 	}
@@ -648,37 +655,99 @@ func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent st
 		return "", err
 	}
 
+	dirExists := false
 	if stat, err := os.Lstat(projectPath); err == nil {
 		if stat.Mode()&os.ModeSymlink != 0 || !stat.IsDir() {
 			return "", fmt.Errorf("%w: %s", ErrSymlinkPath, projectPath)
+		}
+		dirExists = true
+	} else if !os.IsNotExist(err) {
+		return "", errors.New("检查项目目录失败: " + err.Error())
+	}
+
+	trimmedFile := strings.TrimSpace(composeFile)
+	var targetFile string
+	switch {
+	case trimmedFile != "":
+		fileProjectDir, cleanFile, err := ValidateComposeFilePath(trimmedFile)
+		if err != nil {
+			return "", err
+		}
+		if fileProjectDir != projectPath {
+			return "", fmt.Errorf("compose 文件不属于项目 %s", name)
+		}
+		if !dirExists {
+			return "", errors.New("项目目录不存在")
 		}
 		if !force {
 			logger.Logger.Warn("项目已存在，需要 force=true 才能覆盖", zap.String("path", projectPath))
 			return "", errors.New("项目已存在，如需覆盖请使用强制模式")
 		}
-		logger.Logger.Info("项目已存在，将覆盖 compose 文件", zap.String("path", projectPath))
-	} else if !os.IsNotExist(err) {
-		return "", errors.New("检查项目目录失败: " + err.Error())
-	} else {
+		fi, err := os.Lstat(cleanFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", errors.New("compose 文件不存在")
+			}
+			return "", errors.New("检查 Compose 文件失败: " + err.Error())
+		}
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+			return "", fmt.Errorf("%w: %s", ErrSymlinkPath, cleanFile)
+		}
+		logger.Logger.Info("项目已存在，将覆盖指定 compose 文件", zap.String("path", cleanFile))
+		targetFile = cleanFile
+	case dirExists:
+		if !force {
+			logger.Logger.Warn("项目已存在，需要 force=true 才能覆盖", zap.String("path", projectPath))
+			return "", errors.New("项目已存在，如需覆盖请使用强制模式")
+		}
+		var validFiles []string
+		for _, cf := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+			candidate := filepath.Join(projectPath, cf)
+			fi, err := os.Lstat(candidate)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return "", errors.New("检查 Compose 文件失败: " + err.Error())
+			}
+			if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+				return "", fmt.Errorf("%w: %s", ErrSymlinkPath, candidate)
+			}
+			validFiles = append(validFiles, candidate)
+		}
+		if len(validFiles) > 1 {
+			return "", errors.New("项目目录存在多个 Compose 配置文件，请指定 composeFile")
+		}
+		if len(validFiles) == 1 {
+			_, cleanFile, err := ValidateComposeFilePath(validFiles[0])
+			if err != nil {
+				return "", err
+			}
+			targetFile = cleanFile
+		} else {
+			targetFile = filepath.Join(projectPath, "docker-compose.yaml")
+		}
+		logger.Logger.Info("项目已存在，将覆盖 compose 文件", zap.String("path", targetFile))
+	default:
 		if err := os.MkdirAll(projectPath, 0755); err != nil {
 			logger.Logger.Error("创建项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
 			return "", errors.New("创建项目目录失败: " + err.Error())
 		}
+		targetFile = filepath.Join(projectPath, "docker-compose.yaml")
 	}
 
-	composeFile := c.findComposeFileInDir(projectPath)
-	if fi, err := os.Lstat(composeFile); err == nil && (fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular()) {
-		return "", fmt.Errorf("%w: %s", ErrSymlinkPath, composeFile)
+	if fi, err := os.Lstat(targetFile); err == nil && (fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular()) {
+		return "", fmt.Errorf("%w: %s", ErrSymlinkPath, targetFile)
 	} else if err != nil && !os.IsNotExist(err) {
 		return "", errors.New("检查 Compose 文件失败: " + err.Error())
 	}
 
-	if err := os.WriteFile(composeFile, []byte(yamlContent), 0644); err != nil {
-		logger.Logger.Error("写入 Compose 文件失败", zap.String("file", composeFile), logger.ZapErr(err))
+	if err := os.WriteFile(targetFile, []byte(yamlContent), 0644); err != nil {
+		logger.Logger.Error("写入 Compose 文件失败", zap.String("file", targetFile), logger.ZapErr(err))
 		return "", errors.New("写入 Compose 文件失败: " + err.Error())
 	}
 
-	return composeFile, nil
+	return targetFile, nil
 }
 
 // GetProjectYaml 读取项目的 compose YAML 文件内容（严格校验位于 APP_PATH 内且拒绝符号链接）

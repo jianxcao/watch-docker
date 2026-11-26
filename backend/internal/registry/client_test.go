@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -547,5 +548,235 @@ func TestFetchDigestExplicitHTTPAndPortScoping(t *testing.T) {
 		if req.Scheme == "http" {
 			t.Fatalf("expected zero http requests for unconfigured public domain, got %#v", reqs4)
 		}
+	}
+}
+
+func TestIndexManifestARMVariantMatchingAndMirrorFallback(t *testing.T) {
+	original := conf.EnvCfg
+	testEnv := *original
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		conf.EnvCfg = original
+	})
+	origCfg := config.Get()
+	t.Cleanup(func() {
+		if origCfg != nil {
+			config.SetGlobal(origCfg)
+		}
+	})
+
+	v6ConfigBody := `{"architecture":"arm","variant":"v6","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`
+	v6CfgSum := sha256.Sum256([]byte(v6ConfigBody))
+	v6CfgDigest := "sha256:" + hex.EncodeToString(v6CfgSum[:])
+	v6Manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"` + v6CfgDigest + `","size":` + fmt.Sprintf("%d", len(v6ConfigBody)) + `},"layers":[]}`
+	v6Sum := sha256.Sum256([]byte(v6Manifest))
+	v6Digest := "sha256:" + hex.EncodeToString(v6Sum[:])
+
+	v7ConfigBody := `{"architecture":"arm","variant":"v7","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`
+	v7CfgSum := sha256.Sum256([]byte(v7ConfigBody))
+	v7CfgDigest := "sha256:" + hex.EncodeToString(v7CfgSum[:])
+	v7Manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"` + v7CfgDigest + `","size":` + fmt.Sprintf("%d", len(v7ConfigBody)) + `},"layers":[]}`
+	v7Sum := sha256.Sum256([]byte(v7Manifest))
+	v7Digest := "sha256:" + hex.EncodeToString(v7Sum[:])
+
+	// v7 放在首位，确保匹配逻辑不会因为顺序优先而误选 v7
+	v7OnlyIndex := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + v7Digest + `","size":123,"platform":{"os":"linux","architecture":"arm","variant":"v7"}}]}`
+	v7OnlyIndexSum := sha256.Sum256([]byte(v7OnlyIndex))
+	v7OnlyIndexDigest := "sha256:" + hex.EncodeToString(v7OnlyIndexSum[:])
+
+	bothIndex := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + v7Digest + `","size":123,"platform":{"os":"linux","architecture":"arm","variant":"v7"}},{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + v6Digest + `","size":123,"platform":{"os":"linux","architecture":"arm","variant":"v6"}}]}`
+	bothIndexSum := sha256.Sum256([]byte(bothIndex))
+	bothIndexDigest := "sha256:" + hex.EncodeToString(bothIndexSum[:])
+
+	v6OnlyIndex := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + v6Digest + `","size":123,"platform":{"os":"linux","architecture":"arm","variant":"v6"}}]}`
+	v6OnlyIndexSum := sha256.Sum256([]byte(v6OnlyIndex))
+	v6OnlyIndexDigest := "sha256:" + hex.EncodeToString(v6OnlyIndexSum[:])
+
+	blobsByDigest := map[string]string{
+		v6CfgDigest: v6ConfigBody,
+		v7CfgDigest: v7ConfigBody,
+	}
+
+	serveRegistry := func(indexBody, indexDigest string, manifestsByDigest map[string]string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v2/" || r.URL.Path == "/v2" {
+				w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			const blobPrefix = "/v2/library/armapp/blobs/"
+			if strings.HasPrefix(r.URL.Path, blobPrefix) {
+				ref := strings.TrimPrefix(r.URL.Path, blobPrefix)
+				if blob, ok := blobsByDigest[ref]; ok {
+					w.Header().Set("Content-Type", "application/vnd.oci.image.config.v1+json")
+					w.Header().Set("Docker-Content-Digest", ref)
+					_, _ = w.Write([]byte(blob))
+					return
+				}
+			}
+			const prefix = "/v2/library/armapp/manifests/"
+			if !strings.HasPrefix(r.URL.Path, prefix) {
+				http.NotFound(w, r)
+				return
+			}
+			ref := strings.TrimPrefix(r.URL.Path, prefix)
+			if childBody, ok := manifestsByDigest[ref]; ok {
+				w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+				w.Header().Set("Docker-Content-Digest", ref)
+				if r.Method == http.MethodHead {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				_, _ = w.Write([]byte(childBody))
+				return
+			}
+			w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+			w.Header().Set("Docker-Content-Digest", indexDigest)
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			_, _ = w.Write([]byte(indexBody))
+		}
+	}
+
+	var m1Payload, m1Digest, m2Payload, m2Digest, upPayload, upDigest atomic.Value
+	childMap := map[string]string{v6Digest: v6Manifest, v7Digest: v7Manifest}
+
+	mirror1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := m1Payload.Load().(string)
+		d, _ := m1Digest.Load().(string)
+		serveRegistry(p, d, childMap)(w, r)
+	}))
+	defer mirror1.Close()
+
+	mirror2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := m2Payload.Load().(string)
+		d, _ := m2Digest.Load().(string)
+		serveRegistry(p, d, childMap)(w, r)
+	}))
+	defer mirror2.Close()
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := upPayload.Load().(string)
+		d, _ := upDigest.Load().(string)
+		serveRegistry(p, d, childMap)(w, r)
+	}))
+	defer upstream.Close()
+
+	setupClient := func(t *testing.T, withMirrors bool) *Client {
+		t.Helper()
+		dir := t.TempDir()
+		conf.EnvCfg.CONFIG_PATH = dir
+		conf.EnvCfg.CONFIG_FILE = "config.yaml"
+		cfgPath := filepath.Join(dir, "config.yaml")
+		yamlCfg := "logging:\n  level: info\n"
+		if withMirrors {
+			yamlCfg = "registry:\n  mirrors:\n    - name: m1\n      url: " + mirror1.URL + "\n      enabled: true\n    - name: m2\n      url: " + mirror2.URL + "\n      enabled: true\n"
+		}
+		if err := os.WriteFile(cfgPath, []byte(yamlCfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.Load(cfgPath); err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+
+		upstreamAddr := upstream.Listener.Addr().String()
+		tr := upstream.Client().Transport.(*http.Transport).Clone()
+		if tr.TLSClientConfig != nil {
+			tr.TLSClientConfig = tr.TLSClientConfig.Clone()
+			tr.TLSClientConfig.InsecureSkipVerify = true
+		}
+		dialer := &net.Dialer{Timeout: 3 * time.Second}
+		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err == nil && (host == "index.docker.io" || host == "registry-1.docker.io") {
+				return dialer.DialContext(ctx, network, upstreamAddr)
+			}
+			return dialer.DialContext(ctx, network, addr)
+		}
+		c := New()
+		c.httpTransport = tr
+		return c
+	}
+
+	// 1. 原站仅有 linux/arm/v7，查询 linux/arm/v6（NeedConfigDigest=false 与 true 均须返回失败，包含平台信息）
+	upPayload.Store(v7OnlyIndex)
+	upDigest.Store(v7OnlyIndexDigest)
+	cNoMirrors := setupClient(t, false)
+	for _, needCfg := range []bool{false, true} {
+		tag := "armapp:v7only-false"
+		if needCfg {
+			tag = "armapp:v7only-true"
+		}
+		q := DigestQuery{ImageRef: tag, OS: "linux", Arch: "arm", Variant: "v6", NeedConfigDigest: needCfg}
+		res := cNoMirrors.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q}, false, false, 1)[q.Key()]
+		if res.Error == nil {
+			t.Fatalf("needConfig=%v: expected missing linux/arm/v6 error, got %#v", needCfg, res)
+		}
+		if !strings.Contains(res.Error.Error(), "linux/arm/v6") {
+			t.Fatalf("needConfig=%v: expected error mentioning linux/arm/v6, got %q", needCfg, res.Error.Error())
+		}
+		if res.ChildDigest != "" {
+			t.Fatalf("needConfig=%v: expected empty ChildDigest on missing variant, got %#v", needCfg, res)
+		}
+	}
+
+	// 2. 索引同时包含 v7 与 v6 时，按请求的变体精确返回
+	upPayload.Store(bothIndex)
+	upDigest.Store(bothIndexDigest)
+	qV6 := DigestQuery{ImageRef: "armapp:both", OS: "linux", Arch: "arm", Variant: "v6", NeedConfigDigest: true}
+	qV7 := DigestQuery{ImageRef: "armapp:both", OS: "linux", Arch: "arm", Variant: "v7", NeedConfigDigest: false}
+	batch := cNoMirrors.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qV6, qV7}, false, false, 2)
+	if got := batch[qV6.Key()]; got.Error != nil || got.IndexDigest != bothIndexDigest || got.ChildDigest != v6Digest || got.ConfigDigest != v6CfgDigest {
+		t.Fatalf("v6 exact match mismatch: %#v (err=%v)", got, got.Error)
+	}
+	if got := batch[qV7.Key()]; got.Error != nil || got.IndexDigest != bothIndexDigest || got.ChildDigest != v7Digest {
+		t.Fatalf("v7 exact match mismatch: %#v", got)
+	}
+
+	// 3. mirror1 仅含 v7、mirror2 含 v6 时，跳过 mirror1 并返回 mirror2 的 v6 子摘要（覆盖 NeedConfigDigest=false 与 true）
+	m1Payload.Store(v7OnlyIndex)
+	m1Digest.Store(v7OnlyIndexDigest)
+	m2Payload.Store(v6OnlyIndex)
+	m2Digest.Store(v6OnlyIndexDigest)
+	upPayload.Store(v7OnlyIndex)
+	upDigest.Store(v7OnlyIndexDigest)
+	cWithMirrors := setupClient(t, true)
+	for _, needCfg := range []bool{false, true} {
+		tag := "armapp:mirror-false"
+		if needCfg {
+			tag = "armapp:mirror-true"
+		}
+		q := DigestQuery{ImageRef: tag, OS: "linux", Arch: "arm", Variant: "v6", NeedConfigDigest: needCfg}
+		res := cWithMirrors.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q}, false, false, 1)[q.Key()]
+		if res.Error != nil || res.IndexDigest != v6OnlyIndexDigest || res.ChildDigest != v6Digest {
+			t.Fatalf("needConfig=%v: expected mirror2 v6 digest, got %#v", needCfg, res)
+		}
+		if needCfg && res.ConfigDigest != v6CfgDigest {
+			t.Fatalf("needConfig=true: expected v6 config digest %q, got %#v", v6CfgDigest, res)
+		}
+	}
+
+	// 4. 所有 mirror 和原站均缺少 v6 时，无论 NeedConfigDigest 为何值均报错
+	m2Payload.Store(v7OnlyIndex)
+	m2Digest.Store(v7OnlyIndexDigest)
+	for _, needCfg := range []bool{false, true} {
+		tag := "armapp:allmiss-false"
+		if needCfg {
+			tag = "armapp:allmiss-true"
+		}
+		q := DigestQuery{ImageRef: tag, OS: "linux", Arch: "arm", Variant: "v6", NeedConfigDigest: needCfg}
+		res := cWithMirrors.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q}, false, false, 1)[q.Key()]
+		if res.Error == nil || !strings.Contains(res.Error.Error(), "linux/arm/v6") {
+			t.Fatalf("needConfig=%v: expected linux/arm/v6 error when all mirrors + upstream lack v6, got %#v", needCfg, res)
+		}
+	}
+
+	// 5. 省略变体（Variant=""）仍能按 OS + Arch 回退匹配 v7
+	qOmitVar := DigestQuery{ImageRef: "armapp:omitvar", OS: "linux", Arch: "arm", Variant: "", NeedConfigDigest: false}
+	resOmit := cWithMirrors.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qOmitVar}, false, false, 1)[qOmitVar.Key()]
+	if resOmit.Error != nil || resOmit.IndexDigest != v7OnlyIndexDigest || resOmit.ChildDigest != v7Digest {
+		t.Fatalf("omitted variant fallback mismatch: %#v", resOmit)
 	}
 }

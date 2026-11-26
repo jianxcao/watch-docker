@@ -73,10 +73,12 @@ import {
 import { useSettingStore } from '@/store/setting'
 import TermView from '@/components/Term/TermView.vue'
 import type { TermConfig } from '@/components/Term/TermView.vue'
+import { buildComposeCreateUpPayload, type ComposeCreateUpPayloadInput } from './composeCreateUpPayload'
 
 interface Props {
   projectName?: string
   yamlContent?: string
+  composeFile?: string
   force?: boolean // 是否强制覆盖已存在的项目
 }
 
@@ -128,6 +130,7 @@ const wsUrl = computed(() => {
 // 终端就绪与消息缓冲（避免 @ready 前日志丢失）
 const isTermReady = ref(false)
 const pendingChunks: Array<string | Uint8Array> = []
+const pendingRequest = ref<ComposeCreateUpPayloadInput | null>(null)
 
 const appendTermChunk = (chunk: string | Uint8Array) => {
   if (!isTermReady.value || !termRef.value) {
@@ -206,15 +209,17 @@ const { send, open, close } = useWebSocket(wsUrl, {
     if (_ws) {
       _ws.binaryType = 'arraybuffer'
     }
-    // 发送创建请求
-    if (props.projectName && props.yamlContent) {
-      send(
-        JSON.stringify({
-          name: props.projectName,
+    // 发送创建请求（优先使用 start() 时快照的请求参数，避免异步建连期间属性漂移）
+    const req = pendingRequest.value ?? (props.projectName && props.yamlContent
+      ? {
+          projectName: props.projectName,
           yamlContent: props.yamlContent,
-          force: props.force || false, // 默认不强制覆盖，由调用方控制
-        }),
-      )
+          composeFile: props.composeFile,
+          force: props.force || false,
+        }
+      : null)
+    if (req?.projectName && req?.yamlContent) {
+      send(JSON.stringify(buildComposeCreateUpPayload(req)))
     }
   },
   onError: () => {
@@ -246,6 +251,12 @@ const start = () => {
     return
   }
 
+  pendingRequest.value = {
+    projectName: props.projectName,
+    yamlContent: props.yamlContent,
+    composeFile: props.composeFile,
+    force: props.force || false,
+  }
   pendingChunks.length = 0
   status.value = 'connecting'
   modalVisible.value = true
@@ -258,6 +269,7 @@ const start = () => {
 const reset = () => {
   status.value = 'idle'
   isTermReady.value = false
+  pendingRequest.value = null
   pendingChunks.length = 0
   modalVisible.value = false
   termRef.value?.clear()

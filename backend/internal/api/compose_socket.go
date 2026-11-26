@@ -39,6 +39,7 @@ func (s *Server) handleComposeCreateAndUpWebSocketCustom(c *gin.Context, appPath
 	var req struct {
 		Name        string `json:"name"`
 		YamlContent string `json:"yamlContent"`
+		ComposeFile string `json:"composeFile"`
 		Force       bool   `json:"force"`
 	}
 
@@ -66,12 +67,13 @@ func (s *Server) handleComposeCreateAndUpWebSocketCustom(c *gin.Context, appPath
 		return
 	}
 
-	logger.Logger.Info("Compose create and up request", zap.String("name", req.Name))
+	logger.Logger.Info("Compose create and up request", zap.String("name", req.Name), zap.String("composeFile", req.ComposeFile))
 	key := fmt.Sprintf("compose-up-%s", req.Name)
 	s.streamManagerBytes.StartHub(conn, key, func() wsstream.StreamSource[[]byte] {
 		return wsstream.NewComposeCreateUpSource(wsstream.ComposeCreateUpSourceOptions{
 			ProjectName:   req.Name,
 			YamlContent:   req.YamlContent,
+			ComposeFile:   req.ComposeFile,
 			Force:         req.Force,
 			ComposeDir:    composeDir,
 			ComposeClient: s.composeClient,

@@ -23,8 +23,18 @@ func setupTwoFATestServer(t *testing.T) (*gin.Engine, string) {
 	gin.SetMode(gin.TestMode)
 
 	dir := t.TempDir()
-	origEnv := conf.EnvCfg
+	original := conf.EnvCfg
+	testEnv := *original
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		conf.EnvCfg = original
+	})
 	origCfg := config.Get()
+	t.Cleanup(func() {
+		if origCfg != nil {
+			config.SetGlobal(origCfg)
+		}
+	})
 	t.Setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef")
 
 	conf.EnvCfg.CONFIG_PATH = dir
@@ -36,13 +46,6 @@ func setupTwoFATestServer(t *testing.T) (*gin.Engine, string) {
 	if _, err := config.Load(filepath.Join(dir, "config.yaml")); err != nil {
 		t.Fatalf("load temp config: %v", err)
 	}
-
-	t.Cleanup(func() {
-		conf.EnvCfg = origEnv
-		if origCfg != nil {
-			config.SetGlobal(origCfg)
-		}
-	})
 
 	s := &Server{logger: zap.NewNop()}
 	r := gin.New()
@@ -203,9 +206,11 @@ func TestExtractRPIDAndOriginBareIPv6(t *testing.T) {
 
 func TestExtractValidatedRPIDAndOriginSecurityAndProxy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	origEnv := conf.EnvCfg
+	original := conf.EnvCfg
+	testEnv := *original
+	conf.EnvCfg = &testEnv
 	t.Cleanup(func() {
-		conf.EnvCfg = origEnv
+		conf.EnvCfg = original
 	})
 
 	makeCtx := func(host, origin string) *gin.Context {
@@ -329,5 +334,27 @@ func TestExtractValidatedRPIDAndOriginSecurityAndProxy(t *testing.T) {
 	routerEngine.ServeHTTP(httptest.NewRecorder(), ipReq)
 	if seenClientIP != "203.0.113.9" {
 		t.Fatalf("expected Gin c.ClientIP() == 203.0.113.9 despite [::1]/invalid entry, got %q", seenClientIP)
+	}
+}
+
+func TestSetupTwoFATestServerRestoresOriginalEnvCfg(t *testing.T) {
+	original := conf.EnvCfg
+	snapshot := *original
+
+	t.Run("isolated-subtest", func(t *testing.T) {
+		setupTwoFATestServer(t)
+		if conf.EnvCfg == original {
+			t.Fatalf("expected setupTwoFATestServer to install a copied EnvConfig pointer")
+		}
+		if conf.EnvCfg.USER_NAME != "tester" || !conf.EnvCfg.IS_SECONDARY_VERIFICATION {
+			t.Fatalf("expected subtest EnvConfig overrides applied, got %+v", *conf.EnvCfg)
+		}
+	})
+
+	if conf.EnvCfg != original {
+		t.Fatalf("expected conf.EnvCfg pointer restored after subtest cleanup: got %p, want %p", conf.EnvCfg, original)
+	}
+	if *conf.EnvCfg != snapshot {
+		t.Fatalf("expected *conf.EnvCfg snapshot restored after subtest cleanup: got %+v, want %+v", *conf.EnvCfg, snapshot)
 	}
 }

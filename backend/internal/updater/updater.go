@@ -222,7 +222,7 @@ func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) 
 	// 在 StopContainer 之前记录容器名，防止 AutoRemove(--rm) 容器停止即销毁导致名字丢失
 	uctx.oldName = strings.TrimPrefix(oldInfo.Name, "/")
 
-	// 读取旧镜像配置以便后续剥离旧镜像自带默认值（让新镜像自己的 Entrypoint/Cmd/Env/Healthcheck 生效）
+	// 读取旧镜像配置以便后续剥离旧镜像自带默认值（让新镜像自己的 Entrypoint/Cmd/Healthcheck/Labels 生效）
 	if oldInfo.Image != "" {
 		if imgInfo, ierr := u.docker.ImageInspect(ctx, oldInfo.Image); ierr == nil {
 			uctx.oldImage = imgInfo
@@ -369,6 +369,9 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 	var newCfg container.Config
 	if uctx.oldInfo.Config != nil {
 		newCfg = *uctx.oldInfo.Config
+		if uctx.oldInfo.Config.Env != nil {
+			newCfg.Env = slices.Clone(uctx.oldInfo.Config.Env)
+		}
 		if uctx.oldInfo.Config.Labels != nil {
 			newCfg.Labels = maps.Clone(uctx.oldInfo.Config.Labels)
 		}
@@ -403,19 +406,8 @@ func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Conf
 		if imgCfg.Healthcheck != nil && reflect.DeepEqual(newCfg.Healthcheck, imgCfg.Healthcheck) {
 			newCfg.Healthcheck = nil
 		}
-		if len(imgCfg.Env) > 0 && len(newCfg.Env) > 0 {
-			imgEnvSet := make(map[string]struct{}, len(imgCfg.Env))
-			for _, e := range imgCfg.Env {
-				imgEnvSet[e] = struct{}{}
-			}
-			filteredEnv := make([]string, 0, len(newCfg.Env))
-			for _, e := range newCfg.Env {
-				if _, isImgDefault := imgEnvSet[e]; !isImgDefault {
-					filteredEnv = append(filteredEnv, e)
-				}
-			}
-			newCfg.Env = filteredEnv
-		}
+		// 保留旧容器的有效 Config.Env（含空值 KEY=）：ContainerInspect 无法区分显式 --env 与旧镜像默认值，
+		// 保留旧容器环境可防止新镜像默认值反向覆盖已有部署配置，同时仍由 Docker 补入新镜像独有的环境变量。
 		// 剥离与旧镜像完全相同的 LABEL，避免覆盖新镜像版本元信息
 		if len(imgCfg.Labels) > 0 && len(newCfg.Labels) > 0 {
 			for k, v := range newCfg.Labels {

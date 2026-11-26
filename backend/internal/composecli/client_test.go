@@ -205,3 +205,102 @@ func TestComposePathTraversalBlocked(t *testing.T) {
 		t.Fatalf("expected outside custom compose filename not to be treated as inside APP_PATH")
 	}
 }
+
+func TestSaveProjectPreservesSiblingComposeFileAndValidatesOwnership(t *testing.T) {
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	projADir := filepath.Join(appDir, "proj-a")
+	projBDir := filepath.Join(appDir, "proj-b")
+	for _, dir := range []string{projADir, projBDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = appDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		conf.EnvCfg = origEnv
+	})
+
+	composeYamlPath := filepath.Join(projADir, "compose.yaml")
+	dockerComposeYmlPath := filepath.Join(projADir, "docker-compose.yml")
+	origComposeYaml := "services:\n  web:\n    image: nginx:1.25\n"
+	origDockerComposeYml := "services:\n  legacy:\n    image: busybox:1.36\n"
+	if err := os.WriteFile(composeYamlPath, []byte(origComposeYaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dockerComposeYmlPath, []byte(origDockerComposeYml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	projBFile := filepath.Join(projBDir, "compose.yaml")
+	origProjB := "services:\n  b:\n    image: alpine:3.20\n"
+	if err := os.WriteFile(projBFile, []byte(origProjB), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Client{}
+	ctx := context.Background()
+
+	// 1. 显式指定 compose.yaml 时只覆盖 compose.yaml，不改动 docker-compose.yml
+	updatedYaml := "services:\n  web:\n    image: nginx:1.27\n"
+	savedPath, err := c.SaveProject(ctx, "proj-a", composeYamlPath, updatedYaml, true)
+	if err != nil {
+		t.Fatalf("expected SaveProject on compose.yaml to succeed, got %v", err)
+	}
+	gotComposeYaml, err := os.ReadFile(composeYamlPath)
+	if err != nil || string(gotComposeYaml) != updatedYaml {
+		t.Fatalf("compose.yaml content mismatch: got=%q err=%v", string(gotComposeYaml), err)
+	}
+	if gotSavedPath, err := filepath.EvalSymlinks(savedPath); err != nil {
+		t.Fatalf("eval saved path: %v", err)
+	} else if wantPath, _ := filepath.EvalSymlinks(composeYamlPath); gotSavedPath != wantPath {
+		t.Fatalf("saved path mismatch: got %q, want %q", savedPath, wantPath)
+	}
+	gotLegacyYml, err := os.ReadFile(dockerComposeYmlPath)
+	if err != nil || string(gotLegacyYml) != origDockerComposeYml {
+		t.Fatalf("docker-compose.yml must stay untouched: got=%q want=%q err=%v", string(gotLegacyYml), origDockerComposeYml, err)
+	}
+
+	// 2. 旧客户端省略 composeFile 且目录有多个合法配置文件时，写入前拒绝
+	if _, err := c.SaveProject(ctx, "proj-a", "", "services:\n  bad: {}\n", true); err == nil {
+		t.Fatalf("expected error when composeFile omitted on multi-file directory")
+	}
+	if gotAfter, _ := os.ReadFile(composeYamlPath); string(gotAfter) != updatedYaml {
+		t.Fatalf("compose.yaml modified after multi-file error: %q", string(gotAfter))
+	}
+	if gotLegacyAfter, _ := os.ReadFile(dockerComposeYmlPath); string(gotLegacyAfter) != origDockerComposeYml {
+		t.Fatalf("docker-compose.yml modified after multi-file error: %q", string(gotLegacyAfter))
+	}
+
+	// 3. 指定属于其他项目的 composeFile 时拒绝且不修改任何文件
+	if _, err := c.SaveProject(ctx, "proj-a", projBFile, "services:\n  hijack: {}\n", true); err == nil {
+		t.Fatalf("expected cross-project composeFile to be rejected")
+	}
+	if gotProjB, _ := os.ReadFile(projBFile); string(gotProjB) != origProjB {
+		t.Fatalf("proj-b/compose.yaml modified after cross-project rejection: %q", string(gotProjB))
+	}
+
+	// 4. 旧客户端省略 composeFile 且目录仅有一份合法配置时可直接写入
+	singleDir := filepath.Join(appDir, "single-proj")
+	if err := os.MkdirAll(singleDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	singleFile := filepath.Join(singleDir, "compose.yaml")
+	if err := os.WriteFile(singleFile, []byte(origComposeYaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	singleSaved, err := c.SaveProject(ctx, "single-proj", "", updatedYaml, true)
+	if err != nil {
+		t.Fatalf("expected single-file legacy save to succeed, got %v", err)
+	}
+	if wantSingle, _ := filepath.EvalSymlinks(singleFile); singleSaved != wantSingle {
+		t.Fatalf("expected singleSaved %q, got %q", wantSingle, singleSaved)
+	}
+	if gotSingle, _ := os.ReadFile(singleFile); string(gotSingle) != updatedYaml {
+		t.Fatalf("single compose.yaml not updated: %q", string(gotSingle))
+	}
+}

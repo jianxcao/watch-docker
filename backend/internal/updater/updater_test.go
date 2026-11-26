@@ -1,9 +1,21 @@
 package updater
 
 import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"net/netip"
+	"runtime"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	dockerimage "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
@@ -421,5 +433,225 @@ func TestBuildNewContainerConfigsPreservesUser(t *testing.T) {
 					tc.containerUser, tc.imageUser, newCfg.User, tc.wantUser)
 			}
 		})
+	}
+}
+
+func TestBuildNewContainerConfigsPreservesExistingEnvIncludingEmptyValue(t *testing.T) {
+	u := &Updater{}
+	uctx := &updateContext{
+		imageRef: "example/app:v2",
+		oldImage: &image.InspectResponse{
+			Config: &dockerimage.DockerOCIImageConfig{
+				ImageConfig: ocispec.ImageConfig{
+					Env: []string{
+						"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+						"MODE=production",
+						"TOKEN=",
+					},
+				},
+			},
+		},
+		oldInfo: container.InspectResponse{
+			Config: &container.Config{
+				Image: "example/app:v1",
+				Env: []string{
+					"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+					"MODE=production",
+					"TOKEN=",
+					"CUSTOM=1",
+				},
+			},
+		},
+	}
+
+	newCfg, _, _, _, _ := u.buildNewContainerConfigs(uctx)
+	for _, want := range []string{"MODE=production", "TOKEN=", "CUSTOM=1"} {
+		if !slices.Contains(newCfg.Env, want) {
+			t.Fatalf("expected newCfg.Env to preserve %q, got %#v", want, newCfg.Env)
+		}
+	}
+
+	uctx.oldInfo.Config.Env[0] = "MUTATED=1"
+	if slices.Contains(newCfg.Env, "MUTATED=1") {
+		t.Fatalf("expected newCfg.Env cloned independently from oldInfo.Config.Env")
+	}
+}
+
+func buildDockerSaveArchive(t *testing.T, repoTag string, env []string, arch string) []byte {
+	t.Helper()
+
+	var layerBuf bytes.Buffer
+	ltw := tar.NewWriter(&layerBuf)
+	placeholder := []byte(repoTag + "\n")
+	if err := ltw.WriteHeader(&tar.Header{
+		Name: "etc/wd-env-marker",
+		Mode: 0644,
+		Size: int64(len(placeholder)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ltw.Write(placeholder); err != nil {
+		t.Fatal(err)
+	}
+	if err := ltw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	layerBytes := layerBuf.Bytes()
+	layerSum := sha256.Sum256(layerBytes)
+	layerDiffID := "sha256:" + hex.EncodeToString(layerSum[:])
+	layerEntry := "layer/layer.tar"
+
+	imgCfg := map[string]any{
+		"architecture": arch,
+		"os":           "linux",
+		"config": map[string]any{
+			"Env": env,
+			"Cmd": []string{"/bin/sh"},
+		},
+		"rootfs": map[string]any{
+			"type":     "layers",
+			"diff_ids": []string{layerDiffID},
+		},
+	}
+	cfgBytes, err := json.Marshal(imgCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgSum := sha256.Sum256(cfgBytes)
+	cfgName := hex.EncodeToString(cfgSum[:]) + ".json"
+
+	manifestBytes, err := json.Marshal([]map[string]any{
+		{
+			"Config":   cfgName,
+			"RepoTags": []string{repoTag},
+			"Layers":   []string{layerEntry},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var archiveBuf bytes.Buffer
+	atw := tar.NewWriter(&archiveBuf)
+	addFile := func(name string, data []byte) {
+		if err := atw.WriteHeader(&tar.Header{
+			Name: name,
+			Mode: 0644,
+			Size: int64(len(data)),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := atw.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addFile(cfgName, cfgBytes)
+	addFile(layerEntry, layerBytes)
+	addFile("manifest.json", manifestBytes)
+	if err := atw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archiveBuf.Bytes()
+}
+
+func TestUpdateContainerPreservesExistingEnvAndMergesNewImageEnv(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dcli, err := dockercli.New(ctx, "")
+	if err != nil {
+		t.Skipf("跳过 Docker 集成测试：无法连接 Docker 客户端: %v", err)
+	}
+	defer dcli.Close()
+
+	ver, err := dcli.GetVersion(ctx)
+	if err != nil {
+		t.Skipf("跳过 Docker 集成测试：Docker daemon 不可用: %v", err)
+	}
+	arch := ver.Arch
+	if arch == "" {
+		arch = runtime.GOARCH
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	v1Ref := fmt.Sprintf("wd-env-verify-%s:v1", suffix)
+	v2Ref := fmt.Sprintf("wd-env-verify-%s:v2", suffix)
+	containerName := fmt.Sprintf("wd-env-verify-ctr-%s", suffix)
+
+	v1Tar := buildDockerSaveArchive(t, v1Ref, []string{"MODE=production", "TOKEN="}, arch)
+	v2Tar := buildDockerSaveArchive(t, v2Ref, []string{"MODE=development", "TOKEN=default", "NEW_FLAG=1"}, arch)
+
+	if err := dcli.LoadImage(ctx, bytes.NewReader(v1Tar)); err != nil {
+		t.Fatalf("load v1 test image: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanCancel()
+		_ = dcli.RemoveImage(cleanCtx, v1Ref, true, true)
+	})
+
+	if err := dcli.LoadImage(ctx, bytes.NewReader(v2Tar)); err != nil {
+		t.Fatalf("load v2 test image: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanCancel()
+		_ = dcli.RemoveImage(cleanCtx, v2Ref, true, true)
+	})
+
+	oldID, err := dcli.CreateContainer(ctx, containerName, &container.Config{
+		Image: v1Ref,
+		Env:   []string{"MODE=production", "TOKEN="},
+	}, &container.HostConfig{}, nil)
+	if err != nil {
+		t.Fatalf("create v1 container: %v", err)
+	}
+	var newID string
+	t.Cleanup(func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanCancel()
+		if newID != "" {
+			_ = dcli.RemoveContainer(cleanCtx, newID, true)
+		}
+		_ = dcli.RemoveContainer(cleanCtx, oldID, true)
+	})
+
+	u := New(dcli)
+	uctx := &updateContext{
+		containerID: oldID,
+		imageRef:    v2Ref,
+	}
+	autoRemoved, err := u.prepareOldContainer(ctx, uctx)
+	if err != nil || autoRemoved {
+		t.Fatalf("prepareOldContainer failed: autoRemoved=%v err=%v", autoRemoved, err)
+	}
+	if err := u.createContainerWithRetry(ctx, uctx); err != nil {
+		u.rollbackOnCreateFailure(ctx, uctx)
+		t.Fatalf("createContainerWithRetry failed: %v", err)
+	}
+	newID = uctx.newID
+	u.finalCleanup(ctx, uctx)
+
+	inspected, err := dcli.InspectContainer(ctx, newID)
+	if err != nil {
+		t.Fatalf("inspect replaced container: %v", err)
+	}
+	if inspected.Config == nil {
+		t.Fatalf("expected replaced container Config != nil")
+	}
+
+	gotEnv := inspected.Config.Env
+	for _, want := range []string{"MODE=production", "TOKEN=", "NEW_FLAG=1"} {
+		if !slices.Contains(gotEnv, want) {
+			t.Fatalf("expected replaced container Env to contain %q, got %#v", want, gotEnv)
+		}
+	}
+	for _, unwanted := range []string{"MODE=development", "TOKEN=default"} {
+		if slices.Contains(gotEnv, unwanted) {
+			t.Fatalf("expected replaced container Env NOT to revert to new image default %q, got %#v", unwanted, gotEnv)
+		}
+	}
+	if gotName := strings.TrimPrefix(inspected.Name, "/"); gotName != containerName {
+		t.Fatalf("expected replaced container name %q, got %q", containerName, gotName)
 	}
 }

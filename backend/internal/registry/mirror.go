@@ -502,7 +502,15 @@ func (c *Client) queryDigestViaMirrors(ctx context.Context, imageRef string, mir
 					zap.String("mirror", ep.HostWithPrefix()))
 				continue
 			}
-			childDig, _ := parseManifest(body, targetOS, targetArch, targetVariant)
+			childDig, err := parseManifest(body, targetOS, targetArch, targetVariant)
+			if err != nil || childDig == "" {
+				logger.Logger.Debug("mirror index manifest 未找到匹配平台的子摘要，尝试下一个",
+					zap.String("image", imageRef),
+					zap.String("platform", formatPlatformLabel(targetOS, targetArch, targetVariant)),
+					zap.String("mirror", ep.HostWithPrefix()),
+					zap.Error(err))
+				continue
+			}
 			var cfgDig string
 			if needConfig {
 				if childDig != "" && mirrorRepoPath != "" {

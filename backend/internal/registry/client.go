@@ -686,14 +686,9 @@ func extractDigestFromDescriptor(desc *remote.Descriptor, targetOS, targetArch, 
 				configDigest = cfgHash.String()
 			}
 		} else {
-			if needConfig {
-				return DigestResult{
-					Error:   fmt.Errorf("未找到匹配平台 %s/%s 的子 manifest", targetOS, targetArch),
-					ErrType: ErrorTypeGeneral,
-				}
-			}
-			if childDig, derr := parseManifest(desc.Manifest, targetOS, targetArch, targetVariant); derr == nil {
-				childDigest = childDig
+			return DigestResult{
+				Error:   fmt.Errorf("未找到匹配平台 %s 的子 manifest", formatPlatformLabel(targetOS, targetArch, targetVariant)),
+				ErrType: ErrorTypeGeneral,
 			}
 		}
 		return DigestResult{
@@ -722,10 +717,20 @@ func extractDigestFromDescriptor(desc *remote.Descriptor, targetOS, targetArch, 
 	}
 }
 
+func formatPlatformLabel(targetOS, targetArch, targetVariant string) string {
+	if targetVariant != "" {
+		return fmt.Sprintf("%s/%s/%s", targetOS, targetArch, targetVariant)
+	}
+	return fmt.Sprintf("%s/%s", targetOS, targetArch)
+}
+
 func selectDescriptorFromIndex(im *v1.IndexManifest, targetOS, targetArch, targetVariant string) *v1.Descriptor {
 	if im == nil {
 		return nil
 	}
+	wantOS := strings.ToLower(strings.TrimSpace(targetOS))
+	wantArch := strings.ToLower(strings.TrimSpace(targetArch))
+	wantVariant := strings.ToLower(strings.TrimSpace(targetVariant))
 	var archMatch *v1.Descriptor
 	for i := range im.Manifests {
 		m := &im.Manifests[i]
@@ -738,13 +743,13 @@ func selectDescriptorFromIndex(im *v1.IndexManifest, targetOS, targetArch, targe
 		if pos == "" || pos == "unknown" || parch == "" || parch == "unknown" {
 			continue
 		}
-		if pos != targetOS || parch != targetArch {
+		if pos != wantOS || parch != wantArch {
 			continue
 		}
-		if pvar == targetVariant {
+		if pvar == wantVariant {
 			return m
 		}
-		if archMatch == nil {
+		if wantVariant == "" && archMatch == nil {
 			archMatch = m
 		}
 	}
@@ -762,5 +767,5 @@ func parseManifest(raw []byte, targetOS, targetArch, targetVariant string) (stri
 	if desc := selectDescriptorFromIndex(&im, targetOS, targetArch, targetVariant); desc != nil {
 		return desc.Digest.String(), nil
 	}
-	return "", fmt.Errorf("no matching platform manifest in index for %s/%s", targetOS, targetArch)
+	return "", fmt.Errorf("no matching platform manifest in index for %s", formatPlatformLabel(targetOS, targetArch, targetVariant))
 }
