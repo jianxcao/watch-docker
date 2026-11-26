@@ -1155,13 +1155,16 @@ func resolveDraftEnvComposeFiles(projectPath, projectName string) ([]string, boo
 		sep = string(os.PathListSeparator)
 	}
 
-	rawComposeFile, hasComposeFileEnv := os.LookupEnv("COMPOSE_FILE")
-	if !hasComposeFileEnv || strings.TrimSpace(rawComposeFile) == "" {
-		rawComposeFile = dotEnv["COMPOSE_FILE"]
+	rawComposeFile, present := os.LookupEnv("COMPOSE_FILE")
+	if !present {
+		rawComposeFile, present = dotEnv["COMPOSE_FILE"]
+	}
+	if !present {
+		return nil, false, nil
 	}
 	rawComposeFile = strings.TrimSpace(rawComposeFile)
 	if rawComposeFile == "" {
-		return nil, false, nil
+		return nil, false, errors.New("COMPOSE_FILE 已设置，但未指定配置文件")
 	}
 
 	parts := strings.Split(rawComposeFile, sep)

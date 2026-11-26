@@ -1519,3 +1519,124 @@ func TestManagedDraftCardUsesEnvFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestDraftComposeFilePresence(t *testing.T) {
+	clearDotEnvTestProcessVars(t)
+	ctx := context.Background()
+
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	siteDir := filepath.Join(resolvedAppDir, "site")
+	if err := os.MkdirAll(siteDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composeFile := filepath.Join(siteDir, "compose.yaml")
+	prodFile := filepath.Join(siteDir, "prod.yaml")
+	envFile := filepath.Join(siteDir, ".env")
+	origCompose := "services:\n  web:\n    image: nginx:1.25\n"
+	origProd := "services:\n  production:\n    image: nginx:1.26\n"
+	if err := os.WriteFile(composeFile, []byte(origCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prodFile, []byte(origProd), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			return nil, nil
+		},
+	}
+
+	assertFilesUntouched := func(t *testing.T) {
+		t.Helper()
+		if got, rerr := os.ReadFile(composeFile); rerr != nil || string(got) != origCompose {
+			t.Fatalf("compose.yaml modified: err=%v got=%q", rerr, string(got))
+		}
+		if got, rerr := os.ReadFile(prodFile); rerr != nil || string(got) != origProd {
+			t.Fatalf("prod.yaml modified: err=%v got=%q", rerr, string(got))
+		}
+	}
+
+	t.Run("process unset and dotenv COMPOSE_FILE empty fails closed", func(t *testing.T) {
+		_ = os.Unsetenv("COMPOSE_FILE")
+		if err := os.WriteFile(envFile, []byte("COMPOSE_FILE=\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if plan, perr := cli.ResolveDeployPlan(ctx, "site", ""); perr == nil || len(plan.DeployFiles) != 0 {
+			t.Fatalf("ResolveDeployPlan should fail with empty DeployFiles, got plan=%#v err=%v", plan, perr)
+		}
+		if plan, perr := cli.ResolveManagedCardPlan(ctx, "site", composeFile); perr == nil || len(plan.DeployFiles) != 0 {
+			t.Fatalf("ResolveManagedCardPlan should fail with empty DeployFiles, got plan=%#v err=%v", plan, perr)
+		}
+		for _, target := range []string{"", composeFile} {
+			if _, serr := cli.SaveProjectPlanForDeploy(ctx, "site", target, "services:\n  mutated:\n    image: busybox\n", true); serr == nil {
+				t.Fatalf("SaveProjectPlanForDeploy(%q) should fail when .env COMPOSE_FILE is empty", target)
+			}
+		}
+		assertFilesUntouched(t)
+	})
+
+	t.Run("process empty COMPOSE_FILE overrides dotenv and fails closed", func(t *testing.T) {
+		if err := os.WriteFile(envFile, []byte("COMPOSE_FILE=prod.yaml\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("COMPOSE_FILE", "")
+
+		if plan, perr := cli.ResolveDeployPlan(ctx, "site", ""); perr == nil || len(plan.DeployFiles) != 0 {
+			t.Fatalf("ResolveDeployPlan should fail when process COMPOSE_FILE=\"\", got plan=%#v err=%v", plan, perr)
+		}
+		if plan, perr := cli.ResolveManagedCardPlan(ctx, "site", composeFile); perr == nil || len(plan.DeployFiles) != 0 {
+			t.Fatalf("ResolveManagedCardPlan should fail when process COMPOSE_FILE=\"\", got plan=%#v err=%v", plan, perr)
+		}
+		for _, target := range []string{"", prodFile} {
+			if _, serr := cli.SaveProjectPlanForDeploy(ctx, "site", target, "services:\n  mutated:\n    image: busybox\n", true); serr == nil {
+				t.Fatalf("SaveProjectPlanForDeploy(%q) should fail when process COMPOSE_FILE=\"\"", target)
+			}
+		}
+		assertFilesUntouched(t)
+	})
+
+	t.Run("positive neither set selects primary compose.yaml", func(t *testing.T) {
+		_ = os.Unsetenv("COMPOSE_FILE")
+		if err := os.RemoveAll(envFile); err != nil {
+			t.Fatal(err)
+		}
+
+		plan, perr := cli.ResolveDeployPlan(ctx, "site", "")
+		if perr != nil || !slices.Equal(plan.DeployFiles, []string{composeFile}) {
+			t.Fatalf("expected [%s], got plan=%#v err=%v", composeFile, plan, perr)
+		}
+	})
+
+	t.Run("positive process unset and dotenv valid selects prod.yaml", func(t *testing.T) {
+		_ = os.Unsetenv("COMPOSE_FILE")
+		if err := os.WriteFile(envFile, []byte("COMPOSE_FILE=prod.yaml\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		plan, perr := cli.ResolveDeployPlan(ctx, "site", "")
+		if perr != nil || !slices.Equal(plan.DeployFiles, []string{prodFile}) {
+			t.Fatalf("ResolveDeployPlan expected [%s], got plan=%#v err=%v", prodFile, plan, perr)
+		}
+		cardPlan, cerr := cli.ResolveManagedCardPlan(ctx, "site", composeFile)
+		if cerr != nil || !slices.Equal(cardPlan.DeployFiles, []string{prodFile}) {
+			t.Fatalf("ResolveManagedCardPlan expected [%s], got plan=%#v err=%v", prodFile, cardPlan, cerr)
+		}
+	})
+}

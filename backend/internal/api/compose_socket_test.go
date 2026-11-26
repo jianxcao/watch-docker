@@ -353,6 +353,18 @@ func TestManagedComposeCardWebSockets(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		emptyDraftDir := filepath.Join(resolvedAppDir, "empty-env-site")
+		if err := os.MkdirAll(emptyDraftDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		emptyDraftCompose := filepath.Join(emptyDraftDir, "compose.yaml")
+		if err := os.WriteFile(emptyDraftCompose, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(emptyDraftDir, ".env"), []byte("COMPOSE_FILE=\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
 		failLog := filepath.Join(t.TempDir(), "docker-fail.log")
 		installFakeDockerForCardTest(t, failLog)
 
@@ -373,6 +385,14 @@ func TestManagedComposeCardWebSockets(t *testing.T) {
 				projectName: "blue",
 				composeFile: extFile,
 				lister:      runtimeLister,
+			},
+			{
+				name:        "empty COMPOSE_FILE in dotenv",
+				projectName: "empty-env-site",
+				composeFile: emptyDraftCompose,
+				lister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+					return nil, nil
+				},
 			},
 			{
 				name:        "runtime lister failure",
