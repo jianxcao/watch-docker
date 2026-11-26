@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"path"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,7 +28,53 @@ import (
 	"go.uber.org/zap"
 )
 
+func parseCLIArgs(args []string) (localTest bool, err error) {
+	fs := flag.NewFlagSet("watch-docker", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.BoolVar(&localTest, "local-test", false, "启用本地测试启动前安全配置校验")
+	if err := fs.Parse(args); err != nil {
+		return false, err
+	}
+	return localTest, nil
+}
+
+func isEnvExplicitTrue(key string) bool {
+	val, ok := os.LookupEnv(key)
+	if !ok {
+		return false
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(val))
+	return err == nil && b
+}
+
+func validateLocalTestConfig(cfg *conf.EnvConfig, shellRequested bool) error {
+	if cfg == nil {
+		return fmt.Errorf("本地测试启动失败：配置未初始化")
+	}
+	if strings.TrimSpace(cfg.USER_NAME) == "" {
+		return fmt.Errorf("本地测试启动失败：有效用户名不能为空，请设置 USER_NAME 或配置 app.yaml 中的 username")
+	}
+	trimmedPass := strings.TrimSpace(cfg.USER_PASSWORD)
+	if trimmedPass == "" || trimmedPass == "admin" {
+		return fmt.Errorf("本地测试启动失败：未配置有效登录密码或仍在使用默认密码，请设置非默认的 USER_PASSWORD 环境变量或在 %s/app.yaml 中配置 password", cfg.CONFIG_PATH)
+	}
+	if cfg.IS_OPEN_DOCKER_SHELL && !shellRequested {
+		return fmt.Errorf("本地测试启动失败：当前有效配置启用了容器 Shell，如需在本地测试中启用请显式设置 IS_OPEN_DOCKER_SHELL=true 或在 app.yaml 中关闭 enable_docker_shell")
+	}
+	return nil
+}
+
 func main() {
+	localTest, err := parseCLIArgs(os.Args[1:])
+	if err != nil {
+		os.Exit(2)
+	}
+	if localTest {
+		if err := validateLocalTestConfig(conf.EnvCfg, isEnvExplicitTrue("IS_OPEN_DOCKER_SHELL")); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+	}
 
 	configPath := path.Join(conf.EnvCfg.CONFIG_PATH, conf.EnvCfg.CONFIG_FILE)
 	// init logger first
