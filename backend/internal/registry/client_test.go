@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
@@ -785,6 +786,162 @@ func TestIndexManifestARMVariantMatchingAndMirrorFallback(t *testing.T) {
 	resOmit := cWithMirrors.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qOmitVar}, false, false, 1)[qOmitVar.Key()]
 	if resOmit.Error != nil || resOmit.IndexDigest != v7OnlyIndexDigest || resOmit.ChildDigest != v7Digest {
 		t.Fatalf("omitted variant fallback mismatch: %#v", resOmit)
+	}
+
+	// 6. 请求 linux/arm64/v8 时，索引仅提供 linux/arm64（省略 variant），镜像源与直连均能精确解析到该子清单与 config digest
+	arm64ConfigBody := `{"architecture":"arm64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`
+	arm64CfgSum := sha256.Sum256([]byte(arm64ConfigBody))
+	arm64CfgDigest := "sha256:" + hex.EncodeToString(arm64CfgSum[:])
+	arm64Manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"` + arm64CfgDigest + `","size":` + fmt.Sprintf("%d", len(arm64ConfigBody)) + `},"layers":[]}`
+	arm64Sum := sha256.Sum256([]byte(arm64Manifest))
+	arm64Digest := "sha256:" + hex.EncodeToString(arm64Sum[:])
+	arm64BaselineIndex := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + arm64Digest + `","size":123,"platform":{"os":"linux","architecture":"arm64"}}]}`
+	arm64BaselineIndexSum := sha256.Sum256([]byte(arm64BaselineIndex))
+	arm64BaselineIndexDigest := "sha256:" + hex.EncodeToString(arm64BaselineIndexSum[:])
+
+	blobsByDigest[arm64CfgDigest] = arm64ConfigBody
+	childMap[arm64Digest] = arm64Manifest
+	m1Payload.Store(arm64BaselineIndex)
+	m1Digest.Store(arm64BaselineIndexDigest)
+	upPayload.Store(arm64BaselineIndex)
+	upDigest.Store(arm64BaselineIndexDigest)
+
+	for _, tc := range []struct {
+		name   string
+		client *Client
+	}{
+		{name: "mirror", client: cWithMirrors},
+		{name: "direct", client: cNoMirrors},
+	} {
+		for _, needCfg := range []bool{false, true} {
+			q := DigestQuery{
+				ImageRef:         fmt.Sprintf("armapp:baseline-%s-%v", tc.name, needCfg),
+				OS:               "linux",
+				Arch:             "arm64",
+				Variant:          "v8",
+				NeedConfigDigest: needCfg,
+			}
+			res := tc.client.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q}, false, false, 1)[q.Key()]
+			if res.Error != nil || res.IndexDigest != arm64BaselineIndexDigest || res.ChildDigest != arm64Digest {
+				t.Fatalf("%s needConfig=%v: expected arm64 baseline child %q, got %#v (err=%v)", tc.name, needCfg, arm64Digest, res, res.Error)
+			}
+			if needCfg && res.ConfigDigest != arm64CfgDigest {
+				t.Fatalf("%s needConfig=true: expected arm64 config digest %q, got %#v", tc.name, arm64CfgDigest, res)
+			}
+		}
+	}
+}
+
+func TestSelectDescriptorARM64Baseline(t *testing.T) {
+	mkDesc := func(hexByte, osName, arch, variant string) v1.Descriptor {
+		return v1.Descriptor{
+			Digest: v1.Hash{
+				Algorithm: "sha256",
+				Hex:       strings.Repeat(hexByte, 64),
+			},
+			Platform: &v1.Platform{
+				OS:           osName,
+				Architecture: arch,
+				Variant:      variant,
+			},
+		}
+	}
+
+	dArm64 := mkDesc("a", "linux", "arm64", "")
+	dArm64V8 := mkDesc("b", "linux", "arm64", "v8")
+	dArm64V9 := mkDesc("c", "linux", "arm64", "v9")
+	dWinArm64 := mkDesc("d", "windows", "arm64", "")
+	dArmV7 := mkDesc("e", "linux", "arm", "v7")
+
+	cases := []struct {
+		name        string
+		os          string
+		arch        string
+		variant     string
+		manifests   []v1.Descriptor
+		wantHexChar string // 空串表示期望返回 nil
+	}{
+		{
+			name:        "linux/arm64/v8 matches omitted variant linux/arm64",
+			os:          "linux",
+			arch:        "arm64",
+			variant:     "v8",
+			manifests:   []v1.Descriptor{dArm64},
+			wantHexChar: "a",
+		},
+		{
+			name:        "linux/arm64/v8 prefers explicit v8 when omitted comes first",
+			os:          "linux",
+			arch:        "arm64",
+			variant:     "v8",
+			manifests:   []v1.Descriptor{dArm64, dArm64V8},
+			wantHexChar: "b",
+		},
+		{
+			name:        "linux/arm64/v8 prefers explicit v8 when v8 comes first",
+			os:          "linux",
+			arch:        "arm64",
+			variant:     "v8",
+			manifests:   []v1.Descriptor{dArm64V8, dArm64},
+			wantHexChar: "b",
+		},
+		{
+			name:        "linux/arm64/v8 does not match v9",
+			os:          "linux",
+			arch:        "arm64",
+			variant:     "v8",
+			manifests:   []v1.Descriptor{dArm64V9},
+			wantHexChar: "",
+		},
+		{
+			name:        "linux/arm64/v8 does not match windows/arm64",
+			os:          "linux",
+			arch:        "arm64",
+			variant:     "v8",
+			manifests:   []v1.Descriptor{dWinArm64},
+			wantHexChar: "",
+		},
+		{
+			name:        "linux/arm/v6 does not match linux/arm/v7",
+			os:          "linux",
+			arch:        "arm",
+			variant:     "v6",
+			manifests:   []v1.Descriptor{dArmV7},
+			wantHexChar: "",
+		},
+		{
+			name:        "linux/arm64 matches omitted variant exactly (omitted first)",
+			os:          "linux",
+			arch:        "arm64",
+			variant:     "",
+			manifests:   []v1.Descriptor{dArm64, dArm64V8},
+			wantHexChar: "a",
+		},
+		{
+			name:        "linux/arm64 matches omitted variant exactly (v8 first)",
+			os:          "linux",
+			arch:        "arm64",
+			variant:     "",
+			manifests:   []v1.Descriptor{dArm64V8, dArm64},
+			wantHexChar: "a",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			im := &v1.IndexManifest{Manifests: tc.manifests}
+			got := selectDescriptorFromIndex(im, tc.os, tc.arch, tc.variant)
+			if tc.wantHexChar == "" {
+				if got != nil {
+					t.Fatalf("expected nil descriptor, got %s", got.Digest.String())
+				}
+				return
+			}
+			wantDigest := "sha256:" + strings.Repeat(tc.wantHexChar, 64)
+			if got == nil || got.Digest.String() != wantDigest {
+				t.Fatalf("got=%v, want digest %s", got, wantDigest)
+			}
+		})
 	}
 }
 

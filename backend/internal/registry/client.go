@@ -766,7 +766,8 @@ func selectDescriptorFromIndex(im *v1.IndexManifest, targetOS, targetArch, targe
 		if pvar == wantVariant {
 			return m
 		}
-		if wantVariant == "" && archMatch == nil {
+		arm64Baseline := wantArch == "arm64" && wantVariant == "v8" && pvar == ""
+		if archMatch == nil && (wantVariant == "" || arm64Baseline) {
 			archMatch = m
 		}
 	}
