@@ -7,14 +7,17 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -212,10 +215,150 @@ func parseWWWAuthenticate(header string) (realm, service, scope string, err erro
 	return realm, service, scope, nil
 }
 
-func (c *Client) mirrorHTTPClient() *http.Client {
+func effectivePort(scheme, port string) string {
+	if port != "" {
+		return port
+	}
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
+}
+
+func validateMirrorHTTPURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil {
+		return nil, fmt.Errorf("非法的认证 realm: %s", raw)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if (scheme != "https" && scheme != "http") || u.User != nil || u.Hostname() == "" {
+		return nil, fmt.Errorf("非法的认证 realm: %s", raw)
+	}
+	return u, nil
+}
+
+func sameURLOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	sa, sb := strings.ToLower(a.Scheme), strings.ToLower(b.Scheme)
+	if (sa != "https" && sa != "http") || sa != sb {
+		return false
+	}
+	if a.User != nil || b.User != nil {
+		return false
+	}
+	ha, hb := strings.ToLower(a.Hostname()), strings.ToLower(b.Hostname())
+	if ha == "" || ha != hb {
+		return false
+	}
+	return effectivePort(sa, a.Port()) == effectivePort(sb, b.Port())
+}
+
+func sameMirrorOrigin(ep dockercli.MirrorEndpoint, target *url.URL) bool {
+	epURL, err := validateMirrorHTTPURL(ep.BaseURL())
+	if err != nil {
+		return false
+	}
+	return sameURLOrigin(epURL, target)
+}
+
+func formatHostWithPort(hostname, port string) string {
+	if strings.Contains(hostname, ":") && !strings.HasPrefix(hostname, "[") {
+		return "[" + hostname + "]:" + port
+	}
+	return hostname + ":" + port
+}
+
+func (c *Client) credentialForMirrorRealm(ep dockercli.MirrorEndpoint, realm *url.URL) (authn.AuthConfig, bool) {
+	if !sameMirrorOrigin(ep, realm) {
+		return authn.AuthConfig{}, false
+	}
+	epURL, err := validateMirrorHTTPURL(ep.BaseURL())
+	if err != nil {
+		return authn.AuthConfig{}, false
+	}
+	scheme := strings.ToLower(epURL.Scheme)
+	hostname := strings.ToLower(epURL.Hostname())
+	if canonicalHost(ep.Host) == "index.docker.io" || canonicalHost(hostname) == "index.docker.io" || hostname == "auth.docker.io" {
+		return authn.AuthConfig{}, false
+	}
+
+	port := epURL.Port()
+	defaultPort := effectivePort(scheme, "")
+	usesDefaultPort := effectivePort(scheme, port) == defaultPort
+
+	candidateKeys := []string{canonicalHost(ep.Host)}
+	if usesDefaultPort {
+		if k := canonicalHost(hostname); k != "" {
+			candidateKeys = append(candidateKeys, k)
+		}
+		if k := canonicalHost(net.JoinHostPort(hostname, defaultPort)); k != "" {
+			candidateKeys = append(candidateKeys, k)
+		}
+	} else if port != "" {
+		if k := canonicalHost(formatHostWithPort(hostname, port)); k != "" {
+			candidateKeys = append(candidateKeys, k)
+		}
+	}
+
+	if scheme == "http" {
+		explicitHTTP := false
+		for _, k := range candidateKeys {
+			if canonicalHost(k) == "index.docker.io" {
+				continue
+			}
+			if c.isHostExplicitHTTP(k) {
+				explicitHTTP = true
+				break
+			}
+		}
+		if !explicitHTTP {
+			return authn.AuthConfig{}, false
+		}
+	}
+
+	for _, k := range candidateKeys {
+		if k == "" || canonicalHost(k) == "index.docker.io" {
+			continue
+		}
+		if cred, ok := c.getCredentialForHost(k); ok && cred.Username != "" && cred.Password != "" {
+			return cred, true
+		}
+	}
+	return authn.AuthConfig{}, false
+}
+
+func (c *Client) mirrorHTTPClient(credentialed bool) *http.Client {
 	return &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: c.getTransport(),
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			if _, err := validateMirrorHTTPURL(req.URL.String()); err != nil {
+				req.Header.Del("Authorization")
+				return err
+			}
+			wasCred := credentialed || (len(via) > 0 && via[0].Header.Get("Authorization") != "")
+			if wasCred {
+				if len(via) == 0 || !sameURLOrigin(via[0].URL, req.URL) {
+					req.Header.Del("Authorization")
+					return fmt.Errorf("拒绝跨源重定向携带认证凭据")
+				}
+				if authHdr := via[0].Header.Get("Authorization"); authHdr != "" {
+					req.Header.Set("Authorization", authHdr)
+				}
+				return nil
+			}
+			req.Header.Del("Authorization")
+			return nil
+		},
 	}
 }
 
@@ -277,7 +420,7 @@ func (c *Client) fetchManifestFromMirror(ctx context.Context, ep dockercli.Mirro
 		if wwwAuth == "" {
 			return nil, "", "", "", fmt.Errorf("mirror %s 返回 401 但未携带 Bearer Www-Authenticate", ep.HostWithPrefix())
 		}
-		token, terr := c.acquireMirrorToken(ctx, wwwAuth, mirrorRepoPath)
+		token, terr := c.acquireMirrorToken(ctx, ep, wwwAuth, mirrorRepoPath)
 		if terr != nil {
 			return nil, "", "", "", fmt.Errorf("mirror %s 认证失败: %w", ep.HostWithPrefix(), terr)
 		}
@@ -319,7 +462,7 @@ func (c *Client) fetchChildManifestConfigDigest(ctx context.Context, ep dockercl
 	body, headers, status, err := c.requestManifest(ctx, manifestURL, bearer)
 	if err == nil && status == http.StatusUnauthorized {
 		if wwwAuth := selectBearerWWWAuthenticate(headers); wwwAuth != "" {
-			if tok, terr := c.acquireMirrorToken(ctx, wwwAuth, mirrorRepoPath); terr == nil {
+			if tok, terr := c.acquireMirrorToken(ctx, ep, wwwAuth, mirrorRepoPath); terr == nil {
 				body, headers, status, err = c.requestManifest(ctx, manifestURL, tok)
 			}
 		}
@@ -358,7 +501,7 @@ func (c *Client) requestManifest(ctx context.Context, manifestURL, bearer string
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
-	resp, err := c.mirrorHTTPClient().Do(req)
+	resp, err := c.mirrorHTTPClient(bearer != "").Do(req)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("请求失败: %w", err)
 	}
@@ -382,15 +525,14 @@ func (c *Client) requestManifest(ctx context.Context, manifestURL, bearer string
 	return body, resp.Header, resp.StatusCode, nil
 }
 
-func (c *Client) acquireMirrorToken(ctx context.Context, wwwAuth, repoPath string) (string, error) {
+func (c *Client) acquireMirrorToken(ctx context.Context, ep dockercli.MirrorEndpoint, wwwAuth, repoPath string) (string, error) {
 	realm, service, scope, err := parseWWWAuthenticate(wwwAuth)
 	if err != nil {
 		return "", err
 	}
-	realmURL, err := url.Parse(realm)
-	if err != nil || realmURL == nil || realmURL.Host == "" ||
-		(!strings.EqualFold(realmURL.Scheme, "https") && !strings.EqualFold(realmURL.Scheme, "http")) {
-		return "", fmt.Errorf("非法的认证 realm: %s", realm)
+	realmURL, err := validateMirrorHTTPURL(realm)
+	if err != nil {
+		return "", err
 	}
 	if scope == "" {
 		scope = fmt.Sprintf("repository:%s:pull", repoPath)
@@ -410,18 +552,12 @@ func (c *Client) acquireMirrorToken(ctx context.Context, wwwAuth, repoPath strin
 		return "", fmt.Errorf("创建认证请求失败: %w", err)
 	}
 
-	// 仅向官方 auth.docker.io HTTPS 端点发送 Docker Hub 凭据；其余仅在显式匹配该 host 且安全传输时发送
-	if strings.EqualFold(realmURL.Scheme, "https") && strings.EqualFold(realmURL.Hostname(), "auth.docker.io") {
-		if cred, ok := c.getCredentialForHost("index.docker.io"); ok && cred.Username != "" && cred.Password != "" {
-			req.SetBasicAuth(cred.Username, cred.Password)
-		}
-	} else if cred, ok := c.getCredentialForHost(realmURL.Host); ok && cred.Username != "" && cred.Password != "" {
-		if strings.EqualFold(realmURL.Scheme, "https") || c.isHostExplicitHTTP(realmURL.Host) {
-			req.SetBasicAuth(cred.Username, cred.Password)
-		}
+	cred, hasCred := c.credentialForMirrorRealm(ep, realmURL)
+	if hasCred {
+		req.SetBasicAuth(cred.Username, cred.Password)
 	}
 
-	resp, err := c.mirrorHTTPClient().Do(req)
+	resp, err := c.mirrorHTTPClient(hasCred).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("认证请求失败: %w", err)
 	}

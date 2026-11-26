@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
+	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 )
 
 func TestAllowInsecureFallback(t *testing.T) {
@@ -784,5 +785,338 @@ func TestIndexManifestARMVariantMatchingAndMirrorFallback(t *testing.T) {
 	resOmit := cWithMirrors.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qOmitVar}, false, false, 1)[qOmitVar.Key()]
 	if resOmit.Error != nil || resOmit.IndexDigest != v7OnlyIndexDigest || resOmit.ChildDigest != v7Digest {
 		t.Fatalf("omitted variant fallback mismatch: %#v", resOmit)
+	}
+}
+
+func TestMirrorCredentialBoundary(t *testing.T) {
+	origEnv := conf.EnvCfg
+	origCfg := config.Get()
+	testEnv := *origEnv
+	dir := t.TempDir()
+	testEnv.CONFIG_PATH = dir
+	testEnv.CONFIG_FILE = "config.yaml"
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		if origCfg != nil {
+			config.SetGlobal(origCfg)
+		}
+		conf.EnvCfg = origEnv
+	})
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yamlCfg := `registry:
+  auth:
+    - host: mirror.example.com
+      username: mirror-user
+      token: mirror-secret
+    - host: other.example.com
+      username: other-user
+      token: other-secret
+    - host: index.docker.io
+      username: hub-user
+      token: hub-secret
+    - host: http://explicit-http-mirror.example.com
+      username: http-user
+      token: http-secret
+`
+	if err := os.WriteFile(cfgPath, []byte(yamlCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("load config failed: %v", err)
+	}
+
+	c := New()
+	// 增加同主机无显式 http:// 的纯主机凭据，用于验证 HTTP 同源默认拒绝携带凭据
+	c.credsMu.Lock()
+	c.credentials["plain-http.example.com"] = authn.AuthConfig{Username: "plain-user", Password: "plain-secret"}
+	c.credsMu.Unlock()
+
+	cases := []struct {
+		name     string
+		ep       dockercli.MirrorEndpoint
+		realm    string
+		wantAuth bool
+		wantErr  bool
+	}{
+		{
+			name:     "HTTPS same-origin uses mirror credential",
+			ep:       dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example.com"},
+			realm:    "https://mirror.example.com/v2/token",
+			wantAuth: true,
+		},
+		{
+			name:     "HTTPS same-origin with explicit :443 vs implicit port matches",
+			ep:       dockercli.MirrorEndpoint{Scheme: "https", Host: "Mirror.Example.COM:443"},
+			realm:    "https://mirror.example.com/v2/token",
+			wantAuth: true,
+		},
+		{
+			name:     "Same host different non-default port uses anonymous only",
+			ep:       dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example.com:8443"},
+			realm:    "https://mirror.example.com/v2/token",
+			wantAuth: false,
+		},
+		{
+			name:     "Different host (cross-origin private realm) uses anonymous only",
+			ep:       dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example.com"},
+			realm:    "https://other.example.com/v2/token",
+			wantAuth: false,
+		},
+		{
+			name:     "Third-party mirror claiming Docker Hub auth.docker.io uses anonymous only",
+			ep:       dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example.com"},
+			realm:    "https://auth.docker.io/token",
+			wantAuth: false,
+		},
+		{
+			name:     "Mirror configured as Docker Hub alias must not expose Hub credential",
+			ep:       dockercli.MirrorEndpoint{Scheme: "https", Host: "registry-1.docker.io"},
+			realm:    "https://registry-1.docker.io/token",
+			wantAuth: false,
+		},
+		{
+			name:     "HTTP same-origin allowed when credential config explicitly declares http://",
+			ep:       dockercli.MirrorEndpoint{Scheme: "http", Host: "explicit-http-mirror.example.com"},
+			realm:    "http://explicit-http-mirror.example.com:80/token",
+			wantAuth: true,
+		},
+		{
+			name:     "HTTP same-origin denied without explicit http:// declaration",
+			ep:       dockercli.MirrorEndpoint{Scheme: "http", Host: "plain-http.example.com"},
+			realm:    "http://plain-http.example.com/token",
+			wantAuth: false,
+		},
+		{
+			name:    "Realm with userinfo fails before request",
+			ep:      dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example.com"},
+			realm:   "https://user:pass@mirror.example.com/token",
+			wantErr: true,
+		},
+		{
+			name:    "Realm with non-HTTP(S) scheme fails before request",
+			ep:      dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example.com"},
+			realm:   "ftp://mirror.example.com/token",
+			wantErr: true,
+		},
+	}
+
+	var reqCount atomic.Int32
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCount.Add(1)
+		http.Error(w, "unexpected network call", http.StatusInternalServerError)
+	}))
+	defer tokenSrv.Close()
+	c.httpTransport = tokenSrv.Client().Transport.(*http.Transport).Clone()
+	c.httpTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		reqCount.Add(1)
+		return nil, fmt.Errorf("network should not be dialed in offline boundary check")
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parsedRealm, err := validateMirrorHTTPURL(tc.realm)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("endpoint=%s realm=%s expected validation error=true, got=false", tc.ep.BaseURL(), tc.realm)
+				}
+				before := reqCount.Load()
+				if _, tokErr := c.acquireMirrorToken(context.Background(), tc.ep, `Bearer realm="`+tc.realm+`"`, "library/nginx"); tokErr == nil {
+					t.Fatalf("endpoint=%s realm=%s expected acquireMirrorToken error=true, got=false", tc.ep.BaseURL(), tc.realm)
+				}
+				if reqCount.Load() != before {
+					t.Fatalf("endpoint=%s realm=%s sent request despite validation error=%v", tc.ep.BaseURL(), tc.realm, true)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("endpoint=%s realm=%s unexpected validation error=%v", tc.ep.BaseURL(), tc.realm, true)
+			}
+			_, gotAuth := c.credentialForMirrorRealm(tc.ep, parsedRealm)
+			if gotAuth != tc.wantAuth {
+				t.Fatalf("endpoint=%s realm=%s gotAuth=%v wantAuth=%v", tc.ep.BaseURL(), tc.realm, gotAuth, tc.wantAuth)
+			}
+		})
+	}
+}
+
+func TestMirrorRedirectAndChildAuthCredentialScoping(t *testing.T) {
+	origEnv := conf.EnvCfg
+	origCfg := config.Get()
+	testEnv := *origEnv
+	dir := t.TempDir()
+	testEnv.CONFIG_PATH = dir
+	testEnv.CONFIG_FILE = "config.yaml"
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		if origCfg != nil {
+			config.SetGlobal(origCfg)
+		}
+		conf.EnvCfg = origEnv
+	})
+
+	const cfgBody = `{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`
+	cfgSum := sha256.Sum256([]byte(cfgBody))
+	cfgDigest := "sha256:" + hex.EncodeToString(cfgSum[:])
+
+	childManifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"` + cfgDigest + `","size":65},"layers":[]}`
+	childSum := sha256.Sum256([]byte(childManifest))
+	childDigest := "sha256:" + hex.EncodeToString(childSum[:])
+
+	indexManifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + childDigest + `","size":` + fmt.Sprintf("%d", len(childManifest)) + `,"platform":{"os":"linux","architecture":"amd64"}}]}`
+	indexSum := sha256.Sum256([]byte(indexManifest))
+	indexDigest := "sha256:" + hex.EncodeToString(indexSum[:])
+
+	var crossOriginAuthHeaders atomic.Int32
+	var crossOriginAnonHits atomic.Int32
+	crossSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			crossOriginAuthHeaders.Add(1)
+		}
+		if r.URL.Path == "/anon-manifest" {
+			crossOriginAnonHits.Add(1)
+			w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+			w.Header().Set("Docker-Content-Digest", indexDigest)
+			_, _ = w.Write([]byte(indexManifest))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer crossSrv.Close()
+
+	// 1. 同源凭证认证（父清单 + 子清单二次认证）及同源重定向成功
+	var sameOriginMode atomic.Value
+	sameOriginMode.Store("same-origin-ok")
+	var m1Srv *httptest.Server
+	m1Srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mode := sameOriginMode.Load().(string)
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v2/library/nginx/manifests/case"):
+			if r.Header.Get("Authorization") != "Bearer tok-parent" {
+				w.Header().Set("Www-Authenticate", `Bearer realm="`+m1Srv.URL+`/auth/parent",service="m1",scope="repository:library/nginx:pull"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if mode == "redirect-manifest-cross-origin" {
+				http.Redirect(w, r, crossSrv.URL+"/steal", http.StatusFound)
+				return
+			}
+			http.Redirect(w, r, m1Srv.URL+"/v2/library/nginx/manifests/redirect-target", http.StatusFound)
+		case r.URL.Path == "/v2/library/nginx/manifests/redirect-target":
+			if r.Header.Get("Authorization") != "Bearer tok-parent" {
+				http.Error(w, "missing parent bearer on same-origin redirect", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+			w.Header().Set("Docker-Content-Digest", indexDigest)
+			_, _ = w.Write([]byte(indexManifest))
+		case r.URL.Path == "/v2/library/nginx/manifests/"+childDigest:
+			// 刻意要求子清单使用新 scope token，覆盖二次认证路径
+			if r.Header.Get("Authorization") != "Bearer tok-child" {
+				w.Header().Set("Www-Authenticate", `Bearer realm="`+m1Srv.URL+`/auth/child",service="m1",scope="repository:library/nginx:pull-child"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", childDigest)
+			_, _ = w.Write([]byte(childManifest))
+		case r.URL.Path == "/auth/parent":
+			if u, p, ok := r.BasicAuth(); !ok || u != "m1user" || p != "m1secret" {
+				http.Error(w, "bad basic auth on /auth/parent", http.StatusUnauthorized)
+				return
+			}
+			if mode == "redirect-token-cross-origin" {
+				http.Redirect(w, r, crossSrv.URL+"/steal-token", http.StatusFound)
+				return
+			}
+			http.Redirect(w, r, m1Srv.URL+"/auth/parent-final", http.StatusFound)
+		case r.URL.Path == "/auth/parent-final":
+			if u, p, ok := r.BasicAuth(); !ok || u != "m1user" || p != "m1secret" {
+				http.Error(w, "missing basic auth on same-origin token redirect", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"tok-parent"}`))
+		case r.URL.Path == "/auth/child":
+			if u, p, ok := r.BasicAuth(); !ok || u != "m1user" || p != "m1secret" {
+				http.Error(w, "bad basic auth on child token", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"tok-child"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer m1Srv.Close()
+
+	// 2. 匿名公共 mirror 走跨域 CDN 重定向仍可正常回退成功
+	var anonMirror *httptest.Server
+	anonMirror = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v2/library/nginx/manifests/case"):
+			http.Redirect(w, r, crossSrv.URL+"/anon-manifest", http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer anonMirror.Close()
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yamlCfg := fmt.Sprintf(`registry:
+  auth:
+    - host: %s
+      username: m1user
+      token: m1secret
+  mirrors:
+    - name: private-m1
+      url: %s
+      enabled: true
+    - name: public-anon
+      url: %s
+      enabled: true
+`, m1Srv.URL, m1Srv.URL, anonMirror.URL)
+	if err := os.WriteFile(cfgPath, []byte(yamlCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("load config failed: %v", err)
+	}
+
+	c := New()
+
+	// 同源父+子清单重定向认证成功（仅走 private-m1，不触发 anonMirror）
+	q1 := DigestQuery{ImageRef: "nginx:case1", OS: "linux", Arch: "amd64", NeedConfigDigest: true}
+	res1 := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q1}, false, false, 1)[q1.Key()]
+	if res1.Error != nil || res1.IndexDigest != indexDigest || res1.ChildDigest != childDigest || res1.ConfigDigest != cfgDigest {
+		t.Fatalf("same-origin parent+child auth failed: %#v (err=%v)", res1, res1.Error)
+	}
+	if crossOriginAnonHits.Load() != 0 || crossOriginAuthHeaders.Load() != 0 {
+		t.Fatalf("expected no cross-origin calls on same-origin success, authHeaders=%d anonHits=%d", crossOriginAuthHeaders.Load(), crossOriginAnonHits.Load())
+	}
+
+	// token 请求遇到跨源重定向时拒绝携带凭据，不向跨源发送 Authorization，并成功回退到匿名 mirror
+	sameOriginMode.Store("redirect-token-cross-origin")
+	q2 := DigestQuery{ImageRef: "nginx:case2", OS: "linux", Arch: "amd64", NeedConfigDigest: false}
+	res2 := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q2}, false, false, 1)[q2.Key()]
+	if res2.Error != nil || res2.IndexDigest != indexDigest || res2.ChildDigest != childDigest {
+		t.Fatalf("expected fallback to anonymous cross-origin mirror on token redirect block, got: %#v (err=%v)", res2, res2.Error)
+	}
+	if crossOriginAuthHeaders.Load() != 0 {
+		t.Fatalf("expected 0 Authorization headers sent to cross-origin target, got %d", crossOriginAuthHeaders.Load())
+	}
+	if crossOriginAnonHits.Load() == 0 {
+		t.Fatal("expected anonymous mirror cross-origin redirect to succeed")
+	}
+
+	// manifest 请求（带 Bearer）遇到跨源重定向时同样阻断并不向跨源发送 Authorization，回退匿名 mirror
+	sameOriginMode.Store("redirect-manifest-cross-origin")
+	q3 := DigestQuery{ImageRef: "nginx:case3", OS: "linux", Arch: "amd64", NeedConfigDigest: false}
+	res3 := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q3}, false, false, 1)[q3.Key()]
+	if res3.Error != nil || res3.IndexDigest != indexDigest || res3.ChildDigest != childDigest {
+		t.Fatalf("expected fallback to anonymous mirror on manifest cross-origin redirect block, got: %#v (err=%v)", res3, res3.Error)
+	}
+	if crossOriginAuthHeaders.Load() != 0 {
+		t.Fatalf("expected 0 Authorization headers sent to cross-origin target after manifest redirect, got %d", crossOriginAuthHeaders.Load())
 	}
 }

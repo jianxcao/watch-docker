@@ -81,8 +81,9 @@ type Client struct {
 	rateLimits  map[string]rateLimitState // canonical registry host -> 限流状态
 	rateLimitMu sync.RWMutex
 
-	credsMu     sync.RWMutex
-	credentials map[string]authn.AuthConfig // canonical host -> auth config
+	credsMu           sync.RWMutex
+	credentials       map[string]authn.AuthConfig // canonical host -> auth config
+	explicitHTTPHosts map[string]bool             // canonical host -> explicitly configured with http://
 
 	transportMu    sync.Mutex
 	transportProxy string
@@ -94,9 +95,10 @@ type Client struct {
 
 func New() *Client {
 	c := &Client{
-		cache:       make(map[string]CacheEntry),
-		rateLimits:  make(map[string]rateLimitState),
-		credentials: make(map[string]authn.AuthConfig),
+		cache:             make(map[string]CacheEntry),
+		rateLimits:        make(map[string]rateLimitState),
+		credentials:       make(map[string]authn.AuthConfig),
+		explicitHTTPHosts: make(map[string]bool),
 	}
 
 	c.UpdateManifestCredentials()
@@ -294,11 +296,16 @@ func normalizeImageRef(ref string) (normalized, host, repo, tag string, err erro
 func (c *Client) UpdateManifestCredentials() {
 	cfg := config.Get()
 	newCreds := make(map[string]authn.AuthConfig)
+	newExplicitHTTP := make(map[string]bool)
 	if cfg != nil {
 		for _, auth := range cfg.Registry.Auth {
-			host := canonicalHost(auth.Host)
+			rawHost := strings.TrimSpace(auth.Host)
+			host := canonicalHost(rawHost)
 			if host == "" {
 				continue
+			}
+			if strings.HasPrefix(strings.ToLower(rawHost), "http://") {
+				newExplicitHTTP[host] = true
 			}
 			if strings.TrimSpace(auth.Username) == "" && strings.TrimSpace(auth.Token) == "" {
 				continue
@@ -312,6 +319,7 @@ func (c *Client) UpdateManifestCredentials() {
 
 	c.credsMu.Lock()
 	c.credentials = newCreds
+	c.explicitHTTPHosts = newExplicitHTTP
 	c.credsMu.Unlock()
 
 	c.mu.Lock()
@@ -333,8 +341,17 @@ func (c *Client) getCredentialForHost(host string) (authn.AuthConfig, bool) {
 
 func (c *Client) isHostExplicitHTTP(host string) bool {
 	target := canonicalHost(host)
+	if target == "" {
+		return false
+	}
+	c.credsMu.RLock()
+	explicit := c.explicitHTTPHosts[target]
+	c.credsMu.RUnlock()
+	if explicit {
+		return true
+	}
 	cfg := config.Get()
-	if cfg == nil || target == "" {
+	if cfg == nil {
 		return false
 	}
 	for _, item := range cfg.Registry.Auth {
