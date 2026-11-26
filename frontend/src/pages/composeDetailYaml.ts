@@ -173,6 +173,23 @@ export function createComposeDetailYamlController(deps: ComposeDetailYamlDeps) {
     }
     activeConfirmDialog = dialogEntry
 
+    const confirmedProjectName = targetProject.name
+    const confirmedComposeFile = targetProject.composeFile
+    const confirmedSwitchSeq = routeSwitchSeq
+
+    const isConfirmationStillValid = () => {
+      if (dialogEntry.cancelled || activeConfirmDialog !== dialogEntry) {
+        return false
+      }
+      if (routeSwitchSeq !== confirmedSwitchSeq || projectName.value !== confirmedProjectName) {
+        return false
+      }
+      const cur = deps.getCurrentProject()
+      return Boolean(
+        cur && cur.name === confirmedProjectName && cur.composeFile === confirmedComposeFile,
+      )
+    }
+
     const content = isYamlModified.value
       ? '保存 YAML 配置后将重新创建并启动所有服务，这可能会导致服务短暂中断。是否继续？'
       : '将重新创建并启动所有服务，这可能会导致服务短暂中断。是否继续？'
@@ -180,45 +197,47 @@ export function createComposeDetailYamlController(deps: ComposeDetailYamlDeps) {
     const handle = deps.openConfirmDialog({
       content,
       onConfirm: async () => {
-        if (dialogEntry.cancelled) {
-          return
-        }
-        if (activeConfirmDialog === dialogEntry) {
-          activeConfirmDialog = null
-        }
-        if (!isCurrentProjectYamlLoaded.value) {
-          await loadYamlContent()
-          if (dialogEntry.cancelled) {
+        try {
+          if (!isConfirmationStillValid()) {
             return
           }
-        }
-        const cur = deps.getCurrentProject()
-        const loaded = loadedYamlTarget.value
-        if (
-          yamlLoading.value ||
-          !cur ||
-          cur.name !== projectName.value ||
-          !loaded ||
-          loaded.projectName !== cur.name ||
-          loaded.composeFile !== cur.composeFile ||
-          !yamlContent.value ||
-          !isYamlValid.value
-        ) {
-          return
-        }
+          if (!isCurrentProjectYamlLoaded.value) {
+            await loadYamlContent()
+            if (!isConfirmationStillValid()) {
+              return
+            }
+          }
+          const loaded = loadedYamlTarget.value
+          if (
+            yamlLoading.value ||
+            !isConfirmationStillValid() ||
+            !loaded ||
+            loaded.projectName !== confirmedProjectName ||
+            loaded.composeFile !== confirmedComposeFile ||
+            !yamlContent.value ||
+            !isYamlValid.value
+          ) {
+            return
+          }
 
-        deploySnapshot.value = {
-          projectName: cur.name,
-          composeFile: cur.composeFile,
-          yamlContent: yamlContent.value,
+          deploySnapshot.value = {
+            projectName: confirmedProjectName,
+            composeFile: confirmedComposeFile,
+            yamlContent: yamlContent.value,
+          }
+          await nextTick()
+          if (!isConfirmationStillValid()) {
+            deploySnapshot.value = null
+            return
+          }
+          deployLoading.value = true
+          showProgress.value = true
+          deps.startDeployProgress()
+        } finally {
+          if (activeConfirmDialog === dialogEntry) {
+            activeConfirmDialog = null
+          }
         }
-        await nextTick()
-        if (dialogEntry.cancelled || projectName.value !== cur.name) {
-          return
-        }
-        deployLoading.value = true
-        showProgress.value = true
-        deps.startDeployProgress()
       },
     })
     dialogEntry.destroy = handle.destroy

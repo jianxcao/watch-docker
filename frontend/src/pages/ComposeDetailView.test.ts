@@ -243,4 +243,100 @@ describe('ComposeDetailView YAML project switching & deploy race protection', ()
       composeFile: projectB.composeFile,
     })
   })
+
+  it('ignores confirmed A deploy when switched to B while A YAML is still pending', async () => {
+    const { controller, pendingYamlCalls, openedDialogs, startDeployProgress } = setupTestHarness()
+    controller.activeTab.value = 'containers'
+
+    // 在 A 的容器页点击重新部署并确认，触发 A 的按需 loadYamlContent（保持等待）
+    controller.handleDeploy()
+    expect(openedDialogs).toHaveLength(1)
+    const confirmAPromise = Promise.resolve(openedDialogs[0].onConfirm())
+    await Promise.resolve()
+    expect(pendingYamlCalls).toHaveLength(1)
+    expect(pendingYamlCalls[0].projectName).toBe(projectA.name)
+
+    // 切换到 B 并打开 YAML 页
+    controller.activeTab.value = 'yaml'
+    const switchToBPromise = controller.switchProject(projectB.name)
+    await Promise.resolve()
+    expect(pendingYamlCalls).toHaveLength(2)
+    expect(pendingYamlCalls[1].projectName).toBe(projectB.name)
+
+    // 先返回 B，再返回 A
+    pendingYamlCalls[1].deferred.resolve(yamlB)
+    await switchToBPromise
+    pendingYamlCalls[0].deferred.resolve(yamlA)
+    await confirmAPromise
+
+    expect(startDeployProgress).not.toHaveBeenCalled()
+    expect(controller.showProgress.value).toBe(false)
+    expect(controller.deployLoading.value).toBe(false)
+    expect(controller.deploySnapshot.value).toBeNull()
+    expect(controller.yamlContent.value).toBe(yamlB)
+    expect(controller.loadedYamlTarget.value).toEqual({
+      projectName: projectB.name,
+      composeFile: projectB.composeFile,
+    })
+  })
+
+  it('blocks A -> B -> A stale async confirm and preserves later confirmation on revisited A', async () => {
+    const { controller, pendingYamlCalls, openedDialogs, startDeployProgress } = setupTestHarness()
+    controller.activeTab.value = 'containers'
+
+    // 在第一次停留在 A 时打开确认并进入等待 A1 YAML
+    controller.handleDeploy()
+    expect(openedDialogs).toHaveLength(1)
+    const firstConfirmA = Promise.resolve(openedDialogs[0].onConfirm())
+    await Promise.resolve()
+    expect(pendingYamlCalls).toHaveLength(1)
+    const firstACall = pendingYamlCalls[0]
+
+    // 快速切换 A -> B -> A
+    await controller.switchProject(projectB.name)
+    await controller.switchProject(projectA.name)
+    controller.activeTab.value = 'yaml'
+    const loadARevisitPromise = controller.loadYamlContent()
+    await Promise.resolve()
+    expect(pendingYamlCalls).toHaveLength(2)
+    pendingYamlCalls[1].deferred.resolve(yamlA)
+    await loadARevisitPromise
+
+    // 再次进入 A 后重新打开确认框，不应被旧回调的 finally 误清空
+    controller.handleDeploy()
+    expect(openedDialogs).toHaveLength(2)
+
+    // 此时旧的 A1 YAML 返回：必须因 routeSwitchSeq 不一致而被拒绝，也不得清除第二次确认记录
+    firstACall.deferred.resolve(yamlA)
+    await firstConfirmA
+    expect(startDeployProgress).not.toHaveBeenCalled()
+
+    // 验证第二次在 A 上打开的新确认框仍可正常确认并恰好部署 A 一次
+    await openedDialogs[1].onConfirm()
+    expect(startDeployProgress).toHaveBeenCalledTimes(1)
+    expect(controller.deployTargetProjectName.value).toBe(projectA.name)
+    expect(controller.deployTargetComposeFile.value).toBe(projectA.composeFile)
+    expect(controller.deployTargetYamlContent.value).toBe(yamlA)
+  })
+
+  it('deploys A exactly once when staying on A until async confirmation finishes', async () => {
+    const { controller, pendingYamlCalls, openedDialogs, startDeployProgress } = setupTestHarness()
+    controller.activeTab.value = 'containers'
+
+    controller.handleDeploy()
+    expect(openedDialogs).toHaveLength(1)
+    const confirmAPromise = Promise.resolve(openedDialogs[0].onConfirm())
+    await Promise.resolve()
+    expect(pendingYamlCalls).toHaveLength(1)
+
+    pendingYamlCalls[0].deferred.resolve(yamlA)
+    await confirmAPromise
+
+    expect(startDeployProgress).toHaveBeenCalledTimes(1)
+    expect(controller.showProgress.value).toBe(true)
+    expect(controller.deployLoading.value).toBe(true)
+    expect(controller.deployTargetProjectName.value).toBe(projectA.name)
+    expect(controller.deployTargetComposeFile.value).toBe(projectA.composeFile)
+    expect(controller.deployTargetYamlContent.value).toBe(yamlA)
+  })
 })

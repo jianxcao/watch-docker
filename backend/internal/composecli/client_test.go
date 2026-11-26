@@ -303,4 +303,44 @@ func TestSaveProjectPreservesSiblingComposeFileAndValidatesOwnership(t *testing.
 	if gotSingle, _ := os.ReadFile(singleFile); string(gotSingle) != updatedYaml {
 		t.Fatalf("single compose.yaml not updated: %q", string(gotSingle))
 	}
+
+	// 5. 编辑目录发现项目中的标准 override 文件时，保留主文件 + override 的完整有序部署列表
+	overrideDir := filepath.Join(appDir, "with-override")
+	if err := os.MkdirAll(overrideDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	baseYaml := filepath.Join(overrideDir, "compose.yaml")
+	overrideYaml := filepath.Join(overrideDir, "compose.override.yaml")
+	origBase := "services:\n  api:\n    image: nginx:1.25\n"
+	origOverride := "services:\n  worker:\n    image: alpine:3.19\n"
+	updatedOverride := "services:\n  worker:\n    image: alpine:3.20\n"
+	if err := os.WriteFile(baseYaml, []byte(origBase), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overrideYaml, []byte(origOverride), 0644); err != nil {
+		t.Fatal(err)
+	}
+	overrideCli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			return nil, nil
+		},
+	}
+	savedOv, deployFilesOv, err := overrideCli.SaveProjectForDeploy(ctx, "with-override", overrideYaml, updatedOverride, true)
+	if err != nil {
+		t.Fatalf("expected editing override file to succeed, got %v", err)
+	}
+	resolvedBase, _ := filepath.EvalSymlinks(baseYaml)
+	resolvedOv, _ := filepath.EvalSymlinks(overrideYaml)
+	if savedOv != resolvedOv {
+		t.Fatalf("expected saved file %q, got %q", resolvedOv, savedOv)
+	}
+	if len(deployFilesOv) != 2 || deployFilesOv[0] != resolvedBase || deployFilesOv[1] != resolvedOv {
+		t.Fatalf("expected ordered deploy files [%q, %q], got %#v", resolvedBase, resolvedOv, deployFilesOv)
+	}
+	if gotBase, _ := os.ReadFile(baseYaml); string(gotBase) != origBase {
+		t.Fatalf("base compose.yaml modified unexpectedly when saving override")
+	}
+	if gotOv, _ := os.ReadFile(overrideYaml); string(gotOv) != updatedOverride {
+		t.Fatalf("compose.override.yaml not updated")
+	}
 }

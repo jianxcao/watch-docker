@@ -4,7 +4,7 @@
     <n-spin :show="loading" class="h-[300px] flex items-center justify-center" v-if="loading">
     </n-spin>
     <template v-else>
-      <div v-if="!containerDetail" class="empty-state">
+      <div v-if="!isCurrentContainerDetail || !containerDetail" class="empty-state">
         <n-empty description="容器不存在">
           <template #extra>
             <n-button @click="handleBack">返回列表</n-button>
@@ -134,7 +134,7 @@
 
     <!-- Teleport 到页面头部 -->
     <Teleport to="#header" defer>
-      <div class="page-header" v-if="containerDetail">
+      <div class="page-header" v-if="isCurrentContainerDetail && containerDetail">
         <div class="flex items-center gap-3">
           <n-button text circle @click="handleBack">
             <template #icon>
@@ -169,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, useThemeVars, type DropdownOption } from 'naive-ui'
 import {
@@ -200,7 +200,7 @@ import {
   parseContainerListQuery,
 } from '@/pages/listQuery'
 import statsEmitter from '@/evt/containerStats'
-import type { ContainerStats, ContainerStatus } from '@/common/types'
+import { createContainerDetailController } from './containerDetailController'
 
 // 导入 Tab 组件
 import OverviewTab from './OverviewTab.vue'
@@ -222,22 +222,28 @@ const { handleStart, handleStop, handleRestart, handleUpdate, handleDelete } = u
 const theme = useThemeVars()
 // 状态（使用 computed 响应路由参数变化，避免更新容器产生新 ID 后停留在旧 ID）
 const containerId = computed(() => route.params.id as string)
-const containerDetail = ref<any>(null)
-const containerStats = ref<ContainerStats | null>(null)
-const loading = ref(false)
 const activeTab = defineModel<string>('activeTab', { default: 'overview' })
-
-// 容器名称
-const containerName = computed(() => {
-  if (!containerDetail.value) {
-    return ''
-  }
-  return containerDetail.value.Name.replace(/^\//, '')
+const {
+  containerDetail,
+  containerStats,
+  loading,
+  isCurrentContainerDetail,
+  canOperateMenu,
+  containerName,
+  loadContainerDetail,
+  resolveActionContainer,
+} = createContainerDetailController({
+  getContainerId: () => containerId.value,
+  fetchContainerDetail: (id) => containerStore.getContainerDetail(id),
+  onLoadError: (error: any) => {
+    console.error('加载容器详情失败:', error)
+    message.error('加载容器详情失败: ' + (error?.message || '未知错误'))
+  },
 })
 
 // 下拉菜单选项
 const dropdownOptions = computed<DropdownOption[]>(() => {
-  if (!containerDetail.value) {
+  if (!canOperateMenu.value || !containerDetail.value) {
     return []
   }
 
@@ -302,7 +308,7 @@ const tabHeight = computed(() => {
 
 // 日志 WebSocket URL（未开启认证时允许不带 token 连接）
 const logsSocketUrl = computed(() => {
-  if (!containerDetail.value) {
+  if (!isCurrentContainerDetail.value || !containerDetail.value) {
     return ''
   }
 
@@ -317,21 +323,6 @@ const logsSocketUrl = computed(() => {
   return token ? `${base}&token=${encodeURIComponent(token)}` : base
 })
 
-// 加载容器详情
-const loadContainerDetail = async () => {
-  loading.value = true
-  try {
-    const detail = await containerStore.getContainerDetail(containerId.value)
-    containerDetail.value = detail ?? null
-  } catch (error: any) {
-    containerDetail.value = null
-    console.error('加载容器详情失败:', error)
-    message.error('加载容器详情失败: ' + (error.message || '未知错误'))
-  } finally {
-    loading.value = false
-  }
-}
-
 // 处理统计数据更新
 const handleStatsUpdate = (containers: any[]) => {
   const container = containers.find((c) => c.id === containerId.value)
@@ -342,40 +333,36 @@ const handleStatsUpdate = (containers: any[]) => {
 
 // 操作菜单处理
 const handleMenuSelect = async (key: string) => {
-  if (!containerDetail.value) {
+  const container = resolveActionContainer((id) => containerStore.findContainerById(id))
+  if (!container) {
     return
   }
-
-  // 从容器列表中找到对应的容器对象（已停止容器可能尚未同步进 store，使用详情兜底）
-  const container: ContainerStatus = containerStore.findContainerById(containerId.value) || {
-    id: containerDetail.value.Id,
-    name: containerName.value,
-    image: containerDetail.value.Config?.Image || '',
-    running: Boolean(containerDetail.value.State?.Running),
-    status: '',
-    skipped: false,
-    skipReason: '',
-    labels: containerDetail.value.Config?.Labels || {},
-    lastCheckedAt: '',
-    startedAt: containerDetail.value.State?.StartedAt || '',
-    ports: [],
-  }
+  const actionTargetId = container.id
 
   switch (key) {
     case 'start':
       await handleStart(container)
-      await loadContainerDetail()
+      if (containerId.value === actionTargetId) {
+        await loadContainerDetail()
+      }
       break
     case 'stop':
       await handleStop(container)
-      await loadContainerDetail()
+      if (containerId.value === actionTargetId) {
+        await loadContainerDetail()
+      }
       break
     case 'restart':
       await handleRestart(container)
-      await loadContainerDetail()
+      if (containerId.value === actionTargetId) {
+        await loadContainerDetail()
+      }
       break
     case 'update': {
       const newContainerId = await handleUpdate(container)
+      if (containerId.value !== actionTargetId) {
+        break
+      }
       if (newContainerId && newContainerId !== containerId.value) {
         await router.replace({
           name: 'container-detail',
@@ -389,7 +376,7 @@ const handleMenuSelect = async (key: string) => {
     }
     case 'delete': {
       const deleted = await handleDelete(container)
-      if (deleted) {
+      if (deleted && containerId.value === actionTargetId) {
         const back = typeof window !== 'undefined' ? window.history.state?.back : null
         if (
           typeof back === 'string' &&

@@ -231,3 +231,286 @@ func TestComposeCreateUpSourceUsesSpecifiedComposeFileAndStopsOnSaveError(t *tes
 		}
 	})
 }
+
+func extractComposeFileFlags(args []string) []string {
+	var flags []string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-f" {
+			flags = append(flags, "-f", args[i+1])
+			i++
+		}
+	}
+	return flags
+}
+
+func runComposeConfigServices(t *testing.T, execDir string, upArgs []string) []string {
+	t.Helper()
+	fileArgs := extractComposeFileFlags(upArgs)
+	cfgArgs := append(append([]string(nil), fileArgs...), "config", "--services")
+	res := composecli.ExecuteDockerComposeCommand(context.Background(), composecli.ExecDockerComposeOptions{
+		ExecPath:      execDir,
+		Args:          cfgArgs,
+		OperationName: "verify compose services",
+		NeedOutput:    true,
+	})
+	if res.Error != nil {
+		t.Fatalf("docker compose config --services failed (args=%#v): %v\noutput: %s", cfgArgs, res.Error, string(res.Output))
+	}
+	var services []string
+	for _, line := range strings.Split(string(res.Output), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			services = append(services, trimmed)
+		}
+	}
+	return services
+}
+
+func TestComposeCreateUpSourcePreservesOverrideFilesAndRuntimeConfigFiles(t *testing.T) {
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		conf.EnvCfg = origEnv
+	})
+
+	t.Run("directory-discovered compose.yaml + compose.override.yaml keeps both services and only edits compose.yaml", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "override-dir-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		baseFile := filepath.Join(projDir, "compose.yaml")
+		overrideFile := filepath.Join(projDir, "compose.override.yaml")
+
+		origBase := "services:\n  api:\n    image: nginx:1.25\n"
+		updatedBase := "services:\n  api:\n    image: nginx:1.27\n"
+		origOverride := "services:\n  worker:\n    image: alpine:3.20\n"
+		if err := os.WriteFile(baseFile, []byte(origBase), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(overrideFile, []byte(origOverride), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cli := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return nil, nil
+			},
+		}
+		execFn, calls := okStreamExecutor()
+		src := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "override-dir-proj",
+			ComposeFile:    baseFile,
+			YamlContent:    updatedBase,
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  cli,
+			StreamExecutor: execFn,
+		})
+
+		output := drainCreateUpStream(t, src)
+		if !strings.Contains(output, `"status":"success"`) {
+			t.Fatalf("expected success status, got: %s", output)
+		}
+
+		if gotBase, _ := os.ReadFile(baseFile); string(gotBase) != updatedBase {
+			t.Fatalf("compose.yaml not updated: got=%q want=%q", string(gotBase), updatedBase)
+		}
+		if gotOverride, _ := os.ReadFile(overrideFile); string(gotOverride) != origOverride {
+			t.Fatalf("compose.override.yaml must stay untouched: got=%q want=%q", string(gotOverride), origOverride)
+		}
+
+		if len(*calls) != 2 {
+			t.Fatalf("expected up + ps calls, got %d: %#v", len(*calls), *calls)
+		}
+		wantUpArgs := []string{"-f", baseFile, "-f", overrideFile, "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate"}
+		wantPsArgs := []string{"-f", baseFile, "-f", overrideFile, "ps"}
+		if (*calls)[0].ExecPath != projDir || !reflect.DeepEqual((*calls)[0].Args, wantUpArgs) {
+			t.Fatalf("unexpected up call: %#v (want dir=%q args=%#v)", (*calls)[0], projDir, wantUpArgs)
+		}
+		if (*calls)[1].ExecPath != projDir || !reflect.DeepEqual((*calls)[1].Args, wantPsArgs) {
+			t.Fatalf("unexpected ps call: %#v (want dir=%q args=%#v)", (*calls)[1], projDir, wantPsArgs)
+		}
+
+		services := runComposeConfigServices(t, (*calls)[0].ExecPath, (*calls)[0].Args)
+		wantServices := map[string]bool{"api": false, "worker": false}
+		for _, svc := range services {
+			wantServices[svc] = true
+		}
+		if !wantServices["api"] || !wantServices["worker"] || len(services) != 2 {
+			t.Fatalf("expected services [api worker] with selected -f flags, got %#v", services)
+		}
+	})
+
+	t.Run("explicit single-file runtime project ignores sibling compose.override.yaml", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "single-runtime-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		baseFile := filepath.Join(projDir, "compose.yaml")
+		overrideFile := filepath.Join(projDir, "compose.override.yaml")
+
+		origBase := "services:\n  api:\n    image: nginx:1.25\n"
+		updatedBase := "services:\n  api:\n    image: nginx:1.27\n"
+		origOverride := "services:\n  worker:\n    image: alpine:3.20\n"
+		if err := os.WriteFile(baseFile, []byte(origBase), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(overrideFile, []byte(origOverride), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cli := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return []composecli.ListOutput{{
+					Name:        "single-runtime-proj",
+					Status:      "running(1)",
+					ConfigFiles: baseFile,
+				}}, nil
+			},
+		}
+		execFn, calls := okStreamExecutor()
+		src := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "single-runtime-proj",
+			ComposeFile:    baseFile,
+			YamlContent:    updatedBase,
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  cli,
+			StreamExecutor: execFn,
+		})
+
+		output := drainCreateUpStream(t, src)
+		if !strings.Contains(output, `"status":"success"`) {
+			t.Fatalf("expected success status, got: %s", output)
+		}
+		if len(*calls) != 2 {
+			t.Fatalf("expected up + ps calls, got %d", len(*calls))
+		}
+		wantUpArgs := []string{"-f", baseFile, "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate"}
+		wantPsArgs := []string{"-f", baseFile, "ps"}
+		if !reflect.DeepEqual((*calls)[0].Args, wantUpArgs) || !reflect.DeepEqual((*calls)[1].Args, wantPsArgs) {
+			t.Fatalf("expected single-file -f %q args, got up=%#v ps=%#v", baseFile, (*calls)[0].Args, (*calls)[1].Args)
+		}
+
+		services := runComposeConfigServices(t, (*calls)[0].ExecPath, (*calls)[0].Args)
+		if !reflect.DeepEqual(services, []string{"api"}) {
+			t.Fatalf("expected only [api] loaded when runtime ConfigFiles selects single file, got %#v", services)
+		}
+	})
+
+	t.Run("runtime ConfigFiles conflict with edited target errors before writing or invoking executor", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "conflict-runtime-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		composeYaml := filepath.Join(projDir, "compose.yaml")
+		dockerComposeYml := filepath.Join(projDir, "docker-compose.yml")
+		origCompose := "services:\n  api:\n    image: nginx:1.25\n"
+		origLegacy := "services:\n  legacy:\n    image: busybox:1.36\n"
+		if err := os.WriteFile(composeYaml, []byte(origCompose), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dockerComposeYml, []byte(origLegacy), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cli := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return []composecli.ListOutput{{
+					Name:        "conflict-runtime-proj",
+					Status:      "running(1)",
+					ConfigFiles: dockerComposeYml,
+				}}, nil
+			},
+		}
+		execFn, calls := okStreamExecutor()
+		src := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "conflict-runtime-proj",
+			ComposeFile:    composeYaml,
+			YamlContent:    "services:\n  api:\n    image: nginx:1.28\n",
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  cli,
+			StreamExecutor: execFn,
+		})
+
+		output := drainCreateUpStream(t, src)
+		if !strings.Contains(output, `"status":"error"`) || !strings.Contains(output, composeYaml) || !strings.Contains(output, dockerComposeYml) {
+			t.Fatalf("expected error naming conflicting paths %q and %q, got: %s", composeYaml, dockerComposeYml, output)
+		}
+		if len(*calls) != 0 {
+			t.Fatalf("expected 0 executor calls on config file conflict, got %#v", *calls)
+		}
+		if got, _ := os.ReadFile(composeYaml); string(got) != origCompose {
+			t.Fatalf("compose.yaml modified on conflict: %q", string(got))
+		}
+		if got, _ := os.ReadFile(dockerComposeYml); string(got) != origLegacy {
+			t.Fatalf("docker-compose.yml modified on conflict: %q", string(got))
+		}
+	})
+
+	t.Run("runtime ConfigFiles pointing to foreign project directory errors before writing or invoking executor", func(t *testing.T) {
+		projADir := filepath.Join(resolvedAppDir, "foreign-check-a")
+		projBDir := filepath.Join(resolvedAppDir, "foreign-check-b")
+		for _, d := range []string{projADir, projBDir} {
+			if err := os.MkdirAll(d, 0755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fileA := filepath.Join(projADir, "compose.yaml")
+		fileB := filepath.Join(projBDir, "compose.yaml")
+		origA := "services:\n  a:\n    image: alpine:3.19\n"
+		origB := "services:\n  b:\n    image: alpine:3.20\n"
+		if err := os.WriteFile(fileA, []byte(origA), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fileB, []byte(origB), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cli := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return []composecli.ListOutput{{
+					Name:        "foreign-check-a",
+					Status:      "running(1)",
+					ConfigFiles: fileB,
+				}}, nil
+			},
+		}
+		execFn, calls := okStreamExecutor()
+		src := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "foreign-check-a",
+			ComposeFile:    fileA,
+			YamlContent:    "services:\n  a:\n    image: alpine:3.21\n",
+			Force:          true,
+			ComposeDir:     projADir,
+			ComposeClient:  cli,
+			StreamExecutor: execFn,
+		})
+
+		output := drainCreateUpStream(t, src)
+		if !strings.Contains(output, `"status":"error"`) || !strings.Contains(output, fileB) {
+			t.Fatalf("expected error naming foreign path %q, got: %s", fileB, output)
+		}
+		if len(*calls) != 0 {
+			t.Fatalf("expected 0 executor calls on ownership mismatch, got %#v", *calls)
+		}
+		if got, _ := os.ReadFile(fileA); string(got) != origA {
+			t.Fatalf("fileA modified on ownership mismatch")
+		}
+		if got, _ := os.ReadFile(fileB); string(got) != origB {
+			t.Fatalf("fileB modified on ownership mismatch")
+		}
+	})
+}
