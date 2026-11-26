@@ -36,11 +36,11 @@ func (s *ComposeLogsSource) Start(ctx context.Context) (StreamReader[[]byte], er
 		zap.String("projectName", s.projectName))
 
 	args := []string{"--ansi", "always", "logs", "--follow", "--timestamps", "--tail=500"}
-	if s.projectPath == "" {
-		prefix := s.argsPrefix
-		if len(prefix) == 0 {
-			prefix = []string{"-p", s.projectName}
-		}
+	prefix := s.argsPrefix
+	if len(prefix) == 0 && s.projectPath == "" {
+		prefix = []string{"-p", s.projectName}
+	}
+	if len(prefix) > 0 {
 		args = append(append([]string(nil), prefix...), args...)
 	}
 

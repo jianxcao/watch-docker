@@ -1193,3 +1193,36 @@ func TestComposeCreateUpSourcePreservesOverrideFilesAndRuntimeConfigFiles(t *tes
 		})
 	})
 }
+
+func TestComposeLogsSourceUsesArgsPrefixWithManagedProjectDir(t *testing.T) {
+	projDir := t.TempDir()
+	logDir := t.TempDir()
+	argsOut := filepath.Join(logDir, "compose-args.txt")
+	pwdOut := filepath.Join(logDir, "compose-pwd.txt")
+	installFakeDockerScript(t, "pwd > "+pwdOut+"\nprintf '%s\\n' \"$@\" > "+argsOut+"\necho 'log line 1'")
+
+	prodFile := filepath.Join(projDir, "prod.yaml")
+	overrideFile := filepath.Join(projDir, "override.yaml")
+	src := NewComposeLogsSource(projDir, "blue", "-p", "blue", "-f", prodFile, "-f", overrideFile)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reader, err := src.Start(ctx)
+	if err != nil {
+		t.Fatalf("ComposeLogsSource.Start failed: %v", err)
+	}
+	defer reader.Close()
+	_, _ = reader.Read(ctx)
+	_ = src.Stop()
+
+	gotPwd, _ := os.ReadFile(pwdOut)
+	if strings.TrimSpace(string(gotPwd)) != projDir {
+		t.Fatalf("logs pwd=%q, want %q", strings.TrimSpace(string(gotPwd)), projDir)
+	}
+	gotArgsRaw, _ := os.ReadFile(argsOut)
+	gotArgs := strings.Split(strings.TrimSpace(string(gotArgsRaw)), "\n")
+	wantArgs := []string{"compose", "-p", "blue", "-f", prodFile, "-f", overrideFile, "--ansi", "always", "logs", "--follow", "--timestamps", "--tail=500"}
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Fatalf("ComposeLogsSource args=%#v, want %#v", gotArgs, wantArgs)
+	}
+}

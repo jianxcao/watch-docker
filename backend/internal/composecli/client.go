@@ -36,6 +36,10 @@ var (
 	ErrSymlinkPath = errors.New("拒绝访问符号链接路径")
 	// ErrTraversalPath 表示路径包含非法目录穿越片段
 	ErrTraversalPath = errors.New("非法的目录穿越路径")
+	// ErrInvalidComposeFileName 表示文件名不属于标准 Compose 文件名
+	ErrInvalidComposeFileName = errors.New("非法 compose 文件名")
+	// ErrMultipleComposeFiles 表示传入了逗号分隔的多个 compose 文件路径
+	ErrMultipleComposeFiles = errors.New("不支持同时指定多个 composeFile")
 )
 
 // ValidateProjectName 严格校验 Compose 项目名称，禁止路径分隔符、上级引用或以 - 开头
@@ -145,7 +149,7 @@ func ValidateComposeFilePath(composeFile string) (projectDir string, cleanFile s
 	}
 	// docker compose ls 可能返回逗号分隔的多个路径，只允许操作受控单文件
 	if strings.Contains(trimmed, ",") {
-		return "", "", errors.New("不支持同时指定多个 composeFile")
+		return "", "", ErrMultipleComposeFiles
 	}
 	absFile, err := filepath.Abs(trimmed)
 	if err != nil {
@@ -153,7 +157,7 @@ func ValidateComposeFilePath(composeFile string) (projectDir string, cleanFile s
 	}
 	base := filepath.Base(absFile)
 	if !isComposeFileName(base) {
-		return "", "", fmt.Errorf("非法 compose 文件名: %s", base)
+		return "", "", fmt.Errorf("%w: %s", ErrInvalidComposeFileName, base)
 	}
 	if fi, lerr := os.Lstat(absFile); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return "", "", fmt.Errorf("%w: %s", ErrSymlinkPath, absFile)
@@ -365,11 +369,6 @@ func (c *Client) FindRuntimeProject(ctx context.Context, projectName string) (st
 	return "", false, nil
 }
 
-// ResolveComposeTarget 解析 Compose 生命周期执行目标：
-// 1. 优先校验 composeFile 位于 APP_PATH 内且非符号链接，直接返回 (projectDir, nil)；
-// 2. 若路径包含 .. 穿越直接拒绝；若路径位于 APP_PATH 内但为符号链接或非法文件名也直接拒绝，不回退到 -p 模式；
-// 3. 若 APP_PATH 未设置或 composeFile 为空/位于 APP_PATH 之外（包括使用自定义 -f 文件名的外部运行时栈），验证 projectName 存在于 docker compose 运行时列表后，
-//    返回 ("", []string{"-p", runtimeName}) 以支持外部/运行时 Compose 栈的启停、日志与下线。
 func isPathWithinAppRoot(rawPath string) bool {
 	appPath := strings.TrimSpace(conf.EnvCfg.APP_PATH)
 	if appPath == "" || strings.TrimSpace(rawPath) == "" {
@@ -401,26 +400,53 @@ func isPathWithinAppRoot(rawPath string) bool {
 	return false
 }
 
+// ResolveComposeTarget 解析 Compose 生命周期执行目标：
+// 1. 若 composeFile 为 APP_PATH 内的合法标准文件名且文件存在，直接返回 (projectDir, nil, nil)；
+// 2. 若 composeFile 位于 APP_PATH 一级子目录下但是自定义单个 .yml/.yaml 文件名，校验项目名与路径归属并查运行时记录，
+//    命中后返回 (projectDir, [-p <runtimeName> -f <file1> ...], nil)；未匹配或存在歧义/错误时直接报错；
+// 3. 若路径包含 NUL/.. 穿越，或位于 APP_PATH 内但为符号链接/非法目录，直接拒绝；
+// 4. 若 APP_PATH 未设置或 composeFile 为空/位于 APP_PATH 之外（及列表合并后的多文件逗号路径），
+//    验证 projectName 存在于 docker compose 运行时列表后返回 ("", ["-p", runtimeName], nil)。
 func (c *Client) ResolveComposeTarget(ctx context.Context, projectName, composeFile string) (string, []string, error) {
 	trimmedFile := strings.TrimSpace(composeFile)
+	trimmedProjectName := strings.TrimSpace(projectName)
 	if trimmedFile != "" {
-		projectPath, cleanFile, err := ValidateComposeFilePath(trimmedFile)
-		if err == nil {
-			if fi, lerr := os.Lstat(cleanFile); lerr == nil && fi.Mode().IsRegular() {
-				return projectPath, nil, nil
-			} else if lerr != nil && !os.IsNotExist(lerr) {
-				return "", nil, fmt.Errorf("检查 composeFile 失败: %w", lerr)
+		if strings.ContainsRune(trimmedFile, 0) {
+			return "", nil, errors.New("非法的 composeFile 路径")
+		}
+		if strings.Contains(trimmedFile, ",") {
+			for _, seg := range strings.Split(trimmedFile, ",") {
+				if strings.ContainsRune(seg, 0) {
+					return "", nil, errors.New("非法的 composeFile 路径")
+				}
+				if hasPathTraversalSegment(seg) {
+					return "", nil, fmt.Errorf("%w: %s", ErrTraversalPath, trimmedFile)
+				}
 			}
 		} else {
-			if errors.Is(err, ErrTraversalPath) ||
-				(isPathWithinAppRoot(trimmedFile) && (errors.Is(err, ErrSymlinkPath) || strings.HasPrefix(err.Error(), "非法 compose 文件名"))) {
-				return "", nil, err
+			projectPath, cleanFile, err := ValidateComposeFilePath(trimmedFile)
+			if err == nil {
+				if fi, lerr := os.Lstat(cleanFile); lerr == nil && fi.Mode().IsRegular() {
+					return projectPath, nil, nil
+				} else if lerr != nil && !os.IsNotExist(lerr) {
+					return "", nil, fmt.Errorf("检查 composeFile 失败: %w", lerr)
+				}
+			} else {
+				if errors.Is(err, ErrTraversalPath) {
+					return "", nil, err
+				}
+				if isPathWithinAppRoot(trimmedFile) {
+					if errors.Is(err, ErrSymlinkPath) || !errors.Is(err, ErrInvalidComposeFileName) {
+						return "", nil, err
+					}
+					return c.resolveManagedCustomRuntimeTarget(ctx, trimmedProjectName, trimmedFile)
+				}
 			}
 		}
 	}
 
-	if strings.TrimSpace(projectName) != "" {
-		runtimeName, found, err := c.FindRuntimeProject(ctx, projectName)
+	if trimmedProjectName != "" {
+		runtimeName, found, err := c.FindRuntimeProject(ctx, trimmedProjectName)
 		if err == nil && found {
 			return "", []string{"-p", runtimeName}, nil
 		}
@@ -434,6 +460,41 @@ func (c *Client) ResolveComposeTarget(ctx context.Context, projectName, composeF
 		return "", nil, errors.New("compose 文件不存在")
 	}
 	return "", nil, errors.New("项目不存在或未指定合法的 composeFile")
+}
+
+func (c *Client) resolveManagedCustomRuntimeTarget(ctx context.Context, projectName, rawComposeFile string) (string, []string, error) {
+	if err := ValidateProjectName(projectName); err != nil {
+		return "", nil, err
+	}
+	absFile, err := filepath.Abs(rawComposeFile)
+	if err != nil {
+		return "", nil, fmt.Errorf("解析 composeFile 路径失败: %w", err)
+	}
+	projectDir, err := ValidateProjectDir(filepath.Dir(absFile))
+	if err != nil {
+		return "", nil, err
+	}
+	cleanFile, err := validateProjectMemberConfigFile(projectDir, projectName, rawComposeFile)
+	if err != nil {
+		return "", nil, err
+	}
+	cand, err := c.lookupRuntimeCandidate(ctx, projectName, projectDir, cleanFile)
+	if err != nil {
+		return "", nil, err
+	}
+	if cand == nil {
+		return "", nil, fmt.Errorf("未找到与配置文件 %s 匹配的运行时 Compose 项目", cleanFile)
+	}
+	dirName := filepath.Base(projectDir)
+	if !strings.EqualFold(projectName, cand.name) && !strings.EqualFold(projectName, dirName) {
+		return "", nil, fmt.Errorf("项目名称 %s 与运行时项目 %s 不匹配", projectName, cand.name)
+	}
+	plan := DeployProjectPlan{
+		ProjectDir:         projectDir,
+		RuntimeProjectName: cand.name,
+		DeployFiles:        cand.files,
+	}
+	return projectDir, plan.ComposeArgsPrefix(), nil
 }
 
 func (c *Client) ListProjects(ctx context.Context) ([]ComposeProject, error) {

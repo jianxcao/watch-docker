@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -812,4 +814,159 @@ func TestDotEnvColonAssignment(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveComposeTargetCustomRuntimeFile(t *testing.T) {
+	ctx := context.Background()
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	projectDir := filepath.Join(resolvedAppDir, "site")
+	otherDir := filepath.Join(resolvedAppDir, "other")
+	extDir := filepath.Join(tmpRoot, "external")
+	for _, d := range []string{projectDir, otherDir, extDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prodFile := filepath.Join(projectDir, "prod.yaml")
+	overrideFile := filepath.Join(projectDir, "override.yaml")
+	otherCustomFile := filepath.Join(projectDir, "extra.yaml")
+	stdComposeFile := filepath.Join(projectDir, "compose.yaml")
+	otherDirProdFile := filepath.Join(otherDir, "prod.yaml")
+	extFile := filepath.Join(extDir, "prod.yaml")
+	txtFile := filepath.Join(projectDir, "notes.txt")
+	symFile := filepath.Join(projectDir, "sym.yaml")
+	for _, f := range []string{prodFile, overrideFile, otherCustomFile, stdComposeFile, otherDirProdFile, extFile} {
+		if err := os.WriteFile(f, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(txtFile, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(prodFile, symFile); err != nil {
+		t.Fatal(err)
+	}
+
+	cli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			return []ListOutput{
+				{
+					Name:        "blue",
+					Status:      "running(1)",
+					ConfigFiles: prodFile + "," + overrideFile,
+				},
+				{
+					Name:        "ext-stack",
+					Status:      "running(1)",
+					ConfigFiles: extFile,
+				},
+			}, nil
+		},
+	}
+
+	wantPrefix := []string{"-p", "blue", "-f", prodFile, "-f", overrideFile}
+	// 运行时名称或列表合并时保留的目录名均应匹配成功
+	for _, reqName := range []string{"blue", "site"} {
+		dir, prefix, err := cli.ResolveComposeTarget(ctx, reqName, prodFile)
+		if err != nil || dir != projectDir || !slices.Equal(prefix, wantPrefix) {
+			t.Fatalf("ResolveComposeTarget(%q) = %q, %q, %v (want dir=%q prefix=%q)", reqName, dir, prefix, err, projectDir, wantPrefix)
+		}
+	}
+
+	// StopProject 应在同一目录与完整前缀参数之后追加 stop
+	logDir := t.TempDir()
+	cmdLog := filepath.Join(logDir, "docker-args.log")
+	pwdLog := filepath.Join(logDir, "docker-pwd.log")
+	setupFakeDockerInPath(t, "pwd > "+pwdLog+"\nprintf '%s\\n' \"$@\" > "+cmdLog)
+	if err := cli.StopProject(ctx, "blue", prodFile); err != nil {
+		t.Fatalf("StopProject failed: %v", err)
+	}
+	gotPwd, _ := os.ReadFile(pwdLog)
+	if strings.TrimSpace(string(gotPwd)) != projectDir {
+		t.Fatalf("StopProject pwd=%q, want %q", strings.TrimSpace(string(gotPwd)), projectDir)
+	}
+	gotArgsRaw, _ := os.ReadFile(cmdLog)
+	gotArgs := strings.Split(strings.TrimSpace(string(gotArgsRaw)), "\n")
+	wantStopArgs := append(append([]string{"compose"}, wantPrefix...), "stop")
+	if !slices.Equal(gotArgs, wantStopArgs) {
+		t.Fatalf("StopProject args=%#v, want %#v", gotArgs, wantStopArgs)
+	}
+
+	// 对照用例 1：标准受管文件直接返回 (projectDir, nil, nil)
+	if dir, prefix, err := cli.ResolveComposeTarget(ctx, "site", stdComposeFile); err != nil || dir != projectDir || len(prefix) != 0 {
+		t.Fatalf("standard composeFile = (%q, %#v, %v), want (%q, nil, nil)", dir, prefix, err, projectDir)
+	}
+	// 对照用例 2：外部运行时项目返回 ("", ["-p", "ext-stack"], nil)
+	if dir, prefix, err := cli.ResolveComposeTarget(ctx, "ext-stack", extFile); err != nil || dir != "" || !slices.Equal(prefix, []string{"-p", "ext-stack"}) {
+		t.Fatalf("external runtime project = (%q, %#v, %v)", dir, prefix, err)
+	}
+	// 对照用例 3：ListProjects 合并后的逗号分隔 ConfigFiles 继续回退到 -p blue
+	if dir, prefix, err := cli.ResolveComposeTarget(ctx, "blue", prodFile+","+overrideFile); err != nil || dir != "" || !slices.Equal(prefix, []string{"-p", "blue"}) {
+		t.Fatalf("comma-separated ConfigFiles = (%q, %#v, %v)", dir, prefix, err)
+	}
+	// 对照用例 4：StatusDraft 删除仍走 ValidateComposeFilePath 并拒绝自定义文件名
+	if err := cli.DeleteProject(ctx, "site", prodFile, StatusDraft); err == nil {
+		t.Fatalf("expected StatusDraft DeleteProject to reject custom filename %q", prodFile)
+	}
+
+	// 负例验证
+	t.Run("negative cases", func(t *testing.T) {
+		if _, _, err := cli.ResolveComposeTarget(ctx, "other-name", prodFile); err == nil {
+			t.Fatal("expected mismatched project name to fail")
+		}
+		if _, _, err := cli.ResolveComposeTarget(ctx, "blue", otherCustomFile); err == nil {
+			t.Fatal("expected unreferenced custom file extra.yaml in same dir to fail")
+		}
+		if _, _, err := cli.ResolveComposeTarget(ctx, "blue", otherDirProdFile); err == nil {
+			t.Fatal("expected same project name in different directory to fail")
+		}
+		if _, _, err := cli.ResolveComposeTarget(ctx, "blue", symFile); !errors.Is(err, ErrSymlinkPath) {
+			t.Fatalf("expected ErrSymlinkPath for %q, got %v", symFile, err)
+		}
+		traversalPath := projectDir + string(filepath.Separator) + ".." + string(filepath.Separator) + "site" + string(filepath.Separator) + "prod.yaml"
+		if _, _, err := cli.ResolveComposeTarget(ctx, "blue", traversalPath); !errors.Is(err, ErrTraversalPath) {
+			t.Fatalf("expected ErrTraversalPath, got %v", err)
+		}
+		if _, _, err := cli.ResolveComposeTarget(ctx, "blue", txtFile); err == nil {
+			t.Fatal("expected non-yaml custom filename to fail")
+		}
+
+		emptyCli := &Client{RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) { return nil, nil }}
+		if _, _, err := emptyCli.ResolveComposeTarget(ctx, "blue", prodFile); err == nil {
+			t.Fatal("expected empty runtime list to reject custom managed file")
+		}
+
+		errCli := &Client{RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) { return nil, errors.New("daemon offline") }}
+		if _, _, err := errCli.ResolveComposeTarget(ctx, "blue", prodFile); err == nil {
+			t.Fatal("expected runtime query error to fail")
+		}
+
+		ambiguousCli := &Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+				return []ListOutput{
+					{Name: "blue", Status: "running(1)", ConfigFiles: prodFile},
+					{Name: "green", Status: "running(1)", ConfigFiles: prodFile},
+				}, nil
+			},
+		}
+		if _, _, err := ambiguousCli.ResolveComposeTarget(ctx, "site", prodFile); err == nil {
+			t.Fatal("expected ambiguous multiple runtime matches for same file to fail")
+		}
+	})
 }
