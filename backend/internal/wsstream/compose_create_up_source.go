@@ -23,8 +23,8 @@ type ComposeCreateUpSource struct {
 
 	// 依赖项
 	composeClient interface {
-		SaveProjectForDeploy(ctx context.Context, name, composeFile, yamlContent string, force bool) (string, []string, error)
-		ResolveDeployProjectFiles(ctx context.Context, name, composeFile string) (string, []string, error)
+		SaveProjectPlanForDeploy(ctx context.Context, name, composeFile, yamlContent string, force bool) (composecli.DeployProjectPlan, error)
+		ResolveDeployPlan(ctx context.Context, name, composeFile string) (composecli.DeployProjectPlan, error)
 	}
 	streamExecutor func(ctx context.Context, options composecli.ExecDockerComposeStreamOptions) *composecli.ExecDockerComposeStreamResult
 
@@ -40,8 +40,8 @@ type ComposeCreateUpSourceOptions struct {
 	Force         bool
 	ComposeDir    string
 	ComposeClient interface {
-		SaveProjectForDeploy(ctx context.Context, name, composeFile, yamlContent string, force bool) (string, []string, error)
-		ResolveDeployProjectFiles(ctx context.Context, name, composeFile string) (string, []string, error)
+		SaveProjectPlanForDeploy(ctx context.Context, name, composeFile, yamlContent string, force bool) (composecli.DeployProjectPlan, error)
+		ResolveDeployPlan(ctx context.Context, name, composeFile string) (composecli.DeployProjectPlan, error)
 	}
 	StreamExecutor func(ctx context.Context, options composecli.ExecDockerComposeStreamOptions) *composecli.ExecDockerComposeStreamResult
 	OnComplete     func(composeDir string) // 完成回调
@@ -80,17 +80,6 @@ func (s *ComposeCreateUpSource) Start(ctx context.Context) (StreamReader[[]byte]
 
 	// 使用 ByteStreamReader 直接流式传输
 	return NewByteStreamReader(reader), nil
-}
-
-func buildComposeFileArgs(files []string) []string {
-	args := make([]string, 0, len(files)*2)
-	for _, f := range files {
-		if f == "" {
-			continue
-		}
-		args = append(args, "-f", f)
-	}
-	return args
 }
 
 // processFlow 处理完整的创建和启动流程
@@ -135,10 +124,10 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 		return err
 	}
 
-	var deployFiles []string
+	var plan composecli.DeployProjectPlan
 	execDir := s.composeDir
 
-	// 1. 如果有 yaml 内容，先保存用户编辑的文件并解析完整部署文件列表；无 yaml 时同样校验并解析部署文件列表
+	// 1. 如果有 yaml 内容，先保存用户编辑的文件并解析完整部署方案（含运行时 -p 项目名与有序 -f 文件列表）；无 yaml 时同样校验并解析
 	if s.yamlContent != "" {
 		// 发送信息：正在创建项目
 		if err := writeInfo(fmt.Sprintf("正在创建或更新项目 %s...\r\n", s.projectName)); err != nil {
@@ -146,8 +135,8 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 			return
 		}
 
-		// 只写入用户编辑的文件，同时接住完整有序的部署配置文件列表（含标准 override 或运行时 ConfigFiles）
-		savedPath, resolvedFiles, err := s.composeClient.SaveProjectForDeploy(ctx, s.projectName, s.composeFile, s.yamlContent, s.force)
+		var err error
+		plan, err = s.composeClient.SaveProjectPlanForDeploy(ctx, s.projectName, s.composeFile, s.yamlContent, s.force)
 		if err != nil {
 			// 创建失败，写入错误并结束
 			errMsg := fmt.Sprintf("创建或更新项目文件失败: %s\r\n", err.Error())
@@ -160,26 +149,29 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 			return // 直接结束，不执行后续命令
 		}
 
-		deployFiles = resolvedFiles
-		execDir = filepath.Dir(savedPath)
+		if plan.SavedFile != "" {
+			execDir = filepath.Dir(plan.SavedFile)
+		} else if plan.ProjectDir != "" {
+			execDir = plan.ProjectDir
+		}
 
 		// 创建成功
-		successMsg := fmt.Sprintf("✓ 项目文件创建或更新成功: %s\r\n", savedPath)
+		successMsg := fmt.Sprintf("✓ 项目文件创建或更新成功: %s\r\n", plan.SavedFile)
 		if err := writeSuccess(successMsg); err != nil {
 			logger.Logger.Error("写入成功消息失败", zap.Error(err))
 			return
 		}
 	} else if s.composeClient != nil {
-		projectDir, resolvedFiles, err := s.composeClient.ResolveDeployProjectFiles(ctx, s.projectName, s.composeFile)
+		var err error
+		plan, err = s.composeClient.ResolveDeployPlan(ctx, s.projectName, s.composeFile)
 		if err != nil {
 			errMsg := fmt.Sprintf("校验 Compose 文件列表失败: %s\r\n", err.Error())
 			_ = writeError(errMsg)
 			_ = writeStatus("error", "创建项目失败: "+err.Error())
 			return
 		}
-		deployFiles = resolvedFiles
-		if projectDir != "" {
-			execDir = projectDir
+		if plan.ProjectDir != "" {
+			execDir = plan.ProjectDir
 		}
 	}
 
@@ -189,10 +181,10 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 		return
 	}
 
-	// 3. 执行 docker compose up 命令（up 与后续 ps 共用同一组有序 -f 参数）
-	fileArgs := buildComposeFileArgs(deployFiles)
-	upArgs := make([]string, 0, len(fileArgs)+6)
-	upArgs = append(upArgs, fileArgs...)
+	// 3. 执行 docker compose up 命令（up 与后续 ps 共用同一组 -p <runtimeName> 与有序 -f 参数）
+	prefixArgs := plan.ComposeArgsPrefix()
+	upArgs := make([]string, 0, len(prefixArgs)+6)
+	upArgs = append(upArgs, prefixArgs...)
 	upArgs = append(upArgs, "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate")
 	result := s.streamExecutor(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      execDir,
@@ -272,11 +264,11 @@ afterUpCommand:
 		return
 	}
 
-	// 6. 获取项目状态（与 up 共用同一组有序 -f 参数）
+	// 6. 获取项目状态（与 up 共用同一组 -p 与有序 -f 参数）
 	writeInfo("\r\n正在获取项目状态...\r\n")
 
-	psArgs := make([]string, 0, len(fileArgs)+1)
-	psArgs = append(psArgs, fileArgs...)
+	psArgs := make([]string, 0, len(prefixArgs)+1)
+	psArgs = append(psArgs, prefixArgs...)
 	psArgs = append(psArgs, "ps")
 	statusResult := s.streamExecutor(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      execDir,

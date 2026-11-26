@@ -344,3 +344,223 @@ func TestSaveProjectPreservesSiblingComposeFileAndValidatesOwnership(t *testing.
 		t.Fatalf("compose.override.yaml not updated")
 	}
 }
+
+func setupFakeDockerInPath(t *testing.T, scriptBody string) {
+	t.Helper()
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	content := "#!/bin/sh\n" + scriptBody + "\n"
+	if err := os.WriteFile(dockerPath, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestSaveProjectPlanFailClosedOnRuntimeQueryErrorAndHonorsDotEnvAndDraftSelection(t *testing.T) {
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		conf.EnvCfg = origEnv
+	})
+
+	ctx := context.Background()
+
+	t.Run("docker compose ls non-zero exit fails before writing", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "ls-exit1-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		mainFile := filepath.Join(projDir, "compose.yaml")
+		prodFile := filepath.Join(projDir, "prod.yaml")
+		origMain := "services:\n  api:\n    image: nginx:1.25\n"
+		origProd := "services:\n  worker:\n    image: alpine:3.19\n"
+		if err := os.WriteFile(mainFile, []byte(origMain), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(prodFile, []byte(origProd), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		setupFakeDockerInPath(t, `echo "daemon unreachable" >&2
+exit 1`)
+		c := &Client{}
+		if _, err := c.SaveProjectPlanForDeploy(ctx, "ls-exit1-proj", mainFile, "services:\n  api:\n    image: nginx:1.28\n", true); err == nil {
+			t.Fatalf("expected error when docker compose ls exits non-zero")
+		}
+		if got, _ := os.ReadFile(mainFile); string(got) != origMain {
+			t.Fatalf("compose.yaml modified despite ls exit 1: %q", string(got))
+		}
+		if got, _ := os.ReadFile(prodFile); string(got) != origProd {
+			t.Fatalf("prod.yaml modified despite ls exit 1: %q", string(got))
+		}
+	})
+
+	t.Run("docker compose ls corrupt JSON fails before writing", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "ls-badjson-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		mainFile := filepath.Join(projDir, "compose.yaml")
+		origMain := "services:\n  api:\n    image: nginx:1.25\n"
+		if err := os.WriteFile(mainFile, []byte(origMain), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		setupFakeDockerInPath(t, `printf '{corrupt-json'`)
+		c := &Client{}
+		if _, err := c.SaveProjectPlanForDeploy(ctx, "ls-badjson-proj", mainFile, "services:\n  api:\n    image: nginx:1.28\n", true); err == nil {
+			t.Fatalf("expected error when docker compose ls outputs corrupt JSON")
+		}
+		if got, _ := os.ReadFile(mainFile); string(got) != origMain {
+			t.Fatalf("compose.yaml modified despite corrupt JSON: %q", string(got))
+		}
+	})
+
+	t.Run("docker compose ls returning empty array deploys draft normally", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "ls-empty-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		mainFile := filepath.Join(projDir, "compose.yaml")
+		if err := os.WriteFile(mainFile, []byte("services:\n  api:\n    image: nginx:1.25\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		setupFakeDockerInPath(t, `printf '[]'`)
+		c := &Client{}
+		updated := "services:\n  api:\n    image: nginx:1.28\n"
+		plan, err := c.SaveProjectPlanForDeploy(ctx, "ls-empty-proj", mainFile, updated, true)
+		if err != nil {
+			t.Fatalf("expected draft deploy to succeed when ls returns []: %v", err)
+		}
+		if plan.RuntimeProjectName != "" || len(plan.DeployFiles) != 1 || plan.DeployFiles[0] != mainFile {
+			t.Fatalf("unexpected draft plan: %#v", plan)
+		}
+		if got, _ := os.ReadFile(mainFile); string(got) != updated {
+			t.Fatalf("compose.yaml not updated: %q", string(got))
+		}
+	})
+
+	t.Run("draft honors .env COMPOSE_FILE and COMPOSE_PATH_SEPARATOR", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "dotenv-draft-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		mainFile := filepath.Join(projDir, "compose.yaml")
+		prodFile := filepath.Join(projDir, "prod.yaml")
+		overrideFile := filepath.Join(projDir, "compose.override.yaml")
+		envFile := filepath.Join(projDir, ".env")
+
+		if err := os.WriteFile(mainFile, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(prodFile, []byte("services:\n  worker:\n    image: alpine:3.20\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(overrideFile, []byte("services:\n  ignored:\n    image: busybox:1.36\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(envFile, []byte("COMPOSE_PATH_SEPARATOR=;\nCOMPOSE_FILE=\"compose.yaml;prod.yaml\"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		c := &Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+				return nil, nil
+			},
+		}
+		plan, err := c.SaveProjectPlanForDeploy(ctx, "dotenv-draft-proj", prodFile, "services:\n  worker:\n    image: alpine:3.21\n", true)
+		if err != nil {
+			t.Fatalf("expected editing member of .env COMPOSE_FILE to succeed: %v", err)
+		}
+		if plan.SavedFile != prodFile || plan.RuntimeProjectName != "" || len(plan.DeployFiles) != 2 || plan.DeployFiles[0] != mainFile || plan.DeployFiles[1] != prodFile {
+			t.Fatalf("unexpected .env deploy plan: %#v", plan)
+		}
+		// overrideFile 不在 COMPOSE_FILE 中时，试图将其作为编辑目标必须在写盘前报错
+		if _, err := c.SaveProjectPlanForDeploy(ctx, "dotenv-draft-proj", overrideFile, "services: {}\n", true); err == nil {
+			t.Fatalf("expected conflict when editing file absent from .env COMPOSE_FILE")
+		}
+	})
+
+	t.Run("multi-primary draft allows selecting either primary file explicitly in both orders", func(t *testing.T) {
+		for _, order := range []string{"legacy-first", "compose-first"} {
+			t.Run(order, func(t *testing.T) {
+				projDir := filepath.Join(resolvedAppDir, "dual-primary-"+order)
+				if err := os.MkdirAll(projDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				composeYaml := filepath.Join(projDir, "compose.yaml")
+				dockerComposeYml := filepath.Join(projDir, "docker-compose.yml")
+				origCompose := "services:\n  a:\n    image: nginx:1.25\n"
+				origLegacy := "services:\n  b:\n    image: busybox:1.36\n"
+				if err := os.WriteFile(composeYaml, []byte(origCompose), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(dockerComposeYml, []byte(origLegacy), 0644); err != nil {
+					t.Fatal(err)
+				}
+
+				c := &Client{
+					RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+						return nil, nil
+					},
+				}
+
+				firstFile, secondFile := dockerComposeYml, composeYaml
+				firstOtherContent, secondOtherContent := origCompose, origLegacy
+				if order == "compose-first" {
+					firstFile, secondFile = composeYaml, dockerComposeYml
+					firstOtherContent, secondOtherContent = origLegacy, origCompose
+				}
+
+				// 选中第一份主文件（分别覆盖带 YAML 与仅启动解析）
+				firstUpdated := "services:\n  picked:\n    image: alpine:3.20\n"
+				plan1, err := c.SaveProjectPlanForDeploy(ctx, "dual-primary-"+order, firstFile, firstUpdated, true)
+				if err != nil {
+					t.Fatalf("first explicit primary save failed: %v", err)
+				}
+				if len(plan1.DeployFiles) == 0 || plan1.DeployFiles[0] != firstFile {
+					t.Fatalf("expected first -f to target %q, got %#v", firstFile, plan1.DeployFiles)
+				}
+				otherFile := dockerComposeYml
+				if firstFile == dockerComposeYml {
+					otherFile = composeYaml
+				}
+				if gotOther, _ := os.ReadFile(otherFile); string(gotOther) != firstOtherContent {
+					t.Fatalf("unselected primary %q modified: %q", otherFile, string(gotOther))
+				}
+
+				roPlan1, err := c.ResolveDeployPlan(ctx, "dual-primary-"+order, firstFile)
+				if err != nil || len(roPlan1.DeployFiles) == 0 || roPlan1.DeployFiles[0] != firstFile {
+					t.Fatalf("ResolveDeployPlan failed for %q: plan=%#v err=%v", firstFile, roPlan1, err)
+				}
+
+				// 接着选中第二份主文件
+				secondUpdated := "services:\n  picked2:\n    image: alpine:3.21\n"
+				plan2, err := c.SaveProjectPlanForDeploy(ctx, "dual-primary-"+order, secondFile, secondUpdated, true)
+				if err != nil {
+					t.Fatalf("second explicit primary save failed: %v", err)
+				}
+				if len(plan2.DeployFiles) == 0 || plan2.DeployFiles[0] != secondFile {
+					t.Fatalf("expected first -f to target %q, got %#v", secondFile, plan2.DeployFiles)
+				}
+				if gotOther2, _ := os.ReadFile(firstFile); string(gotOther2) != firstUpdated {
+					t.Fatalf("previously updated %q modified when saving %q", firstFile, secondFile)
+				}
+				_ = secondOtherContent
+			})
+		}
+	})
+}

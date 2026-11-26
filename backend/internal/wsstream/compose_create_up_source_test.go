@@ -2,10 +2,12 @@ package wsstream
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -232,11 +234,11 @@ func TestComposeCreateUpSourceUsesSpecifiedComposeFileAndStopsOnSaveError(t *tes
 	})
 }
 
-func extractComposeFileFlags(args []string) []string {
+func extractComposePrefixFlags(args []string) []string {
 	var flags []string
 	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "-f" {
-			flags = append(flags, "-f", args[i+1])
+		if args[i] == "-p" || args[i] == "-f" {
+			flags = append(flags, args[i], args[i+1])
 			i++
 		}
 	}
@@ -245,8 +247,8 @@ func extractComposeFileFlags(args []string) []string {
 
 func runComposeConfigServices(t *testing.T, execDir string, upArgs []string) []string {
 	t.Helper()
-	fileArgs := extractComposeFileFlags(upArgs)
-	cfgArgs := append(append([]string(nil), fileArgs...), "config", "--services")
+	prefixArgs := extractComposePrefixFlags(upArgs)
+	cfgArgs := append(append([]string(nil), prefixArgs...), "config", "--services")
 	res := composecli.ExecuteDockerComposeCommand(context.Background(), composecli.ExecDockerComposeOptions{
 		ExecPath:      execDir,
 		Args:          cfgArgs,
@@ -262,7 +264,45 @@ func runComposeConfigServices(t *testing.T, execDir string, upArgs []string) []s
 			services = append(services, trimmed)
 		}
 	}
+	slices.Sort(services)
 	return services
+}
+
+func runComposeConfigJSONNameAndServices(t *testing.T, execDir string, upArgs []string) (string, []string) {
+	t.Helper()
+	prefixArgs := extractComposePrefixFlags(upArgs)
+	cfgArgs := append(append([]string(nil), prefixArgs...), "config", "--format", "json")
+	res := composecli.ExecuteDockerComposeCommand(context.Background(), composecli.ExecDockerComposeOptions{
+		ExecPath:      execDir,
+		Args:          cfgArgs,
+		OperationName: "verify compose config json",
+		NeedOutput:    true,
+	})
+	if res.Error != nil {
+		t.Fatalf("docker compose config --format json failed (args=%#v): %v\noutput: %s", cfgArgs, res.Error, string(res.Output))
+	}
+	var parsed struct {
+		Name     string         `json:"name"`
+		Services map[string]any `json:"services"`
+	}
+	if err := json.Unmarshal(res.Output, &parsed); err != nil {
+		t.Fatalf("parse docker compose config json failed: %v\noutput: %s", err, string(res.Output))
+	}
+	services := make([]string, 0, len(parsed.Services))
+	for svc := range parsed.Services {
+		services = append(services, svc)
+	}
+	return parsed.Name, services
+}
+
+func installFakeDockerScript(t *testing.T, scriptBody string) {
+	t.Helper()
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	if err := os.WriteFile(dockerPath, []byte("#!/bin/sh\n"+scriptBody+"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestComposeCreateUpSourcePreservesOverrideFilesAndRuntimeConfigFiles(t *testing.T) {
@@ -397,10 +437,10 @@ func TestComposeCreateUpSourcePreservesOverrideFilesAndRuntimeConfigFiles(t *tes
 		if len(*calls) != 2 {
 			t.Fatalf("expected up + ps calls, got %d", len(*calls))
 		}
-		wantUpArgs := []string{"-f", baseFile, "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate"}
-		wantPsArgs := []string{"-f", baseFile, "ps"}
+		wantUpArgs := []string{"-p", "single-runtime-proj", "-f", baseFile, "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate"}
+		wantPsArgs := []string{"-p", "single-runtime-proj", "-f", baseFile, "ps"}
 		if !reflect.DeepEqual((*calls)[0].Args, wantUpArgs) || !reflect.DeepEqual((*calls)[1].Args, wantPsArgs) {
-			t.Fatalf("expected single-file -f %q args, got up=%#v ps=%#v", baseFile, (*calls)[0].Args, (*calls)[1].Args)
+			t.Fatalf("expected -p single-runtime-proj -f %q args, got up=%#v ps=%#v", baseFile, (*calls)[0].Args, (*calls)[1].Args)
 		}
 
 		services := runComposeConfigServices(t, (*calls)[0].ExecPath, (*calls)[0].Args)
@@ -512,5 +552,323 @@ func TestComposeCreateUpSourcePreservesOverrideFilesAndRuntimeConfigFiles(t *tes
 		if got, _ := os.ReadFile(fileB); string(got) != origB {
 			t.Fatalf("fileB modified on ownership mismatch")
 		}
+	})
+
+	t.Run("runtime project name -p blue in payments dir is preserved for up and ps and rejects ambiguity", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "payments")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		mainFile := filepath.Join(projDir, "compose.yaml")
+		prodFile := filepath.Join(projDir, "prod.yaml")
+		greenFile := filepath.Join(projDir, "green.yaml")
+
+		origMain := "services:\n  api:\n    image: nginx:1.25\n"
+		updatedMain := "services:\n  api:\n    image: nginx:1.27\n"
+		origProd := "services:\n  worker:\n    image: alpine:3.20\n"
+		if err := os.WriteFile(mainFile, []byte(origMain), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(prodFile, []byte(origProd), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(greenFile, []byte("services:\n  green:\n    image: busybox:1.36\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// 1. 单一自定义运行时名 -p blue
+		cliSingle := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return []composecli.ListOutput{{
+					Name:        "blue",
+					Status:      "running(2)",
+					ConfigFiles: mainFile + "," + prodFile,
+				}}, nil
+			},
+		}
+		execFn, calls := okStreamExecutor()
+		src := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "payments",
+			ComposeFile:    mainFile,
+			YamlContent:    updatedMain,
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  cliSingle,
+			StreamExecutor: execFn,
+		})
+		output := drainCreateUpStream(t, src)
+		if !strings.Contains(output, `"status":"success"`) {
+			t.Fatalf("expected success status for runtime -p blue, got: %s", output)
+		}
+		if len(*calls) != 2 {
+			t.Fatalf("expected 2 executor calls, got %d", len(*calls))
+		}
+		wantUp := []string{"-p", "blue", "-f", mainFile, "-f", prodFile, "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate"}
+		wantPs := []string{"-p", "blue", "-f", mainFile, "-f", prodFile, "ps"}
+		if !reflect.DeepEqual((*calls)[0].Args, wantUp) || !reflect.DeepEqual((*calls)[1].Args, wantPs) {
+			t.Fatalf("expected -p blue with ordered -f files, got up=%#v ps=%#v", (*calls)[0].Args, (*calls)[1].Args)
+		}
+
+		cfgName, cfgServices := runComposeConfigJSONNameAndServices(t, (*calls)[0].ExecPath, (*calls)[0].Args)
+		if cfgName != "blue" {
+			t.Fatalf("expected docker compose config name == \"blue\", got %q", cfgName)
+		}
+		wantSvcs := map[string]bool{"api": false, "worker": false}
+		for _, svc := range cfgServices {
+			wantSvcs[svc] = true
+		}
+		if !wantSvcs["api"] || !wantSvcs["worker"] || len(cfgServices) != 2 {
+			t.Fatalf("expected services [api worker], got %#v", cfgServices)
+		}
+
+		// 2. 同目录存在两个候选项目 (blue 与 green) 且都引用了 compose.yaml 时，无法唯一定位，必须在写盘前拒绝
+		beforeMain, _ := os.ReadFile(mainFile)
+		cliAmbiguous := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return []composecli.ListOutput{
+					{Name: "blue", Status: "running(1)", ConfigFiles: mainFile + "," + prodFile},
+					{Name: "green", Status: "running(1)", ConfigFiles: mainFile + "," + greenFile},
+				}, nil
+			},
+		}
+		execAmb, callsAmb := okStreamExecutor()
+		srcAmb := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "payments",
+			ComposeFile:    mainFile,
+			YamlContent:    "services:\n  api:\n    image: nginx:bad\n",
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  cliAmbiguous,
+			StreamExecutor: execAmb,
+		})
+		outAmb := drainCreateUpStream(t, srcAmb)
+		if !strings.Contains(outAmb, `"status":"error"`) || !strings.Contains(outAmb, "blue") || !strings.Contains(outAmb, "green") {
+			t.Fatalf("expected error listing candidate names blue & green, got: %s", outAmb)
+		}
+		if len(*callsAmb) != 0 {
+			t.Fatalf("expected 0 executor calls on ambiguous multi-runtime directory, got %#v", *callsAmb)
+		}
+		if afterMain, _ := os.ReadFile(mainFile); string(afterMain) != string(beforeMain) {
+			t.Fatalf("compose.yaml modified despite ambiguous runtime projects")
+		}
+	})
+
+	t.Run("draft .env COMPOSE_FILE aligns with docker compose config --services", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "dotenv-ws-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		mainFile := filepath.Join(projDir, "compose.yaml")
+		prodFile := filepath.Join(projDir, "prod.yaml")
+		envFile := filepath.Join(projDir, ".env")
+
+		if err := os.WriteFile(mainFile, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(prodFile, []byte("services:\n  worker:\n    image: alpine:3.20\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(envFile, []byte("COMPOSE_FILE=compose.yaml:prod.yaml\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cli := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return nil, nil
+			},
+		}
+		execFn, calls := okStreamExecutor()
+		src := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "dotenv-ws-proj",
+			ComposeFile:    mainFile,
+			YamlContent:    "services:\n  web:\n    image: nginx:1.27\n",
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  cli,
+			StreamExecutor: execFn,
+		})
+		out := drainCreateUpStream(t, src)
+		if !strings.Contains(out, `"status":"success"`) {
+			t.Fatalf("expected .env COMPOSE_FILE deploy success, got: %s", out)
+		}
+
+		gotSvcs := runComposeConfigServices(t, projDir, (*calls)[0].Args)
+		nativeSvcs := runComposeConfigServices(t, projDir, nil)
+		if !reflect.DeepEqual(gotSvcs, nativeSvcs) {
+			t.Fatalf("deploy services %v differ from native docker compose config --services %v", gotSvcs, nativeSvcs)
+		}
+
+		// 改为只含主文件的 COMPOSE_FILE=compose.yaml
+		if err := os.WriteFile(envFile, []byte("COMPOSE_FILE=compose.yaml\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		execSingle, callsSingle := okStreamExecutor()
+		srcSingle := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "dotenv-ws-proj",
+			ComposeFile:    mainFile,
+			YamlContent:    "services:\n  web:\n    image: nginx:1.28\n",
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  cli,
+			StreamExecutor: execSingle,
+		})
+		outSingle := drainCreateUpStream(t, srcSingle)
+		if !strings.Contains(outSingle, `"status":"success"`) {
+			t.Fatalf("expected single COMPOSE_FILE deploy success, got: %s", outSingle)
+		}
+		gotSingleSvcs := runComposeConfigServices(t, projDir, (*callsSingle)[0].Args)
+		if !reflect.DeepEqual(gotSingleSvcs, []string{"web"}) {
+			t.Fatalf("expected only [web] when COMPOSE_FILE=compose.yaml, got %#v", gotSingleSvcs)
+		}
+	})
+
+	t.Run("explicit primary draft selection vs runtime conflict", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "explicit-draft-ws")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		composeYaml := filepath.Join(projDir, "compose.yaml")
+		dockerComposeYml := filepath.Join(projDir, "docker-compose.yml")
+		origCompose := "services:\n  a:\n    image: nginx:1.25\n"
+		origLegacy := "services:\n  b:\n    image: busybox:1.36\n"
+		if err := os.WriteFile(composeYaml, []byte(origCompose), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dockerComposeYml, []byte(origLegacy), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		draftCli := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return nil, nil
+			},
+		}
+
+		// 先显式选择 docker-compose.yml（此前会错误优先选 compose.yaml 并冲突）
+		exec1, calls1 := okStreamExecutor()
+		newLegacy := "services:\n  b:\n    image: busybox:1.37\n"
+		out1 := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "explicit-draft-ws",
+			ComposeFile:    dockerComposeYml,
+			YamlContent:    newLegacy,
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  draftCli,
+			StreamExecutor: exec1,
+		}))
+		if !strings.Contains(out1, `"status":"success"`) {
+			t.Fatalf("expected selecting docker-compose.yml in draft dir to succeed, got: %s", out1)
+		}
+		if len(*calls1) != 2 || (*calls1)[0].Args[0] != "-f" || (*calls1)[0].Args[1] != dockerComposeYml {
+			t.Fatalf("expected first -f to be %q, got %#v", dockerComposeYml, (*calls1)[0].Args)
+		}
+		if gotC, _ := os.ReadFile(composeYaml); string(gotC) != origCompose {
+			t.Fatalf("compose.yaml must stay untouched when deploying docker-compose.yml")
+		}
+
+		// 若已有运行时记录只含 compose.yaml，再次选择 docker-compose.yml 应在写盘前报冲突
+		runtimeCli := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return []composecli.ListOutput{{
+					Name:        "explicit-draft-ws",
+					Status:      "running(1)",
+					ConfigFiles: composeYaml,
+				}}, nil
+			},
+		}
+		execConflict, callsConflict := okStreamExecutor()
+		outConflict := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+			ProjectName:    "explicit-draft-ws",
+			ComposeFile:    dockerComposeYml,
+			YamlContent:    "services:\n  b:\n    image: busybox:1.38\n",
+			Force:          true,
+			ComposeDir:     projDir,
+			ComposeClient:  runtimeCli,
+			StreamExecutor: execConflict,
+		}))
+		if !strings.Contains(outConflict, `"status":"error"`) || !strings.Contains(outConflict, dockerComposeYml) {
+			t.Fatalf("expected conflict error mentioning %q, got: %s", dockerComposeYml, outConflict)
+		}
+		if len(*callsConflict) != 0 {
+			t.Fatalf("expected 0 executor calls on runtime conflict, got %#v", *callsConflict)
+		}
+		if gotL, _ := os.ReadFile(dockerComposeYml); string(gotL) != newLegacy {
+			t.Fatalf("docker-compose.yml modified on runtime conflict")
+		}
+	})
+
+	t.Run("fake docker ls failures abort wsstream before write or up while [] succeeds", func(t *testing.T) {
+		projDir := filepath.Join(resolvedAppDir, "ls-ws-check")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		mainFile := filepath.Join(projDir, "compose.yaml")
+		prodFile := filepath.Join(projDir, "prod.yaml")
+		origMain := "services:\n  api:\n    image: nginx:1.25\n"
+		origProd := "services:\n  worker:\n    image: alpine:3.20\n"
+		if err := os.WriteFile(mainFile, []byte(origMain), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(prodFile, []byte(origProd), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, tc := range []struct {
+			name   string
+			script string
+		}{
+			{name: "non-zero exit", script: "echo 'ls failed' >&2\nexit 1"},
+			{name: "corrupt json", script: "printf '{broken'"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				installFakeDockerScript(t, tc.script)
+				execFn, calls := okStreamExecutor()
+				out := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+					ProjectName:    "ls-ws-check",
+					ComposeFile:    mainFile,
+					YamlContent:    "services:\n  api:\n    image: nginx:1.28\n",
+					Force:          true,
+					ComposeDir:     projDir,
+					ComposeClient:  &composecli.Client{},
+					StreamExecutor: execFn,
+				}))
+				if !strings.Contains(out, `"status":"error"`) {
+					t.Fatalf("expected error status, got: %s", out)
+				}
+				if len(*calls) != 0 {
+					t.Fatalf("expected 0 executor calls, got %#v", *calls)
+				}
+				if gotM, _ := os.ReadFile(mainFile); string(gotM) != origMain {
+					t.Fatalf("compose.yaml modified on ls failure")
+				}
+				if gotP, _ := os.ReadFile(prodFile); string(gotP) != origProd {
+					t.Fatalf("prod.yaml modified on ls failure")
+				}
+			})
+		}
+
+		t.Run("empty array succeeds as draft", func(t *testing.T) {
+			installFakeDockerScript(t, "printf '[]'")
+			execFn, calls := okStreamExecutor()
+			updatedMain := "services:\n  api:\n    image: nginx:1.28\n"
+			out := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+				ProjectName:    "ls-ws-check",
+				ComposeFile:    mainFile,
+				YamlContent:    updatedMain,
+				Force:          true,
+				ComposeDir:     projDir,
+				ComposeClient:  &composecli.Client{},
+				StreamExecutor: execFn,
+			}))
+			if !strings.Contains(out, `"status":"success"`) {
+				t.Fatalf("expected success when docker compose ls outputs [], got: %s", out)
+			}
+			if len(*calls) != 2 {
+				t.Fatalf("expected up + ps calls when ls returns [], got %#v", *calls)
+			}
+			if gotM, _ := os.ReadFile(mainFile); string(gotM) != updatedMain {
+				t.Fatalf("compose.yaml not updated")
+			}
+		})
 	})
 }
