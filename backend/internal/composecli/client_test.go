@@ -692,3 +692,124 @@ exit 1`)
 		}
 	})
 }
+
+func clearDotEnvTestProcessVars(t *testing.T) {
+	t.Helper()
+	keys := []string{"COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "COMPOSE_DISABLE_ENV_FILE", "COMPOSE_ENV_FILES", "LOCAL_STAGE"}
+	for _, k := range keys {
+		key := k
+		if orig, had := os.LookupEnv(key); had {
+			t.Cleanup(func() { _ = os.Setenv(key, orig) })
+			_ = os.Unsetenv(key)
+		} else {
+			t.Cleanup(func() { _ = os.Unsetenv(key) })
+		}
+	}
+}
+
+func TestDotEnvColonAssignment(t *testing.T) {
+	clearDotEnvTestProcessVars(t)
+
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	cases := []struct {
+		name      string
+		line      string
+		want      string
+		wantFiles []string
+	}{
+		{
+			name:      "colon with space",
+			line:      "COMPOSE_FILE: custom.yaml",
+			want:      "custom.yaml",
+			wantFiles: []string{"custom.yaml"},
+		},
+		{
+			name:      "colon without space",
+			line:      "COMPOSE_FILE:custom.yaml",
+			want:      "custom.yaml",
+			wantFiles: []string{"custom.yaml"},
+		},
+		{
+			name:      "export colon with quoted equals in value",
+			line:      `export COMPOSE_FILE: "stage=x.yaml"`,
+			want:      "stage=x.yaml",
+			wantFiles: []string{"stage=x.yaml"},
+		},
+		{
+			name:      "colon with variable default expansion",
+			line:      `COMPOSE_FILE: ${LOCAL_STAGE:-custom}.yaml`,
+			want:      "custom.yaml",
+			wantFiles: []string{"custom.yaml"},
+		},
+		{
+			name:      "equals assignment preserves colon separator in value",
+			line:      `COMPOSE_FILE=base.yaml:prod.yaml`,
+			want:      "base.yaml:prod.yaml",
+			wantFiles: []string{"base.yaml", "prod.yaml"},
+		},
+	}
+
+	cli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			return nil, nil
+		},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("COMPOSE_PATH_SEPARATOR", ":")
+			projName := "colon-proj-" + string(rune('a'+i))
+			projDir := filepath.Join(resolvedAppDir, projName)
+			if err := os.MkdirAll(projDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// 同时放入 compose.yaml（web）和目标自定义文件（worker），确认选中目标而非默认 compose.yaml
+			if err := os.WriteFile(filepath.Join(projDir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx:1.25\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			wantFullPaths := make([]string, 0, len(tc.wantFiles))
+			for _, fname := range tc.wantFiles {
+				p := filepath.Join(projDir, fname)
+				if err := os.WriteFile(p, []byte("services:\n  worker:\n    image: alpine:3.20\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				wantFullPaths = append(wantFullPaths, p)
+			}
+			envPath := filepath.Join(projDir, ".env")
+			if err := os.WriteFile(envPath, []byte(tc.line+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			envMap := make(map[string]string)
+			if err := parseDotEnvFileInto(envPath, true, envMap); err != nil {
+				t.Fatalf("parseDotEnvFileInto(%q) failed: %v", tc.line, err)
+			}
+			if envMap["COMPOSE_FILE"] != tc.want {
+				t.Fatalf("line %q parsed %q, want %q", tc.line, envMap["COMPOSE_FILE"], tc.want)
+			}
+
+			plan, err := cli.ResolveDeployPlan(context.Background(), projName, "")
+			if err != nil {
+				t.Fatalf("ResolveDeployPlan failed: %v", err)
+			}
+			if !reflect.DeepEqual(plan.DeployFiles, wantFullPaths) {
+				t.Fatalf("DeployFiles=%#v, want %#v", plan.DeployFiles, wantFullPaths)
+			}
+		})
+	}
+}

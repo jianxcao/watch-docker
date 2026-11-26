@@ -1108,5 +1108,88 @@ func TestComposeCreateUpSourcePreservesOverrideFilesAndRuntimeConfigFiles(t *tes
 				t.Fatalf("compose.yaml modified despite missing retired.yaml: %q", string(got))
 			}
 		})
+
+		// Case 5: .env colon assignment selects custom.yaml, matches native compose, and blocks unselected or missing files
+		t.Run("dotenv colon assignment matches native compose and aborts on unselected or missing target", func(t *testing.T) {
+			colonDir := filepath.Join(resolvedAppDir, "colon-dotenv-ws")
+			if err := os.MkdirAll(colonDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			defaultYaml := filepath.Join(colonDir, "compose.yaml")
+			customYaml := filepath.Join(colonDir, "custom.yaml")
+			missingYaml := filepath.Join(colonDir, "missing.yaml")
+			envPath := filepath.Join(colonDir, ".env")
+
+			origDefault := "services:\n  web:\n    image: nginx:1.25\n"
+			origCustom := "services:\n  worker:\n    image: alpine:3.20\n"
+			updatedCustom := "services:\n  worker:\n    image: alpine:3.21\n"
+			if err := os.WriteFile(defaultYaml, []byte(origDefault), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(customYaml, []byte(origCustom), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(envPath, []byte("COMPOSE_FILE: custom.yaml\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			execFn, calls := okStreamExecutor()
+			src := NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+				ProjectName:    "colon-dotenv-ws",
+				ComposeFile:    customYaml,
+				YamlContent:    updatedCustom,
+				Force:          true,
+				ComposeDir:     colonDir,
+				ComposeClient:  draftCli,
+				StreamExecutor: execFn,
+			})
+			out := drainCreateUpStream(t, src)
+			if !strings.Contains(out, `"status":"success"`) {
+				t.Fatalf("expected success saving custom.yaml from colon dotenv, got: %s", out)
+			}
+			if len(*calls) != 2 {
+				t.Fatalf("expected up + ps calls, got %#v", *calls)
+			}
+			gotSvcs := runComposeConfigServices(t, colonDir, (*calls)[0].Args)
+			nativeSvcs := runComposeConfigServices(t, colonDir, nil)
+			if !reflect.DeepEqual(gotSvcs, []string{"worker"}) || !reflect.DeepEqual(gotSvcs, nativeSvcs) {
+				t.Fatalf("services mismatch: got=%v native=%v want=[worker]", gotSvcs, nativeSvcs)
+			}
+			if got, _ := os.ReadFile(customYaml); string(got) != updatedCustom {
+				t.Fatalf("custom.yaml not written: %q", string(got))
+			}
+
+			// 指定未列入 COMPOSE_FILE 的默认文件必须报错，且两份文件字节均保持调用前状态
+			if _, err := draftCli.SaveProjectPlanForDeploy(context.Background(), "colon-dotenv-ws", defaultYaml, "services:\n  web:\n    image: nginx:1.29\n", true); err == nil {
+				t.Fatalf("expected error saving default compose.yaml not listed in COMPOSE_FILE")
+			}
+			if got, _ := os.ReadFile(defaultYaml); string(got) != origDefault {
+				t.Fatalf("compose.yaml modified on conflict: %q", string(got))
+			}
+			if got, _ := os.ReadFile(customYaml); string(got) != updatedCustom {
+				t.Fatalf("custom.yaml modified on rejected default save: %q", string(got))
+			}
+
+			// .env 指向不存在文件时执行器调用数为零
+			if err := os.WriteFile(envPath, []byte("COMPOSE_FILE: "+filepath.Base(missingYaml)+"\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			execMiss, callsMiss := okStreamExecutor()
+			outMiss := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+				ProjectName:    "colon-dotenv-ws",
+				ComposeFile:    customYaml,
+				YamlContent:    "services:\n  worker:\n    image: alpine:3.22\n",
+				Force:          true,
+				ComposeDir:     colonDir,
+				ComposeClient:  draftCli,
+				StreamExecutor: execMiss,
+			}))
+			if !strings.Contains(outMiss, `"status":"error"`) {
+				t.Fatalf("expected error when .env references missing file, got: %s", outMiss)
+			}
+			if len(*callsMiss) != 0 {
+				t.Fatalf("expected 0 executor calls when .env references missing file, got %#v", *callsMiss)
+			}
+		})
 	})
 }

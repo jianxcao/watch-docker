@@ -1252,14 +1252,15 @@ func parseDotEnvFileInto(envPath string, requireExists bool, envMap map[string]s
 		if strings.HasPrefix(trimmed, "export") && len(trimmed) > len("export") && (trimmed[6] == ' ' || trimmed[6] == '\t') {
 			trimmed = strings.TrimSpace(trimmed[6:])
 		}
-		key, rawVal, ok := strings.Cut(trimmed, "=")
-		if !ok {
+		sep := strings.IndexAny(trimmed, "=:")
+		if sep < 0 {
 			continue
 		}
-		key = strings.TrimSpace(key)
+		key := strings.TrimSpace(trimmed[:sep])
 		if key == "" {
 			continue
 		}
+		rawVal := trimmed[sep+1:]
 		val, perr := parseDotEnvValue(rawVal, envMap)
 		if perr != nil {
 			return fmt.Errorf("解析环境文件 %s 中的变量 %s 失败: %w", envPath, key, perr)
