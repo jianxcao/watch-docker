@@ -27,6 +27,7 @@ type StreamManager[T MessageType] struct {
 	hubs          map[string]*StreamHub[T]
 	mu            sync.RWMutex
 	closed        bool
+	pumpsWG       sync.WaitGroup
 	clientCounter uint64
 	counterMu     sync.Mutex
 }
@@ -113,11 +114,27 @@ func (m *StreamManager[T]) StartHub(conn *websocket.Conn, key string, sourceFact
 		}
 		client := NewClient(conn, hub, clientID)
 		if hub.RegisterClient(client) {
+			m.mu.RLock()
+			if m.closed {
+				m.mu.RUnlock()
+				hub.UnregisterClient(client)
+				_ = conn.Close()
+				return
+			}
+			m.pumpsWG.Add(2)
+			m.mu.RUnlock()
+
 			logger.Logger.Debug("新的 WebSocket 连接",
 				zap.String("key", key),
 				zap.String("clientId", clientID))
-			go client.WritePump()
-			go client.ReadPump()
+			go func() {
+				defer m.pumpsWG.Done()
+				client.WritePump()
+			}()
+			go func() {
+				defer m.pumpsWG.Done()
+				client.ReadPump()
+			}()
 			return
 		}
 		m.RemoveHubIfMatch(key, hub)
@@ -160,6 +177,7 @@ func (m *StreamManager[T]) Close() {
 	for _, hub := range hubsToClose {
 		hub.Close()
 	}
+	m.pumpsWG.Wait()
 }
 
 func (m *StreamManager[T]) GetHubCount() int {

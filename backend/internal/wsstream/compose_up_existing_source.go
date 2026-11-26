@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -14,13 +15,15 @@ import (
 type ComposeUpExistingSource struct {
 	projectPath string
 	projectName string
+	argsPrefix  []string
 	key         string
 }
 
-func NewComposeUpExistingSource(projectPath, projectName string) *ComposeUpExistingSource {
+func NewComposeUpExistingSource(projectPath, projectName string, argsPrefix ...string) *ComposeUpExistingSource {
 	return &ComposeUpExistingSource{
 		projectPath: projectPath,
 		projectName: projectName,
+		argsPrefix:  slices.Clone(argsPrefix),
 		key:         fmt.Sprintf("compose-up-existing-%s", projectName),
 	}
 }
@@ -61,9 +64,10 @@ func (s *ComposeUpExistingSource) processFlow(ctx context.Context, writer *io.Pi
 
 	writeInfo(fmt.Sprintf("正在创建/重建项目 %s...\r\n", s.projectName))
 
+	upArgs := append(slices.Clone(s.argsPrefix), "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate")
 	result := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      s.projectPath,
-		Args:          []string{"--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate"},
+		Args:          upArgs,
 		OperationName: "compose up (existing)",
 	})
 
@@ -114,9 +118,10 @@ afterUp:
 	}
 
 	writeInfo("\r\n正在获取项目状态...\r\n")
+	psArgs := append(slices.Clone(s.argsPrefix), "ps")
 	statusResult := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      s.projectPath,
-		Args:          []string{"ps"},
+		Args:          psArgs,
 		OperationName: "compose ps",
 	})
 	if statusResult.Error == nil && statusResult.Reader != nil {

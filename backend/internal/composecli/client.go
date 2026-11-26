@@ -1272,19 +1272,28 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 		return DeployProjectPlan{}, false, errors.New("项目已存在，如需覆盖请使用强制模式")
 	}
 
-	// Tier 2: 草稿目录若在 .env（或进程环境）中声明了 COMPOSE_FILE，遵循其文件列表与顺序
-	envFiles, hasEnvFiles, err := resolveDraftEnvComposeFiles(projectPath, name)
+	// Tier 2 + Tier 3: 复用无运行时记录时的草稿部署文件解析逻辑
+	plan, err := resolveDraftDeployPlan(projectPath, name, cleanExplicitFile, forWrite)
 	if err != nil {
 		return DeployProjectPlan{}, false, err
 	}
+	return plan, true, nil
+}
+
+func resolveDraftDeployPlan(projectPath, name, cleanExplicitFile string, forWrite bool) (DeployProjectPlan, error) {
+	// Tier 2: 草稿目录若在 .env（或进程环境）中声明了 COMPOSE_FILE，遵循其文件列表与顺序
+	envFiles, hasEnvFiles, err := resolveDraftEnvComposeFiles(projectPath, name)
+	if err != nil {
+		return DeployProjectPlan{}, err
+	}
 	if hasEnvFiles {
 		if cleanExplicitFile != "" && !slices.Contains(envFiles, cleanExplicitFile) {
-			return DeployProjectPlan{}, false, fmt.Errorf("目标配置文件 %s 与 COMPOSE_FILE 配置文件列表 [%s] 冲突", cleanExplicitFile, strings.Join(envFiles, ", "))
+			return DeployProjectPlan{}, fmt.Errorf("目标配置文件 %s 与 COMPOSE_FILE 配置文件列表 [%s] 冲突", cleanExplicitFile, strings.Join(envFiles, ", "))
 		}
 		savedFile := cleanExplicitFile
 		if forWrite && savedFile == "" {
 			if len(envFiles) > 1 {
-				return DeployProjectPlan{}, false, fmt.Errorf("COMPOSE_FILE 包含多个配置文件 [%s]，请指定 composeFile", strings.Join(envFiles, ", "))
+				return DeployProjectPlan{}, fmt.Errorf("COMPOSE_FILE 包含多个配置文件 [%s]，请指定 composeFile", strings.Join(envFiles, ", "))
 			}
 			savedFile = envFiles[0]
 		}
@@ -1292,20 +1301,20 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 			ProjectDir:  projectPath,
 			SavedFile:   savedFile,
 			DeployFiles: envFiles,
-		}, true, nil
+		}, nil
 	}
 
 	// Tier 3: 无运行时记录且无 COMPOSE_FILE 时按目录发现草稿文件；显式选择主文件时直接采用用户选择
 	if cleanExplicitFile != "" && !isComposeFileName(filepath.Base(cleanExplicitFile)) {
-		return DeployProjectPlan{}, false, fmt.Errorf("非法 compose 文件名: %s", filepath.Base(cleanExplicitFile))
+		return DeployProjectPlan{}, fmt.Errorf("%w: %s", ErrInvalidComposeFileName, filepath.Base(cleanExplicitFile))
 	}
 	primaries, err := collectExistingComposeCandidates(projectPath, primaryComposeFiles)
 	if err != nil {
-		return DeployProjectPlan{}, false, err
+		return DeployProjectPlan{}, err
 	}
 	overrides, err := collectExistingComposeCandidates(projectPath, overrideComposeFiles)
 	if err != nil {
-		return DeployProjectPlan{}, false, err
+		return DeployProjectPlan{}, err
 	}
 
 	if cleanExplicitFile != "" {
@@ -1319,26 +1328,26 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 				ProjectDir:  projectPath,
 				SavedFile:   cleanExplicitFile,
 				DeployFiles: deployFiles,
-			}, true, nil
+			}, nil
 		}
 		if len(primaries) == 0 {
-			return DeployProjectPlan{}, false, fmt.Errorf("项目目录 %s 中未找到主 Compose 配置文件", projectPath)
+			return DeployProjectPlan{}, fmt.Errorf("项目目录 %s 中未找到主 Compose 配置文件", projectPath)
 		}
 		if len(primaries) > 1 {
-			return DeployProjectPlan{}, false, fmt.Errorf("项目目录存在多个 Compose 主配置文件 (%s)，请明确选择主配置文件", strings.Join(primaries, ", "))
+			return DeployProjectPlan{}, fmt.Errorf("项目目录存在多个 Compose 主配置文件 (%s)，请明确选择主配置文件", strings.Join(primaries, ", "))
 		}
 		if len(overrides) > 0 && overrides[0] != cleanExplicitFile {
-			return DeployProjectPlan{}, false, fmt.Errorf("编辑目标覆盖文件 %s 与默认生效覆盖文件 %s 冲突", cleanExplicitFile, overrides[0])
+			return DeployProjectPlan{}, fmt.Errorf("编辑目标覆盖文件 %s 与默认生效覆盖文件 %s 冲突", cleanExplicitFile, overrides[0])
 		}
 		return DeployProjectPlan{
 			ProjectDir:  projectPath,
 			SavedFile:   cleanExplicitFile,
 			DeployFiles: []string{primaries[0], cleanExplicitFile},
-		}, true, nil
+		}, nil
 	}
 
 	if len(primaries) > 1 {
-		return DeployProjectPlan{}, false, fmt.Errorf("项目目录存在多个 Compose 主配置文件 (%s)，请指定 composeFile", strings.Join(primaries, ", "))
+		return DeployProjectPlan{}, fmt.Errorf("项目目录存在多个 Compose 主配置文件 (%s)，请指定 composeFile", strings.Join(primaries, ", "))
 	}
 	if len(primaries) == 1 {
 		deployFiles := []string{primaries[0]}
@@ -1349,11 +1358,11 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 			ProjectDir:  projectPath,
 			SavedFile:   primaries[0],
 			DeployFiles: deployFiles,
-		}, true, nil
+		}, nil
 	}
 
 	if !forWrite {
-		return DeployProjectPlan{}, false, fmt.Errorf("项目目录 %s 中未找到 Compose 配置文件", projectPath)
+		return DeployProjectPlan{}, fmt.Errorf("项目目录 %s 中未找到 Compose 配置文件", projectPath)
 	}
 	targetFile := filepath.Join(projectPath, "docker-compose.yaml")
 	deployFiles := []string{targetFile}
@@ -1364,7 +1373,97 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 		ProjectDir:  projectPath,
 		SavedFile:   targetFile,
 		DeployFiles: deployFiles,
-	}, true, nil
+	}, nil
+}
+
+// ResolveManagedCardPlan 解析卡片“创建”与“拉取镜像”操作的目标目录、运行时项目名及有序配置文件列表。
+// 要求所有传入文件均经过校验并严格属于同一个 APP_PATH 一级受管子目录；
+// 若命中运行时记录则验证完整顺序并返回其真实项目名与全部文件；若为无运行时记录的单文件草稿则复用既有草稿解析逻辑。
+func (c *Client) ResolveManagedCardPlan(ctx context.Context, projectName, composeFiles string) (DeployProjectPlan, error) {
+	trimmedName := strings.TrimSpace(projectName)
+	if err := ValidateProjectName(trimmedName); err != nil {
+		return DeployProjectPlan{}, err
+	}
+	trimmedFiles := strings.TrimSpace(composeFiles)
+	if trimmedFiles == "" {
+		return DeployProjectPlan{}, errors.New("composeFile 不能为空")
+	}
+	if strings.ContainsRune(trimmedFiles, 0) {
+		return DeployProjectPlan{}, errors.New("非法的 composeFile 路径")
+	}
+
+	rawParts := strings.Split(trimmedFiles, ",")
+	selectedFiles := make([]string, 0, len(rawParts))
+	var projectDir string
+	for _, part := range rawParts {
+		trimmedPart := strings.TrimSpace(part)
+		if trimmedPart == "" {
+			return DeployProjectPlan{}, errors.New("composeFile 列表包含空路径项")
+		}
+		if hasPathTraversalSegment(trimmedPart) {
+			return DeployProjectPlan{}, fmt.Errorf("%w: %s", ErrTraversalPath, trimmedPart)
+		}
+		absPart, err := filepath.Abs(trimmedPart)
+		if err != nil {
+			return DeployProjectPlan{}, fmt.Errorf("解析 composeFile 路径失败: %w", err)
+		}
+		partDir, err := ValidateProjectDir(filepath.Dir(absPart))
+		if err != nil {
+			return DeployProjectPlan{}, err
+		}
+		if projectDir == "" {
+			projectDir = partDir
+		} else if partDir != projectDir {
+			return DeployProjectPlan{}, fmt.Errorf("composeFile 列表中的文件 %s 不属于同一受管目录 %s", trimmedPart, projectDir)
+		}
+		cleanFile, err := validateProjectMemberConfigFile(projectDir, trimmedName, trimmedPart)
+		if err != nil {
+			return DeployProjectPlan{}, err
+		}
+		if slices.Contains(selectedFiles, cleanFile) {
+			return DeployProjectPlan{}, fmt.Errorf("composeFile 列表包含重复文件: %s", cleanFile)
+		}
+		selectedFiles = append(selectedFiles, cleanFile)
+	}
+	if projectDir == "" || len(selectedFiles) == 0 {
+		return DeployProjectPlan{}, errors.New("composeFile 不能为空")
+	}
+
+	dirName := filepath.Base(projectDir)
+	cand, err := c.lookupRuntimeCandidate(ctx, trimmedName, projectDir, selectedFiles[0])
+	if err != nil {
+		return DeployProjectPlan{}, err
+	}
+	if cand != nil {
+		if !strings.EqualFold(trimmedName, cand.name) && !strings.EqualFold(trimmedName, dirName) {
+			return DeployProjectPlan{}, fmt.Errorf("项目名称 %s 与运行时项目 %s 不匹配", trimmedName, cand.name)
+		}
+		if len(selectedFiles) > 1 && !slices.Equal(selectedFiles, cand.files) {
+			return DeployProjectPlan{}, fmt.Errorf("指定的配置文件列表 [%s] 与运行时项目 %s 的配置文件 [%s] 不一致",
+				strings.Join(selectedFiles, ", "), cand.name, strings.Join(cand.files, ", "))
+		}
+		return DeployProjectPlan{
+			ProjectDir:         projectDir,
+			RuntimeProjectName: cand.name,
+			DeployFiles:        cand.files,
+		}, nil
+	}
+
+	if len(selectedFiles) > 1 {
+		return DeployProjectPlan{}, fmt.Errorf("未找到与多文件配置 [%s] 匹配的运行时 Compose 项目", strings.Join(selectedFiles, ", "))
+	}
+	if !strings.EqualFold(trimmedName, dirName) {
+		return DeployProjectPlan{}, fmt.Errorf("草稿项目名称 %s 与目录名称 %s 不匹配", trimmedName, dirName)
+	}
+
+	plan, err := resolveDraftDeployPlan(projectDir, dirName, selectedFiles[0], false)
+	if err != nil {
+		return DeployProjectPlan{}, err
+	}
+	if plan.ProjectDir == "" || len(plan.DeployFiles) == 0 {
+		return DeployProjectPlan{}, fmt.Errorf("项目目录 %s 中未找到有效的 Compose 配置文件", projectDir)
+	}
+	return plan, nil
 }
 
 // ResolveDeployPlan 解析无需重写 YAML 时的完整部署方案（含运行时项目名和有序 -f 文件列表）。

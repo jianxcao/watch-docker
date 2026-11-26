@@ -1299,3 +1299,129 @@ func TestDotEnvMultilineAssignment(t *testing.T) {
 		t.Fatalf("expected preservedMap untouched on parse failure, got %#v", preservedMap)
 	}
 }
+
+func TestResolveManagedCardPlan(t *testing.T) {
+	clearDotEnvTestProcessVars(t)
+	ctx := context.Background()
+
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	extDir := filepath.Join(tmpRoot, "external")
+	for _, d := range []string{appDir, extDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	// 1. 标准草稿（含 compose.override.yml）
+	stdDir := filepath.Join(resolvedAppDir, "std-draft")
+	otherDir := filepath.Join(resolvedAppDir, "other-proj")
+	customDraftDir := filepath.Join(resolvedAppDir, "custom-draft")
+	siteDir := filepath.Join(resolvedAppDir, "site")
+	for _, d := range []string{stdDir, otherDir, customDraftDir, siteDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stdMain := filepath.Join(stdDir, "compose.yaml")
+	stdOv := filepath.Join(stdDir, "compose.override.yml")
+	otherFile := filepath.Join(otherDir, "compose.yaml")
+	customFile := filepath.Join(customDraftDir, "prod.yaml")
+	customEnv := filepath.Join(customDraftDir, ".env")
+	siteProd := filepath.Join(siteDir, "prod.yaml")
+	siteOv := filepath.Join(siteDir, "override.yaml")
+	extFile := filepath.Join(extDir, "compose.yaml")
+	symFile := filepath.Join(siteDir, "sym.yaml")
+
+	for _, f := range []string{stdMain, stdOv, otherFile, customFile, siteProd, siteOv, extFile} {
+		if err := os.WriteFile(f, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(customEnv, []byte("COMPOSE_FILE: prod.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(siteProd, symFile); err != nil {
+		t.Fatal(err)
+	}
+
+	cli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			return []ListOutput{
+				{Name: "blue", Status: "running(1)", ConfigFiles: siteProd + "," + siteOv},
+				{Name: "same-name", Status: "running(1)", ConfigFiles: otherFile},
+				{Name: "ext", Status: "running(1)", ConfigFiles: extFile},
+			}, nil
+		},
+	}
+
+	// 标准草稿
+	stdPlan, err := cli.ResolveManagedCardPlan(ctx, "std-draft", stdMain)
+	if err != nil {
+		t.Fatalf("standard draft ResolveManagedCardPlan failed: %v", err)
+	}
+	if stdPlan.ProjectDir != stdDir || stdPlan.RuntimeProjectName != "" || !slices.Equal(stdPlan.DeployFiles, []string{stdMain, stdOv}) {
+		t.Fatalf("unexpected standard draft plan: %#v", stdPlan)
+	}
+
+	// .env 指定的自定义草稿
+	customPlan, err := cli.ResolveManagedCardPlan(ctx, "custom-draft", customFile)
+	if err != nil {
+		t.Fatalf("dotenv custom draft ResolveManagedCardPlan failed: %v", err)
+	}
+	if customPlan.ProjectDir != customDraftDir || customPlan.RuntimeProjectName != "" || !slices.Equal(customPlan.DeployFiles, []string{customFile}) {
+		t.Fatalf("unexpected custom draft plan: %#v", customPlan)
+	}
+
+	// 运行时受管项目（单文件 & 顺序一致的逗号列表，均支持运行时名与目录名）
+	for _, reqName := range []string{"blue", "site"} {
+		for _, filesArg := range []string{siteProd, siteProd + "," + siteOv} {
+			plan, err := cli.ResolveManagedCardPlan(ctx, reqName, filesArg)
+			if err != nil {
+				t.Fatalf("runtime managed plan (%s, %s) failed: %v", reqName, filesArg, err)
+			}
+			wantPrefix := []string{"-p", "blue", "-f", siteProd, "-f", siteOv}
+			if plan.ProjectDir != siteDir || !slices.Equal(plan.ComposeArgsPrefix(), wantPrefix) {
+				t.Fatalf("unexpected runtime plan (%s, %s): dir=%q prefix=%#v", reqName, filesArg, plan.ProjectDir, plan.ComposeArgsPrefix())
+			}
+		}
+	}
+
+	// 不同目录同名项目不得误匹配
+	if _, err := cli.ResolveManagedCardPlan(ctx, "same-name", stdMain); err == nil {
+		t.Fatal("expected same project name in different directory to fail")
+	}
+	// 乱序多文件与混入其他项目文件必须失败
+	if _, err := cli.ResolveManagedCardPlan(ctx, "blue", siteOv+","+siteProd); err == nil {
+		t.Fatal("expected out-of-order multi-file list to fail")
+	}
+	if _, err := cli.ResolveManagedCardPlan(ctx, "blue", siteProd+","+otherFile); err == nil {
+		t.Fatal("expected cross-project mixed multi-file list to fail")
+	}
+	// 符号链接、目录穿越、外部项目必须失败
+	if _, err := cli.ResolveManagedCardPlan(ctx, "blue", symFile); !errors.Is(err, ErrSymlinkPath) {
+		t.Fatalf("expected ErrSymlinkPath for %q, got %v", symFile, err)
+	}
+	traversalPath := siteDir + string(filepath.Separator) + ".." + string(filepath.Separator) + "site" + string(filepath.Separator) + "prod.yaml"
+	if _, err := cli.ResolveManagedCardPlan(ctx, "blue", traversalPath); !errors.Is(err, ErrTraversalPath) {
+		t.Fatalf("expected ErrTraversalPath, got %v", err)
+	}
+	if _, err := cli.ResolveManagedCardPlan(ctx, "ext", extFile); err == nil {
+		t.Fatal("expected external unmanaged project to fail")
+	}
+	// 运行时查询失败必须中止
+	errCli := &Client{RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) { return nil, errors.New("offline") }}
+	if _, err := errCli.ResolveManagedCardPlan(ctx, "std-draft", stdMain); err == nil {
+		t.Fatal("expected runtime query error to fail")
+	}
+}

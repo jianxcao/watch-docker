@@ -3,6 +3,7 @@ package wsstream
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
@@ -14,16 +15,18 @@ import (
 type ComposePullSource struct {
 	projectPath string
 	projectName string
+	argsPrefix  []string
 	key         string
 	mu          sync.Mutex
 	reader      *ByteStreamReader
 }
 
 // NewComposePullSource 创建新的 Compose 拉取镜像数据源
-func NewComposePullSource(projectPath, projectName string) *ComposePullSource {
+func NewComposePullSource(projectPath, projectName string, argsPrefix ...string) *ComposePullSource {
 	return &ComposePullSource{
 		projectPath: projectPath,
 		projectName: projectName,
+		argsPrefix:  slices.Clone(argsPrefix),
 		key:         fmt.Sprintf("compose-pull-%s", projectName),
 	}
 }
@@ -35,9 +38,10 @@ func (s *ComposePullSource) Start(ctx context.Context) (StreamReader[[]byte], er
 		zap.String("projectName", s.projectName))
 
 	// 执行 docker compose pull 命令
+	pullArgs := append(slices.Clone(s.argsPrefix), "--ansi", "always", "pull")
 	result := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      s.projectPath,
-		Args:          []string{"--ansi", "always", "pull"},
+		Args:          pullArgs,
 		OperationName: "compose pull",
 	})
 

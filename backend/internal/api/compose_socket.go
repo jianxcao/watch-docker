@@ -132,15 +132,22 @@ func (s *Server) handleComposeUpExistingWebSocket() gin.HandlerFunc {
 			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
 			return
 		}
-		projectPath, _, err := composecli.ValidateComposeFilePath(composeFile)
+		plan, err := s.composeClient.ResolveManagedCardPlan(c.Request.Context(), projectName, composeFile)
 		if err != nil {
-			s.sendComposeWSError(c, "非法项目路径: "+err.Error())
+			s.sendComposeWSError(c, "无法部署项目: "+err.Error())
 			return
 		}
 
+		logger.Logger.Info("Compose up existing WebSocket connection request",
+			zap.String("projectName", projectName),
+			zap.String("projectPath", plan.ProjectDir),
+			zap.String("runtimeProjectName", plan.RuntimeProjectName),
+			zap.Strings("deployFiles", plan.DeployFiles))
+
 		key := fmt.Sprintf("compose-up-existing-%s", projectName)
+		argsPrefix := plan.ComposeArgsPrefix()
 		s.streamManagerBytes.HandleWebSocket(c, key, func() wsstream.StreamSource[[]byte] {
-			return wsstream.NewComposeUpExistingSource(projectPath, projectName)
+			return wsstream.NewComposeUpExistingSource(plan.ProjectDir, projectName, argsPrefix...)
 		})
 	}
 }
@@ -154,19 +161,22 @@ func (s *Server) handleComposePullWebSocket() gin.HandlerFunc {
 			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
 			return
 		}
-		projectPath, _, err := composecli.ValidateComposeFilePath(composeFile)
+		plan, err := s.composeClient.ResolveManagedCardPlan(c.Request.Context(), projectName, composeFile)
 		if err != nil {
-			s.sendComposeWSError(c, "非法项目路径: "+err.Error())
+			s.sendComposeWSError(c, "无法拉取镜像: "+err.Error())
 			return
 		}
 
 		logger.Logger.Info("Compose pull WebSocket connection request",
 			zap.String("projectName", projectName),
-			zap.String("projectPath", projectPath))
+			zap.String("projectPath", plan.ProjectDir),
+			zap.String("runtimeProjectName", plan.RuntimeProjectName),
+			zap.Strings("deployFiles", plan.DeployFiles))
 
 		key := fmt.Sprintf("compose-pull-%s", projectName)
+		argsPrefix := plan.ComposeArgsPrefix()
 		s.streamManagerBytes.HandleWebSocket(c, key, func() wsstream.StreamSource[[]byte] {
-			return wsstream.NewComposePullSource(projectPath, projectName)
+			return wsstream.NewComposePullSource(plan.ProjectDir, projectName, argsPrefix...)
 		})
 	}
 }
