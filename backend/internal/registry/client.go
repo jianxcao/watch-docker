@@ -75,6 +75,12 @@ type DigestResult struct {
 	ErrType      ErrorType
 }
 
+type mirrorOrigin struct {
+	scheme string
+	host   string
+	port   string
+}
+
 type Client struct {
 	cache       map[string]CacheEntry
 	mu          sync.RWMutex
@@ -82,8 +88,9 @@ type Client struct {
 	rateLimitMu sync.RWMutex
 
 	credsMu           sync.RWMutex
-	credentials       map[string]authn.AuthConfig // canonical host -> auth config
-	explicitHTTPHosts map[string]bool             // canonical host -> explicitly configured with http://
+	credentials       map[string]authn.AuthConfig     // canonical host -> auth config
+	explicitHTTPHosts map[string]bool                 // canonical host -> explicitly configured with http://
+	mirrorCredentials map[mirrorOrigin]authn.AuthConfig // mirror (scheme, host, port) -> auth config
 
 	transportMu    sync.Mutex
 	transportProxy string
@@ -99,6 +106,7 @@ func New() *Client {
 		rateLimits:        make(map[string]rateLimitState),
 		credentials:       make(map[string]authn.AuthConfig),
 		explicitHTTPHosts: make(map[string]bool),
+		mirrorCredentials: make(map[mirrorOrigin]authn.AuthConfig),
 	}
 
 	c.UpdateManifestCredentials()
@@ -292,11 +300,49 @@ func normalizeImageRef(ref string) (normalized, host, repo, tag string, err erro
 	return normalized, host, repo, tag, nil
 }
 
+func parseConfiguredMirrorOrigin(rawHost string) (mirrorOrigin, bool) {
+	trimmed := strings.TrimSpace(rawHost)
+	if trimmed == "" {
+		return mirrorOrigin{}, false
+	}
+	lower := strings.ToLower(trimmed)
+	scheme := "https"
+	rest := trimmed
+	if strings.HasPrefix(lower, "http://") {
+		scheme = "http"
+		rest = trimmed[len("http://"):]
+	} else if strings.HasPrefix(lower, "https://") {
+		scheme = "https"
+		rest = trimmed[len("https://"):]
+	} else if strings.Contains(trimmed, "://") {
+		return mirrorOrigin{}, false
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return mirrorOrigin{}, false
+	}
+	u, err := url.Parse(scheme + "://" + rest)
+	if err != nil || u == nil || u.User != nil || u.Hostname() == "" {
+		return mirrorOrigin{}, false
+	}
+	host := strings.ToLower(u.Hostname())
+	port := effectivePort(scheme, u.Port())
+	if port == "" {
+		return mirrorOrigin{}, false
+	}
+	return mirrorOrigin{
+		scheme: scheme,
+		host:   host,
+		port:   port,
+	}, true
+}
+
 // UpdateManifestCredentials 从全局配置全量替换认证凭据，支持任意仓库并清除已删除凭据与历史负面缓存
 func (c *Client) UpdateManifestCredentials() {
 	cfg := config.Get()
 	newCreds := make(map[string]authn.AuthConfig)
 	newExplicitHTTP := make(map[string]bool)
+	newMirrorCreds := make(map[mirrorOrigin]authn.AuthConfig)
 	if cfg != nil {
 		for _, auth := range cfg.Registry.Auth {
 			rawHost := strings.TrimSpace(auth.Host)
@@ -314,12 +360,21 @@ func (c *Client) UpdateManifestCredentials() {
 				Username: auth.Username,
 				Password: auth.Token,
 			}
+			if strings.TrimSpace(auth.Username) != "" && strings.TrimSpace(auth.Token) != "" {
+				if origin, ok := parseConfiguredMirrorOrigin(rawHost); ok {
+					newMirrorCreds[origin] = authn.AuthConfig{
+						Username: auth.Username,
+						Password: auth.Token,
+					}
+				}
+			}
 		}
 	}
 
 	c.credsMu.Lock()
 	c.credentials = newCreds
 	c.explicitHTTPHosts = newExplicitHTTP
+	c.mirrorCredentials = newMirrorCreds
 	c.credsMu.Unlock()
 
 	c.mu.Lock()

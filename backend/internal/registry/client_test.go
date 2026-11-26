@@ -961,6 +961,34 @@ func TestMirrorCredentialBoundary(t *testing.T) {
 	})
 
 	cfgPath := filepath.Join(dir, "config.yaml")
+	loadAuthYAML := func(t *testing.T, client *Client, yamlCfg string) {
+		t.Helper()
+		if err := os.WriteFile(cfgPath, []byte(yamlCfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.Load(cfgPath); err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+		if client != nil {
+			client.UpdateManifestCredentials()
+		}
+	}
+
+	assertSelection := func(t *testing.T, client *Client, ep dockercli.MirrorEndpoint, realm string, wantAuth bool, wantUser string) {
+		t.Helper()
+		parsedRealm, err := validateMirrorHTTPURL(realm)
+		if err != nil {
+			t.Fatalf("endpoint=%s realm=%s unexpected validation error=%v", ep.BaseURL(), realm, err)
+		}
+		cred, gotAuth := client.credentialForMirrorRealm(ep, parsedRealm)
+		if gotAuth != wantAuth {
+			t.Fatalf("endpoint=%s realm=%s gotAuth=%v wantAuth=%v", ep.BaseURL(), realm, gotAuth, wantAuth)
+		}
+		if wantAuth && cred.Username != wantUser {
+			t.Fatalf("endpoint=%s realm=%s selected user=%q want=%q", ep.BaseURL(), realm, cred.Username, wantUser)
+		}
+	}
+
 	yamlCfg := `registry:
   auth:
     - host: mirror.example.com
@@ -975,25 +1003,19 @@ func TestMirrorCredentialBoundary(t *testing.T) {
     - host: http://explicit-http-mirror.example.com
       username: http-user
       token: http-secret
+    - host: plain-http.example.com
+      username: plain-user
+      token: plain-secret
 `
-	if err := os.WriteFile(cfgPath, []byte(yamlCfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := config.Load(cfgPath); err != nil {
-		t.Fatalf("load config failed: %v", err)
-	}
-
+	loadAuthYAML(t, nil, yamlCfg)
 	c := New()
-	// 增加同主机无显式 http:// 的纯主机凭据，用于验证 HTTP 同源默认拒绝携带凭据
-	c.credsMu.Lock()
-	c.credentials["plain-http.example.com"] = authn.AuthConfig{Username: "plain-user", Password: "plain-secret"}
-	c.credsMu.Unlock()
 
 	cases := []struct {
 		name     string
 		ep       dockercli.MirrorEndpoint
 		realm    string
 		wantAuth bool
+		wantUser string
 		wantErr  bool
 	}{
 		{
@@ -1001,12 +1023,14 @@ func TestMirrorCredentialBoundary(t *testing.T) {
 			ep:       dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example.com"},
 			realm:    "https://mirror.example.com/v2/token",
 			wantAuth: true,
+			wantUser: "mirror-user",
 		},
 		{
 			name:     "HTTPS same-origin with explicit :443 vs implicit port matches",
 			ep:       dockercli.MirrorEndpoint{Scheme: "https", Host: "Mirror.Example.COM:443"},
 			realm:    "https://mirror.example.com/v2/token",
 			wantAuth: true,
+			wantUser: "mirror-user",
 		},
 		{
 			name:     "Same host different non-default port uses anonymous only",
@@ -1037,6 +1061,7 @@ func TestMirrorCredentialBoundary(t *testing.T) {
 			ep:       dockercli.MirrorEndpoint{Scheme: "http", Host: "explicit-http-mirror.example.com"},
 			realm:    "http://explicit-http-mirror.example.com:80/token",
 			wantAuth: true,
+			wantUser: "http-user",
 		},
 		{
 			name:     "HTTP same-origin denied without explicit http:// declaration",
@@ -1089,12 +1114,105 @@ func TestMirrorCredentialBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatalf("endpoint=%s realm=%s unexpected validation error=%v", tc.ep.BaseURL(), tc.realm, true)
 			}
-			_, gotAuth := c.credentialForMirrorRealm(tc.ep, parsedRealm)
+			cred, gotAuth := c.credentialForMirrorRealm(tc.ep, parsedRealm)
 			if gotAuth != tc.wantAuth {
 				t.Fatalf("endpoint=%s realm=%s gotAuth=%v wantAuth=%v", tc.ep.BaseURL(), tc.realm, gotAuth, tc.wantAuth)
 			}
+			if tc.wantAuth && cred.Username != tc.wantUser {
+				t.Fatalf("endpoint=%s realm=%s gotUser=%q wantUser=%q", tc.ep.BaseURL(), tc.realm, cred.Username, tc.wantUser)
+			}
 		})
 	}
+
+	// 同主机 HTTP/HTTPS 双凭据隔离，两种配置顺序均必须严格按协议与端口匹配，并在重载删除 HTTP 凭据后立即失效
+	for _, order := range []struct {
+		name string
+		cfg  string
+	}{
+		{
+			name: "https_then_http",
+			cfg: `registry:
+  auth:
+    - host: https://mirror.example
+      username: tls-reader
+      token: tls-secret
+    - host: http://mirror.example:80
+      username: plain-reader
+      token: plain-secret
+`,
+		},
+		{
+			name: "http_then_https",
+			cfg: `registry:
+  auth:
+    - host: http://mirror.example:80
+      username: plain-reader
+      token: plain-secret
+    - host: https://mirror.example
+      username: tls-reader
+      token: tls-secret
+`,
+		},
+	} {
+		t.Run("same host http and https distinct credentials/"+order.name, func(t *testing.T) {
+			loadAuthYAML(t, c, order.cfg)
+			assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "http", Host: "mirror.example"}, "http://mirror.example/v2/token", true, "plain-reader")
+			assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "http", Host: "mirror.example:80"}, "http://mirror.example:80/v2/token", true, "plain-reader")
+			assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example"}, "https://mirror.example/v2/token", true, "tls-reader")
+			assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example:443"}, "https://mirror.example:443/v2/token", true, "tls-reader")
+
+			// 重载配置删除 HTTP 凭据后，HTTP 返回无凭据，HTTPS 仍返回 tls-reader
+			loadAuthYAML(t, c, `registry:
+  auth:
+    - host: https://mirror.example
+      username: tls-reader
+      token: tls-secret
+`)
+			assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "http", Host: "mirror.example"}, "http://mirror.example/v2/token", false, "")
+			assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example"}, "https://mirror.example/v2/token", true, "tls-reader")
+		})
+	}
+
+	t.Run("bare host grants https only not http", func(t *testing.T) {
+		loadAuthYAML(t, c, `registry:
+  auth:
+    - host: mirror.example
+      username: bare-reader
+      token: bare-secret
+`)
+		assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example"}, "https://mirror.example/v2/token", true, "bare-reader")
+		assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "http", Host: "mirror.example"}, "http://mirror.example/v2/token", false, "")
+	})
+
+	t.Run("tls credential plus empty explicit http entry denies http", func(t *testing.T) {
+		loadAuthYAML(t, c, `registry:
+  auth:
+    - host: https://mirror.example
+      username: tls-reader
+      token: tls-secret
+    - host: http://mirror.example
+      username: ""
+      token: ""
+`)
+		assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "http", Host: "mirror.example"}, "http://mirror.example/v2/token", false, "")
+		assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example"}, "https://mirror.example/v2/token", true, "tls-reader")
+	})
+
+	t.Run("non-default ports match exact configured scheme and port", func(t *testing.T) {
+		loadAuthYAML(t, c, `registry:
+  auth:
+    - host: https://mirror.example:8443
+      username: tls-8443
+      token: tls-secret
+    - host: http://mirror.example:8080
+      username: http-8080
+      token: http-secret
+`)
+		assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example:8443"}, "https://mirror.example:8443/v2/token", true, "tls-8443")
+		assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "https", Host: "mirror.example:9443"}, "https://mirror.example:9443/v2/token", false, "")
+		assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "http", Host: "mirror.example:8443"}, "http://mirror.example:8443/v2/token", false, "")
+		assertSelection(t, c, dockercli.MirrorEndpoint{Scheme: "http", Host: "mirror.example:8080"}, "http://mirror.example:8080/v2/token", true, "http-8080")
+	})
 }
 
 func TestMirrorRedirectAndChildAuthCredentialScoping(t *testing.T) {

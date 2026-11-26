@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -267,13 +266,6 @@ func sameMirrorOrigin(ep dockercli.MirrorEndpoint, target *url.URL) bool {
 	return sameURLOrigin(epURL, target)
 }
 
-func formatHostWithPort(hostname, port string) string {
-	if strings.Contains(hostname, ":") && !strings.HasPrefix(hostname, "[") {
-		return "[" + hostname + "]:" + port
-	}
-	return hostname + ":" + port
-}
-
 func (c *Client) credentialForMirrorRealm(ep dockercli.MirrorEndpoint, realm *url.URL) (authn.AuthConfig, bool) {
 	if !sameMirrorOrigin(ep, realm) {
 		return authn.AuthConfig{}, false
@@ -282,55 +274,22 @@ func (c *Client) credentialForMirrorRealm(ep dockercli.MirrorEndpoint, realm *ur
 	if err != nil {
 		return authn.AuthConfig{}, false
 	}
-	scheme := strings.ToLower(epURL.Scheme)
-	hostname := strings.ToLower(epURL.Hostname())
-	if canonicalHost(ep.Host) == "index.docker.io" || canonicalHost(hostname) == "index.docker.io" || hostname == "auth.docker.io" {
+	origin := mirrorOrigin{
+		scheme: strings.ToLower(epURL.Scheme),
+		host:   strings.ToLower(epURL.Hostname()),
+		port:   effectivePort(epURL.Scheme, epURL.Port()),
+	}
+	if canonicalHost(ep.Host) == "index.docker.io" || canonicalHost(origin.host) == "index.docker.io" || origin.host == "auth.docker.io" {
 		return authn.AuthConfig{}, false
 	}
 
-	port := epURL.Port()
-	defaultPort := effectivePort(scheme, "")
-	usesDefaultPort := effectivePort(scheme, port) == defaultPort
-
-	candidateKeys := []string{canonicalHost(ep.Host)}
-	if usesDefaultPort {
-		if k := canonicalHost(hostname); k != "" {
-			candidateKeys = append(candidateKeys, k)
-		}
-		if k := canonicalHost(net.JoinHostPort(hostname, defaultPort)); k != "" {
-			candidateKeys = append(candidateKeys, k)
-		}
-	} else if port != "" {
-		if k := canonicalHost(formatHostWithPort(hostname, port)); k != "" {
-			candidateKeys = append(candidateKeys, k)
-		}
+	c.credsMu.RLock()
+	cred, ok := c.mirrorCredentials[origin]
+	c.credsMu.RUnlock()
+	if !ok || cred.Username == "" || cred.Password == "" {
+		return authn.AuthConfig{}, false
 	}
-
-	if scheme == "http" {
-		explicitHTTP := false
-		for _, k := range candidateKeys {
-			if canonicalHost(k) == "index.docker.io" {
-				continue
-			}
-			if c.isHostExplicitHTTP(k) {
-				explicitHTTP = true
-				break
-			}
-		}
-		if !explicitHTTP {
-			return authn.AuthConfig{}, false
-		}
-	}
-
-	for _, k := range candidateKeys {
-		if k == "" || canonicalHost(k) == "index.docker.io" {
-			continue
-		}
-		if cred, ok := c.getCredentialForHost(k); ok && cred.Username != "" && cred.Password != "" {
-			return cred, true
-		}
-	}
-	return authn.AuthConfig{}, false
+	return cred, true
 }
 
 func (c *Client) mirrorHTTPClient(credentialed bool) *http.Client {
