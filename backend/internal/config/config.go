@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
+	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -604,12 +605,10 @@ func Validate(cfg *Config) error {
 	if lvl == "" {
 		lvl = "info"
 	}
-	switch lvl {
-	case "debug", "info", "warn", "warning", "error":
-		cfg.Logging.Level = lvl
-	default:
-		return fmt.Errorf("invalid logging.level %q: must be debug, info, warn, or error", cfg.Logging.Level)
+	if _, err := logger.ParseLevel(lvl); err != nil {
+		return fmt.Errorf("invalid logging.level %q: %w", cfg.Logging.Level, err)
 	}
+	cfg.Logging.Level = lvl
 	if cronExpr := strings.TrimSpace(cfg.Scan.Cron); cronExpr != "" {
 		if _, err := cronParser.Parse(cronExpr); err != nil {
 			return fmt.Errorf("invalid scan.cron: %w", err)

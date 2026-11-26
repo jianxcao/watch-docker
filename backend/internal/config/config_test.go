@@ -634,3 +634,86 @@ func TestSetupTempConfigEnvRestoresGlobalPointerAndValues(t *testing.T) {
 		t.Fatalf("expected conf.EnvCfg fields restored (%#v), got (%#v)", origVal, *conf.EnvCfg)
 	}
 }
+
+func TestLoadLegacyLogLevels(t *testing.T) {
+	if orig, had := os.LookupEnv("WATCH_LOGGING_LEVEL"); had {
+		t.Cleanup(func() { _ = os.Setenv("WATCH_LOGGING_LEVEL", orig) })
+		_ = os.Unsetenv("WATCH_LOGGING_LEVEL")
+	}
+
+	for _, level := range []string{"dpanic", "panic", "fatal"} {
+		cfg := defaults()
+		cfg.Logging.Level = level
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("Validate(%q): %v", level, err)
+		}
+	}
+
+	cases := []struct {
+		name    string
+		yamlLvl string
+		envLvl  string
+		want    string
+		wantErr bool
+	}{
+		{name: "dpanic", yamlLvl: "dpanic", want: "dpanic"},
+		{name: "panic", yamlLvl: "panic", want: "panic"},
+		{name: "fatal", yamlLvl: "fatal", want: "fatal"},
+		{name: "uppercase with whitespace", yamlLvl: "  DPANIC  ", want: "dpanic"},
+		{name: "legacy warning alias", yamlLvl: "warning", want: "warning"},
+		{name: "empty defaults to info", yamlLvl: "", want: "info"},
+		{name: "invalid trace rejected", yamlLvl: "trace", wantErr: true},
+		{name: "env overrides file value", yamlLvl: "info", envLvl: "fatal", want: "fatal"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgPath := setupTempConfigEnv(t)
+			if tc.envLvl != "" {
+				t.Setenv("WATCH_LOGGING_LEVEL", tc.envLvl)
+			}
+			content := "logging:\n  level: " + tc.yamlLvl + "\n"
+			if tc.yamlLvl == "" {
+				content = "logging:\n  level: \"\"\n"
+			} else if strings.Contains(tc.yamlLvl, " ") {
+				content = "logging:\n  level: \"" + tc.yamlLvl + "\"\n"
+			}
+			if err := os.WriteFile(cfgPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := Load(cfgPath)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected Load(%q) to fail, got level=%q", tc.yamlLvl, got.Logging.Level)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			if got.Logging.Level != tc.want {
+				t.Fatalf("Load level = %q, want %q", got.Logging.Level, tc.want)
+			}
+		})
+	}
+
+	// 验证持久化保存 dpanic/panic/fatal 后再加载与动态日志级别生效一致
+	cfgPath := setupTempConfigEnv(t)
+	if _, err := Load(cfgPath); err != nil {
+		t.Fatalf("initial Load failed: %v", err)
+	}
+	if err := Update(func(c *Config) error {
+		c.Logging.Level = "panic"
+		return nil
+	}); err != nil {
+		t.Fatalf("Update logging.level=panic failed: %v", err)
+	}
+	reloaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	if reloaded.Logging.Level != "panic" {
+		t.Fatalf("reloaded Logging.Level = %q, want %q", reloaded.Logging.Level, "panic")
+	}
+}

@@ -25,15 +25,8 @@ func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 func NewLogger(level string, file string) (*zap.Logger, error) {
 	// Parse log level
 	logLevel := zapcore.InfoLevel
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "debug":
-		logLevel = zapcore.DebugLevel
-	case "info":
-		logLevel = zapcore.InfoLevel
-	case "warn", "warning":
-		logLevel = zapcore.WarnLevel
-	case "error":
-		logLevel = zapcore.ErrorLevel
+	if parsed, err := ParseLevel(level); err == nil {
+		logLevel = parsed
 	}
 
 	// 配置 Encoder
@@ -97,26 +90,33 @@ func NewLogger(level string, file string) (*zap.Logger, error) {
 	return logger, nil
 }
 
-// SetLogLevel 动态设置日志级别
-func SetLogLevel(level string) error {
-	var zapLevel zapcore.Level
+// ParseLevel 解析日志级别字符串（支持 debug/info/warn/warning/error/dpanic/panic/fatal，忽略大小写与前后空白）
+func ParseLevel(level string) (zapcore.Level, error) {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":
-		zapLevel = zapcore.DebugLevel
+		return zapcore.DebugLevel, nil
 	case "info":
-		zapLevel = zapcore.InfoLevel
+		return zapcore.InfoLevel, nil
 	case "warn", "warning":
-		zapLevel = zapcore.WarnLevel
+		return zapcore.WarnLevel, nil
 	case "error":
-		zapLevel = zapcore.ErrorLevel
+		return zapcore.ErrorLevel, nil
 	case "dpanic":
-		zapLevel = zapcore.DPanicLevel
+		return zapcore.DPanicLevel, nil
 	case "panic":
-		zapLevel = zapcore.PanicLevel
+		return zapcore.PanicLevel, nil
 	case "fatal":
-		zapLevel = zapcore.FatalLevel
+		return zapcore.FatalLevel, nil
 	default:
-		return fmt.Errorf("invalid log level: %s", level)
+		return zapcore.InfoLevel, fmt.Errorf("invalid log level: %s", level)
+	}
+}
+
+// SetLogLevel 动态设置日志级别
+func SetLogLevel(level string) error {
+	zapLevel, err := ParseLevel(level)
+	if err != nil {
+		return err
 	}
 
 	atomicLevel.SetLevel(zapLevel)
