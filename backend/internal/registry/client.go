@@ -81,16 +81,20 @@ type mirrorOrigin struct {
 	port   string
 }
 
+type credentialSnapshot struct {
+	directCredentials   map[mirrorOrigin]authn.AuthConfig
+	explicitHTTPOrigins map[mirrorOrigin]bool
+	mirrorCredentials   map[mirrorOrigin]authn.AuthConfig
+}
+
 type Client struct {
 	cache       map[string]CacheEntry
 	mu          sync.RWMutex
 	rateLimits  map[string]rateLimitState // canonical registry host -> 限流状态
 	rateLimitMu sync.RWMutex
 
-	credsMu           sync.RWMutex
-	credentials       map[string]authn.AuthConfig     // canonical host -> auth config
-	explicitHTTPHosts map[string]bool                 // canonical host -> explicitly configured with http://
-	mirrorCredentials map[mirrorOrigin]authn.AuthConfig // mirror (scheme, host, port) -> auth config
+	credsMu sync.RWMutex
+	creds   credentialSnapshot
 
 	transportMu    sync.Mutex
 	transportProxy string
@@ -102,11 +106,8 @@ type Client struct {
 
 func New() *Client {
 	c := &Client{
-		cache:             make(map[string]CacheEntry),
-		rateLimits:        make(map[string]rateLimitState),
-		credentials:       make(map[string]authn.AuthConfig),
-		explicitHTTPHosts: make(map[string]bool),
-		mirrorCredentials: make(map[mirrorOrigin]authn.AuthConfig),
+		cache:      make(map[string]CacheEntry),
+		rateLimits: make(map[string]rateLimitState),
 	}
 
 	c.UpdateManifestCredentials()
@@ -152,16 +153,19 @@ func (c *Client) getTransport() *http.Transport {
 	return tr
 }
 
-func (c *Client) remoteTransport(explicitHTTP bool, targetHost string) http.RoundTripper {
+func (c *Client) remoteTransport(scheme, targetHost string, requireHTTPS bool) http.RoundTripper {
 	var base http.RoundTripper = c.getTransport()
 	if c.roundTripper != nil {
 		base = c.roundTripper
 	}
-	if explicitHTTP {
+	if strings.EqualFold(scheme, "http") {
 		return &explicitHTTPPingTransport{
 			targetHost: canonicalHost(targetHost),
 			base:       base,
 		}
+	}
+	if requireHTTPS {
+		return &httpsOnlyTransport{base: base}
 	}
 	return base
 }
@@ -175,6 +179,18 @@ type explicitHTTPPingTransport struct {
 func (t *explicitHTTPPingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req != nil && req.URL != nil && strings.EqualFold(req.URL.Scheme, "https") && req.URL.Path == "/v2/" && canonicalHost(req.URL.Host) == t.targetHost {
 		return nil, fmt.Errorf("registry %s configured as explicit http://, skipping https /v2/ probe", t.targetHost)
+	}
+	return t.base.RoundTrip(req)
+}
+
+// httpsOnlyTransport 阻止携带 HTTPS 凭据的直连请求走明文 HTTP 协议。
+type httpsOnlyTransport struct {
+	base http.RoundTripper
+}
+
+func (t *httpsOnlyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil || !strings.EqualFold(req.URL.Scheme, "https") {
+		return nil, fmt.Errorf("refusing non-https request on https-credentialed registry endpoint")
 	}
 	return t.base.RoundTrip(req)
 }
@@ -337,32 +353,92 @@ func parseConfiguredMirrorOrigin(rawHost string) (mirrorOrigin, bool) {
 	}, true
 }
 
+func directCanonicalHostname(hostname string) string {
+	switch strings.ToLower(strings.TrimSpace(hostname)) {
+	case "docker.io", "dockerhub", "index.docker.io", "registry-1.docker.io":
+		return "index.docker.io"
+	default:
+		return strings.ToLower(strings.TrimSpace(hostname))
+	}
+}
+
+func parseDirectRegistryOrigin(rawHost string) (mirrorOrigin, bool) {
+	origin, ok := parseConfiguredMirrorOrigin(rawHost)
+	if !ok {
+		return mirrorOrigin{}, false
+	}
+	if (origin.scheme == "https" && origin.port == "443") || (origin.scheme == "http" && origin.port == "80") {
+		origin.host = directCanonicalHostname(origin.host)
+	}
+	return origin, true
+}
+
+func directTargetOrigins(targetHost string) (httpOrigin, httpsOrigin mirrorOrigin, ok bool) {
+	h := canonicalHost(targetHost)
+	if h == "" {
+		return mirrorOrigin{}, mirrorOrigin{}, false
+	}
+	if net.ParseIP(h) != nil && strings.Contains(h, ":") && !strings.HasPrefix(h, "[") {
+		h = "[" + h + "]"
+	}
+	u, err := url.Parse("//" + h)
+	if err != nil || u == nil || u.User != nil || u.Hostname() == "" {
+		return mirrorOrigin{}, mirrorOrigin{}, false
+	}
+	hostname := strings.ToLower(u.Hostname())
+	rawPort := u.Port()
+
+	httpPort := effectivePort("http", rawPort)
+	httpHost := hostname
+	if httpPort == "80" {
+		httpHost = directCanonicalHostname(hostname)
+	}
+
+	httpsPort := effectivePort("https", rawPort)
+	httpsHost := hostname
+	if httpsPort == "443" {
+		httpsHost = directCanonicalHostname(hostname)
+	}
+
+	return mirrorOrigin{scheme: "http", host: httpHost, port: httpPort},
+		mirrorOrigin{scheme: "https", host: httpsHost, port: httpsPort},
+		true
+}
+
 // UpdateManifestCredentials 从全局配置全量替换认证凭据，支持任意仓库并清除已删除凭据与历史负面缓存
 func (c *Client) UpdateManifestCredentials() {
 	cfg := config.Get()
-	newCreds := make(map[string]authn.AuthConfig)
-	newExplicitHTTP := make(map[string]bool)
-	newMirrorCreds := make(map[mirrorOrigin]authn.AuthConfig)
+	snap := credentialSnapshot{
+		directCredentials:   make(map[mirrorOrigin]authn.AuthConfig),
+		explicitHTTPOrigins: make(map[mirrorOrigin]bool),
+		mirrorCredentials:   make(map[mirrorOrigin]authn.AuthConfig),
+	}
 	if cfg != nil {
 		for _, auth := range cfg.Registry.Auth {
 			rawHost := strings.TrimSpace(auth.Host)
-			host := canonicalHost(rawHost)
-			if host == "" {
+			if rawHost == "" {
 				continue
 			}
-			if strings.HasPrefix(strings.ToLower(rawHost), "http://") {
-				newExplicitHTTP[host] = true
+			hasAnyCred := strings.TrimSpace(auth.Username) != "" || strings.TrimSpace(auth.Token) != ""
+			hasFullCred := strings.TrimSpace(auth.Username) != "" && strings.TrimSpace(auth.Token) != ""
+
+			if origin, ok := parseDirectRegistryOrigin(rawHost); ok {
+				if origin.scheme == "http" {
+					snap.explicitHTTPOrigins[origin] = true
+				}
+				if hasAnyCred {
+					snap.directCredentials[origin] = authn.AuthConfig{
+						Username: auth.Username,
+						Password: auth.Token,
+					}
+				} else {
+					delete(snap.directCredentials, origin)
+				}
 			}
-			if strings.TrimSpace(auth.Username) == "" && strings.TrimSpace(auth.Token) == "" {
-				continue
-			}
-			newCreds[host] = authn.AuthConfig{
-				Username: auth.Username,
-				Password: auth.Token,
-			}
-			if strings.TrimSpace(auth.Username) != "" && strings.TrimSpace(auth.Token) != "" {
-				if origin, ok := parseConfiguredMirrorOrigin(rawHost); ok {
-					newMirrorCreds[origin] = authn.AuthConfig{
+
+			if hasFullCred {
+				if mirrorOrig, ok := parseConfiguredMirrorOrigin(rawHost); ok {
+					snap.mirrorCredentials[mirrorOrig] = authn.AuthConfig{
 						Username: auth.Username,
 						Password: auth.Token,
 					}
@@ -372,9 +448,7 @@ func (c *Client) UpdateManifestCredentials() {
 	}
 
 	c.credsMu.Lock()
-	c.credentials = newCreds
-	c.explicitHTTPHosts = newExplicitHTTP
-	c.mirrorCredentials = newMirrorCreds
+	c.creds = snap
 	c.credsMu.Unlock()
 
 	c.mu.Lock()
@@ -386,35 +460,33 @@ func (c *Client) UpdateManifestCredentials() {
 	c.rateLimitMu.Unlock()
 }
 
-func (c *Client) getCredentialForHost(host string) (authn.AuthConfig, bool) {
-	key := canonicalHost(host)
+func (c *Client) resolveDirectEndpointAuth(host string) (explicitHTTP bool, primaryCred authn.AuthConfig, hasPrimaryCred bool, fallbackHTTPCred authn.AuthConfig, hasFallbackHTTPCred bool) {
+	httpOrigin, httpsOrigin, ok := directTargetOrigins(host)
+	if !ok {
+		return false, authn.AuthConfig{}, false, authn.AuthConfig{}, false
+	}
 	c.credsMu.RLock()
-	defer c.credsMu.RUnlock()
-	cred, ok := c.credentials[key]
-	return cred, ok
+	snap := c.creds
+	explicitHTTP = snap.explicitHTTPOrigins[httpOrigin]
+	if explicitHTTP {
+		primaryCred, hasPrimaryCred = snap.directCredentials[httpOrigin]
+	} else {
+		primaryCred, hasPrimaryCred = snap.directCredentials[httpsOrigin]
+		fallbackHTTPCred, hasFallbackHTTPCred = snap.directCredentials[httpOrigin]
+	}
+	c.credsMu.RUnlock()
+	return explicitHTTP, primaryCred, hasPrimaryCred, fallbackHTTPCred, hasFallbackHTTPCred
 }
 
 func (c *Client) isHostExplicitHTTP(host string) bool {
-	target := canonicalHost(host)
-	if target == "" {
+	httpOrigin, _, ok := directTargetOrigins(host)
+	if !ok {
 		return false
 	}
 	c.credsMu.RLock()
-	explicit := c.explicitHTTPHosts[target]
+	explicit := c.creds.explicitHTTPOrigins[httpOrigin]
 	c.credsMu.RUnlock()
-	if explicit {
-		return true
-	}
-	cfg := config.Get()
-	if cfg == nil {
-		return false
-	}
-	for _, item := range cfg.Registry.Auth {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.Host)), "http://") && canonicalHost(item.Host) == target {
-			return true
-		}
-	}
-	return false
+	return explicit
 }
 
 func extractHostWithoutPort(hostport string) string {
@@ -687,7 +759,7 @@ func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, 
 	}
 
 	// 2. 使用 go-containerregistry 查询官方/私有仓库
-	explicitHTTP := c.isHostExplicitHTTP(host)
+	explicitHTTP, primaryCred, hasPrimaryCred, fallbackHTTPCred, hasFallbackHTTPCred := c.resolveDirectEndpointAuth(host)
 	var nameOpts []name.Option
 	if explicitHTTP {
 		nameOpts = append(nameOpts, name.Insecure)
@@ -701,25 +773,32 @@ func (c *Client) fetchDigest(ctx context.Context, q DigestQuery, normalizedRef, 
 		}
 	}
 
-	opts := []remote.Option{
-		remote.WithContext(ctx),
-		remote.WithTransport(c.remoteTransport(explicitHTTP, host)),
-		remote.WithPlatform(v1.Platform{
-			OS:           targetOS,
-			Architecture: targetArch,
-			Variant:      targetVariant,
-		}),
+	primaryScheme := "https"
+	if explicitHTTP {
+		primaryScheme = "http"
 	}
-	if cred, ok := c.getCredentialForHost(host); ok {
-		opts = append(opts, remote.WithAuth(authn.FromConfig(cred)))
+	buildRemoteOpts := func(scheme string, cred authn.AuthConfig, hasCred, requireHTTPS bool) []remote.Option {
+		out := []remote.Option{
+			remote.WithContext(ctx),
+			remote.WithTransport(c.remoteTransport(scheme, host, requireHTTPS)),
+			remote.WithPlatform(v1.Platform{
+				OS:           targetOS,
+				Architecture: targetArch,
+				Variant:      targetVariant,
+			}),
+		}
+		if hasCred {
+			out = append(out, remote.WithAuth(authn.FromConfig(cred)))
+		}
+		return out
 	}
 
-	desc, err := remote.Get(ref, opts...)
+	desc, err := remote.Get(ref, buildRemoteOpts(primaryScheme, primaryCred, hasPrimaryCred, !explicitHTTP && hasPrimaryCred)...)
 	if err != nil {
-		// 兼容未配置 TLS 的局域网私有仓库或显式 http:// 配置的仓库（禁止对公网域名静默降级明文传输凭据）
+		// 兼容未配置 TLS 的局域网私有仓库或显式 http:// 配置的仓库（禁止对公网域名静默降级，且降级 HTTP 不复用 HTTPS 凭据）
 		if !explicitHTTP && strings.Contains(host, ":") && c.allowInsecureFallback(host) && strings.Contains(strings.ToLower(err.Error()), "http: server gave http response to https client") {
 			if insecRef, rerr := name.ParseReference(normalizedRef, name.Insecure); rerr == nil {
-				desc, err = remote.Get(insecRef, opts...)
+				desc, err = remote.Get(insecRef, buildRemoteOpts("http", fallbackHTTPCred, hasFallbackHTTPCred, false)...)
 			}
 		}
 		if err != nil {

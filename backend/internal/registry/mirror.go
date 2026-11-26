@@ -284,7 +284,7 @@ func (c *Client) credentialForMirrorRealm(ep dockercli.MirrorEndpoint, realm *ur
 	}
 
 	c.credsMu.RLock()
-	cred, ok := c.mirrorCredentials[origin]
+	cred, ok := c.creds.mirrorCredentials[origin]
 	c.credsMu.RUnlock()
 	if !ok || cred.Username == "" || cred.Password == "" {
 		return authn.AuthConfig{}, false

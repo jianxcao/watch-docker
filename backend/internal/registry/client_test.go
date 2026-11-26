@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
@@ -25,9 +26,7 @@ import (
 )
 
 func TestAllowInsecureFallback(t *testing.T) {
-	c := &Client{
-		credentials: make(map[string]authn.AuthConfig),
-	}
+	c := &Client{}
 
 	tests := []struct {
 		name string
@@ -1394,4 +1393,468 @@ func TestMirrorRedirectAndChildAuthCredentialScoping(t *testing.T) {
 	if crossOriginAuthHeaders.Load() != 0 {
 		t.Fatalf("expected 0 Authorization headers sent to cross-origin target after manifest redirect, got %d", crossOriginAuthHeaders.Load())
 	}
+}
+
+type recordedDirectHTTPReq struct {
+	Scheme    string
+	Host      string
+	Path      string
+	Auth      string
+	BasicUser string
+	BasicPass string
+	HasBasic  bool
+}
+
+type mockDirectRoundTripper struct {
+	mu      sync.Mutex
+	reqs    []recordedDirectHTTPReq
+	handler func(req *http.Request) (*http.Response, error)
+}
+
+func (m *mockDirectRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	authHdr := req.Header.Get("Authorization")
+	u, p, hasBasic := req.BasicAuth()
+	m.mu.Lock()
+	m.reqs = append(m.reqs, recordedDirectHTTPReq{
+		Scheme:    req.URL.Scheme,
+		Host:      req.URL.Host,
+		Path:      req.URL.Path,
+		Auth:      authHdr,
+		BasicUser: u,
+		BasicPass: p,
+		HasBasic:  hasBasic,
+	})
+	m.mu.Unlock()
+	return m.handler(req)
+}
+
+func (m *mockDirectRoundTripper) snapshot() []recordedDirectHTTPReq {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]recordedDirectHTTPReq(nil), m.reqs...)
+}
+
+func (m *mockDirectRoundTripper) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reqs = nil
+}
+
+func TestDirectRegistryCredentialOrigin(t *testing.T) {
+	origEnv := conf.EnvCfg
+	origCfg := config.Get()
+	testEnv := *origEnv
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		if origCfg != nil {
+			config.SetGlobal(origCfg)
+		}
+		conf.EnvCfg = origEnv
+	})
+
+	const manifestBody = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`
+	sum := sha256.Sum256([]byte(manifestBody))
+	wantDigest := "sha256:" + hex.EncodeToString(sum[:])
+
+	mkResp := func(req *http.Request, status int, headers map[string]string, body string) *http.Response {
+		hdr := make(http.Header)
+		for k, v := range headers {
+			hdr.Set(k, v)
+		}
+		return &http.Response{
+			StatusCode: status,
+			Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+			Header:     hdr,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}
+	}
+
+	setupDirectClient := func(t *testing.T, yamlCfg string, handler func(*http.Request) (*http.Response, error)) (*Client, *mockDirectRoundTripper) {
+		t.Helper()
+		dir := t.TempDir()
+		conf.EnvCfg.CONFIG_PATH = dir
+		conf.EnvCfg.CONFIG_FILE = "config.yaml"
+		cfgPath := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(cfgPath, []byte(yamlCfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.Load(cfgPath); err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+		rt := &mockDirectRoundTripper{handler: handler}
+		c := New()
+		c.roundTripper = rt
+		return c, rt
+	}
+
+	// 1. 同地址匿名 HTTP + 带账号 HTTPS：两种配置顺序在显式走 HTTP 时都必须保持匿名，绝不发送 HTTPS 凭据
+	anonHTTPAndHTTPSOrders := []struct {
+		name string
+		cfg  string
+	}{
+		{
+			name: "anon_http_then_https_cred",
+			cfg: `registry:
+  auth:
+    - host: http://registry.example:5000
+      username: ""
+      token: ""
+    - host: https://registry.example:5000
+      username: https-user
+      token: https-secret
+`,
+		},
+		{
+			name: "https_cred_then_anon_http",
+			cfg: `registry:
+  auth:
+    - host: https://registry.example:5000
+      username: https-user
+      token: https-secret
+    - host: http://registry.example:5000
+      username: ""
+      token: ""
+`,
+		},
+	}
+
+	for _, tc := range anonHTTPAndHTTPSOrders {
+		t.Run("anon http plus credentialed https/"+tc.name, func(t *testing.T) {
+			c, rt := setupDirectClient(t, tc.cfg, func(req *http.Request) (*http.Response, error) {
+				if req.URL.Scheme != "http" {
+					return nil, fmt.Errorf("unexpected scheme %q on explicit http host", req.URL.Scheme)
+				}
+				if req.URL.Path == "/v2/" || req.URL.Path == "/v2" {
+					return mkResp(req, http.StatusOK, map[string]string{
+						"Docker-Distribution-Api-Version": "registry/2.0",
+					}, ""), nil
+				}
+				if strings.HasPrefix(req.URL.Path, "/v2/team/app/manifests/") {
+					return mkResp(req, http.StatusOK, map[string]string{
+						"Content-Type":          "application/vnd.oci.image.manifest.v1+json",
+						"Docker-Content-Digest": wantDigest,
+					}, manifestBody), nil
+				}
+				return mkResp(req, http.StatusNotFound, nil, ""), nil
+			})
+
+			q := DigestQuery{ImageRef: "registry.example:5000/team/app:v1", OS: "linux", Arch: "amd64"}
+			res := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q}, false, false, 1)[q.Key()]
+			if res.Error != nil || res.IndexDigest != wantDigest {
+				t.Fatalf("expected anonymous http pull to succeed, got %#v (err=%v)", res, res.Error)
+			}
+			reqs := rt.snapshot()
+			if len(reqs) < 2 {
+				t.Fatalf("expected ping + manifest requests, got %#v", reqs)
+			}
+			for _, r := range reqs {
+				if r.Scheme != "http" {
+					t.Fatalf("expected http request only, got %#v", reqs)
+				}
+				if r.Auth != "" {
+					t.Fatalf("anonymous http endpoint leaked Authorization header %q on %#v", r.Auth, r)
+				}
+			}
+		})
+	}
+
+	// 2. 同地址 HTTP、HTTPS 各有一个账号：两种配置顺序在显式走 HTTP 时都只能使用 HTTP 账号
+	dualCredOrders := []struct {
+		name string
+		cfg  string
+	}{
+		{
+			name: "http_cred_then_https_cred",
+			cfg: `registry:
+  auth:
+    - host: http://registry.example:5000
+      username: http-user
+      token: http-secret
+    - host: https://registry.example:5000
+      username: https-user
+      token: https-secret
+`,
+		},
+		{
+			name: "https_cred_then_http_cred",
+			cfg: `registry:
+  auth:
+    - host: https://registry.example:5000
+      username: https-user
+      token: https-secret
+    - host: http://registry.example:5000
+      username: http-user
+      token: http-secret
+`,
+		},
+	}
+
+	for _, tc := range dualCredOrders {
+		t.Run("distinct http and https accounts/"+tc.name, func(t *testing.T) {
+			c, rt := setupDirectClient(t, tc.cfg, func(req *http.Request) (*http.Response, error) {
+				if req.URL.Scheme != "http" {
+					return nil, fmt.Errorf("unexpected scheme %q on explicit http host", req.URL.Scheme)
+				}
+				if req.URL.Path == "/v2/" || req.URL.Path == "/v2" {
+					return mkResp(req, http.StatusUnauthorized, map[string]string{
+						"Www-Authenticate": `Basic realm="registry-http"`,
+					}, ""), nil
+				}
+				if strings.HasPrefix(req.URL.Path, "/v2/team/app/manifests/") {
+					user, pass, ok := req.BasicAuth()
+					if !ok || user != "http-user" || pass != "http-secret" {
+						return mkResp(req, http.StatusUnauthorized, nil, "bad basic auth"), nil
+					}
+					return mkResp(req, http.StatusOK, map[string]string{
+						"Content-Type":          "application/vnd.oci.image.manifest.v1+json",
+						"Docker-Content-Digest": wantDigest,
+					}, manifestBody), nil
+				}
+				return mkResp(req, http.StatusNotFound, nil, ""), nil
+			})
+
+			q := DigestQuery{ImageRef: "registry.example:5000/team/app:v1", OS: "linux", Arch: "amd64"}
+			res := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q}, false, false, 1)[q.Key()]
+			if res.Error != nil || res.IndexDigest != wantDigest {
+				t.Fatalf("expected explicit http account to authenticate, got %#v (err=%v)", res, res.Error)
+			}
+			reqs := rt.snapshot()
+			var sawManifest bool
+			for _, r := range reqs {
+				if r.Scheme != "http" {
+					t.Fatalf("expected http request only, got %#v", reqs)
+				}
+				if strings.HasPrefix(r.Path, "/v2/team/app/manifests/") {
+					sawManifest = true
+					if !r.HasBasic || r.BasicUser != "http-user" || r.BasicPass != "http-secret" {
+						t.Fatalf("manifest request used wrong basic auth: got=%#v want user=http-user", r)
+					}
+				}
+			}
+			if !sawManifest {
+				t.Fatalf("expected manifest request recorded, got %#v", reqs)
+			}
+		})
+	}
+
+	// 3. 仅配置 HTTPS 账号的私网仓库（192.168.1.50:5000）：
+	// 3a. 若服务端实际为明文 HTTP，首次 HTTPS 失败且传输层拦截私网自动 HTTP 探测中的 HTTPS 账号；降级 HTTP 必须匿名而不泄漏 HTTPS 账号
+	t.Run("https-only credentialed private registry does not leak secret on http fallback", func(t *testing.T) {
+		yamlCfg := `registry:
+  auth:
+    - host: https://192.168.1.50:5000
+      username: https-only-user
+      token: https-only-secret
+`
+		c, rt := setupDirectClient(t, yamlCfg, func(req *http.Request) (*http.Response, error) {
+			if req.URL.Scheme == "https" {
+				return nil, errors.New("http: server gave http response to https client")
+			}
+			if req.URL.Path == "/v2/" || req.URL.Path == "/v2" {
+				return mkResp(req, http.StatusOK, map[string]string{
+					"Docker-Distribution-Api-Version": "registry/2.0",
+				}, ""), nil
+			}
+			if strings.HasPrefix(req.URL.Path, "/v2/team/app/manifests/") {
+				if req.Header.Get("Authorization") != "" {
+					return nil, fmt.Errorf("leaked authorization header %q over http fallback", req.Header.Get("Authorization"))
+				}
+				return mkResp(req, http.StatusOK, map[string]string{
+					"Content-Type":          "application/vnd.oci.image.manifest.v1+json",
+					"Docker-Content-Digest": wantDigest,
+				}, manifestBody), nil
+			}
+			return mkResp(req, http.StatusNotFound, nil, ""), nil
+		})
+
+		q := DigestQuery{ImageRef: "192.168.1.50:5000/team/app:v1", OS: "linux", Arch: "amd64"}
+		res := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{q}, false, false, 1)[q.Key()]
+		if res.Error != nil || res.IndexDigest != wantDigest {
+			t.Fatalf("expected anonymous http fallback to succeed without credential leak, got %#v (err=%v)", res, res.Error)
+		}
+		reqs := rt.snapshot()
+		var sawHTTP bool
+		for _, r := range reqs {
+			if r.Scheme == "http" {
+				sawHTTP = true
+				if r.Auth != "" {
+					t.Fatalf("http fallback leaked Authorization %q on %#v", r.Auth, r)
+				}
+			}
+		}
+		if !sawHTTP {
+			t.Fatalf("expected anonymous http fallback request after https mismatch, got %#v", reqs)
+		}
+
+		// 3b. 当同一私网仓库实际提供 HTTPS 时，必须使用 https-only-user 完成认证且不触及 HTTP
+		rt.reset()
+		rt.handler = func(req *http.Request) (*http.Response, error) {
+			if req.URL.Scheme != "https" {
+				return nil, fmt.Errorf("unexpected non-https request %q", req.URL.String())
+			}
+			if req.URL.Path == "/v2/" || req.URL.Path == "/v2" {
+				return mkResp(req, http.StatusUnauthorized, map[string]string{
+					"Www-Authenticate": `Basic realm="private-tls"`,
+				}, ""), nil
+			}
+			if strings.HasPrefix(req.URL.Path, "/v2/team/app/manifests/") {
+				user, pass, ok := req.BasicAuth()
+				if !ok || user != "https-only-user" || pass != "https-only-secret" {
+					return mkResp(req, http.StatusUnauthorized, nil, "missing tls cred"), nil
+				}
+				return mkResp(req, http.StatusOK, map[string]string{
+					"Content-Type":          "application/vnd.oci.image.manifest.v1+json",
+					"Docker-Content-Digest": wantDigest,
+				}, manifestBody), nil
+			}
+			return mkResp(req, http.StatusNotFound, nil, ""), nil
+		}
+		qTLS := DigestQuery{ImageRef: "192.168.1.50:5000/team/app:tls", OS: "linux", Arch: "amd64"}
+		resTLS := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qTLS}, false, false, 1)[qTLS.Key()]
+		if resTLS.Error != nil || resTLS.IndexDigest != wantDigest {
+			t.Fatalf("expected private HTTPS registry pull to succeed with https cred, got %#v (err=%v)", resTLS, resTLS.Error)
+		}
+		for _, r := range rt.snapshot() {
+			if r.Scheme != "https" {
+				t.Fatalf("expected only https requests when private TLS succeeds, got %#v", r)
+			}
+		}
+
+		// 3c. 私网 HTTP 降级返回 401 Basic Auth 时，绝不复用 HTTPS 凭据重试，直接失败且所有 HTTP 请求均无 Authorization
+		rt.reset()
+		rt.handler = func(req *http.Request) (*http.Response, error) {
+			if req.URL.Scheme == "https" {
+				return nil, errors.New("http: server gave http response to https client")
+			}
+			if req.Header.Get("Authorization") != "" {
+				return nil, fmt.Errorf("leaked authorization %q on %s %s", req.Header.Get("Authorization"), req.URL.Scheme, req.URL.Path)
+			}
+			return mkResp(req, http.StatusUnauthorized, map[string]string{
+				"Www-Authenticate": `Basic realm="private-http"`,
+			}, "authentication required"), nil
+		}
+		qReject := DigestQuery{ImageRef: "192.168.1.50:5000/team/app:need-http-auth", OS: "linux", Arch: "amd64"}
+		resReject := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qReject}, false, false, 1)[qReject.Key()]
+		if resReject.Error == nil {
+			t.Fatalf("expected error when plain-HTTP fallback requires auth without explicit http:// config, got %#v", resReject)
+		}
+		for _, r := range rt.snapshot() {
+			if r.Scheme == "http" && r.Auth != "" {
+				t.Fatalf("http fallback leaked https Authorization on %#v", r)
+			}
+		}
+	})
+
+	// 4. 独立 HTTPS 仓库、同主机不同端口区分，以及 Docker Hub 既有别名兼容
+	t.Run("standalone https registries, port isolation, and docker hub aliases", func(t *testing.T) {
+		yamlCfg := `registry:
+  auth:
+    - host: ghcr.io
+      username: ghcr-user
+      token: ghcr-secret
+    - host: reg.example:8443
+      username: user-8443
+      token: pass-8443
+    - host: reg.example:9443
+      username: user-9443
+      token: pass-9443
+    - host: registry-1.docker.io
+      username: hub-user
+      token: hub-secret
+`
+		c, rt := setupDirectClient(t, yamlCfg, func(req *http.Request) (*http.Response, error) {
+			if req.URL.Scheme != "https" {
+				return nil, fmt.Errorf("expected https request, got %s", req.URL.Scheme)
+			}
+			if req.URL.Path == "/v2/" || req.URL.Path == "/v2" {
+				return mkResp(req, http.StatusUnauthorized, map[string]string{
+					"Www-Authenticate": `Basic realm="https-registry"`,
+				}, ""), nil
+			}
+			if strings.Contains(req.URL.Path, "/manifests/") {
+				user, pass, hasBasic := req.BasicAuth()
+				switch req.URL.Host {
+				case "ghcr.io":
+					if !hasBasic || user != "ghcr-user" || pass != "ghcr-secret" {
+						return mkResp(req, http.StatusUnauthorized, nil, "bad ghcr cred"), nil
+					}
+				case "reg.example:8443":
+					if !hasBasic || user != "user-8443" || pass != "pass-8443" {
+						return mkResp(req, http.StatusUnauthorized, nil, "bad 8443 cred"), nil
+					}
+				case "reg.example:9443":
+					if !hasBasic || user != "user-9443" || pass != "pass-9443" {
+						return mkResp(req, http.StatusUnauthorized, nil, "bad 9443 cred"), nil
+					}
+				case "reg.example:7443":
+					if req.Header.Get("Authorization") != "" {
+						return nil, fmt.Errorf("unconfigured port reg.example:7443 received unexpected auth %q", req.Header.Get("Authorization"))
+					}
+				case "index.docker.io":
+					if !hasBasic || user != "hub-user" || pass != "hub-secret" {
+						return mkResp(req, http.StatusUnauthorized, nil, "bad hub cred"), nil
+					}
+				default:
+					return nil, fmt.Errorf("unexpected host %q", req.URL.Host)
+				}
+				return mkResp(req, http.StatusOK, map[string]string{
+					"Content-Type":          "application/vnd.oci.image.manifest.v1+json",
+					"Docker-Content-Digest": wantDigest,
+				}, manifestBody), nil
+			}
+			return mkResp(req, http.StatusNotFound, nil, ""), nil
+		})
+
+		queries := []DigestQuery{
+			{ImageRef: "ghcr.io/org/app:v1", OS: "linux", Arch: "amd64"},
+			{ImageRef: "reg.example:8443/team/app:v1", OS: "linux", Arch: "amd64"},
+			{ImageRef: "reg.example:9443/team/app:v1", OS: "linux", Arch: "amd64"},
+			{ImageRef: "reg.example:7443/team/app:v1", OS: "linux", Arch: "amd64"},
+			{ImageRef: "docker.io/library/nginx:latest", OS: "linux", Arch: "amd64"},
+			{ImageRef: "nginx:1.25", OS: "linux", Arch: "amd64"},
+		}
+		batch := c.GetRemoteDigestsBatchWithPlatforms(context.Background(), queries, false, false, 1)
+		for _, q := range queries {
+			res := batch[q.Key()]
+			if res.Error != nil || res.IndexDigest != wantDigest {
+				t.Fatalf("query %q failed: %#v (err=%v)", q.ImageRef, res, res.Error)
+			}
+		}
+
+		// 验证 unconfigured port :7443 确实匿名请求、而 Hub/8443/9443/ghcr 均有对应 Basic 用户名
+		seen7443Anon := false
+		for _, r := range rt.snapshot() {
+			if r.Host == "reg.example:7443" && strings.Contains(r.Path, "/manifests/") {
+				seen7443Anon = true
+				if r.Auth != "" {
+					t.Fatalf("expected anonymous request on reg.example:7443, got %#v", r)
+				}
+			}
+		}
+		if !seen7443Anon {
+			t.Fatalf("expected manifest request to reg.example:7443, got %#v", rt.snapshot())
+		}
+
+		// Docker Hub 其它别名配置（dockerhub / docker.io / https://index.docker.io）同样必须命中 Hub 查询
+		for _, hubHostCfg := range []string{"docker.io", "dockerhub", "https://index.docker.io"} {
+			rt.reset()
+			hubYAML := fmt.Sprintf("registry:\n  auth:\n    - host: %s\n      username: hub-user\n      token: hub-secret\n", hubHostCfg)
+			cHub, rtHub := setupDirectClient(t, hubYAML, rt.handler)
+			qHub := DigestQuery{ImageRef: "registry-1.docker.io/library/alpine:3.20", OS: "linux", Arch: "amd64"}
+			resHub := cHub.GetRemoteDigestsBatchWithPlatforms(context.Background(), []DigestQuery{qHub}, false, false, 1)[qHub.Key()]
+			if resHub.Error != nil || resHub.IndexDigest != wantDigest {
+				t.Fatalf("hub alias %q failed: %#v (err=%v)", hubHostCfg, resHub, resHub.Error)
+			}
+			var matchedHub bool
+			for _, r := range rtHub.snapshot() {
+				if r.Host == "index.docker.io" && strings.Contains(r.Path, "/manifests/") && r.BasicUser == "hub-user" {
+					matchedHub = true
+				}
+			}
+			if !matchedHub {
+				t.Fatalf("hub alias %q did not send hub-user to index.docker.io: %#v", hubHostCfg, rtHub.snapshot())
+			}
+		}
+	})
 }
