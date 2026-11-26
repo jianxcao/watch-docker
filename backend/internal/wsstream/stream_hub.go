@@ -106,6 +106,13 @@ func (h *StreamHub[T]) Run() {
 	for {
 		select {
 		case client := <-h.register:
+			if h.closing.Load() || (h.manager != nil && h.manager.IsClosed()) {
+				close(client.send)
+				if client.conn != nil {
+					_ = client.conn.Close()
+				}
+				continue
+			}
 			h.mu.Lock()
 			h.clients[client] = true
 			clientCount := len(h.clients)
@@ -287,9 +294,9 @@ func (h *StreamHub[T]) closeAllClients() {
 	})
 }
 
-// RegisterClient 安全注册客户端（若 Hub 已退出则返回 false，避免永久阻塞）
+// RegisterClient 安全注册客户端（若 Hub 或管理器已退出则返回 false，避免永久阻塞）
 func (h *StreamHub[T]) RegisterClient(client *Client[T]) bool {
-	if h.IsClosed() {
+	if h.IsClosed() || (h.manager != nil && h.manager.IsClosed()) {
 		return false
 	}
 	select {
@@ -328,6 +335,7 @@ func (h *StreamHub[T]) IsClosed() bool {
 
 // Close 关闭 Hub
 func (h *StreamHub[T]) Close() {
+	h.closing.Store(true)
 	h.cancel()
 	<-h.done
 }

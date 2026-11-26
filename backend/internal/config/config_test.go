@@ -17,15 +17,17 @@ func setupTempConfigEnv(t *testing.T) string {
 	dir := t.TempDir()
 	origEnv := conf.EnvCfg
 	origCfg := Get()
-	conf.EnvCfg.CONFIG_PATH = dir
-	conf.EnvCfg.CONFIG_FILE = "config.yaml"
+	testEnv := *origEnv
+	testEnv.CONFIG_PATH = dir
+	testEnv.CONFIG_FILE = "config.yaml"
+	conf.EnvCfg = &testEnv
 	t.Cleanup(func() {
-		conf.EnvCfg = origEnv
 		if origCfg != nil {
 			globalMu.Lock()
 			globalCfg = origCfg
 			globalMu.Unlock()
 		}
+		conf.EnvCfg = origEnv
 	})
 	return filepath.Join(dir, "config.yaml")
 }
@@ -608,5 +610,27 @@ func TestWhitespacePaddedProxyURLMasksSecretAndRoundTrips(t *testing.T) {
 	}
 	if err := Validate(downgradedProxy); err == nil {
 		t.Fatalf("expected Validate to reject downgraded Proxy.URL with unresolved placeholder")
+	}
+}
+
+func TestSetupTempConfigEnvRestoresGlobalPointerAndValues(t *testing.T) {
+	origPtr := conf.EnvCfg
+	origVal := *conf.EnvCfg
+
+	t.Run("subtest mutates temp config env", func(t *testing.T) {
+		cfgPath := setupTempConfigEnv(t)
+		if cfgPath == "" || conf.EnvCfg == origPtr {
+			t.Fatalf("expected subtest to operate on copied EnvCfg, ptrSame=%v", conf.EnvCfg == origPtr)
+		}
+		conf.EnvCfg.USER_NAME = "temp-user-should-not-leak"
+	})
+
+	if conf.EnvCfg != origPtr {
+		t.Fatalf("expected conf.EnvCfg pointer restored to %p, got %p", origPtr, conf.EnvCfg)
+	}
+	if conf.EnvCfg.CONFIG_PATH != origVal.CONFIG_PATH ||
+		conf.EnvCfg.CONFIG_FILE != origVal.CONFIG_FILE ||
+		conf.EnvCfg.USER_NAME != origVal.USER_NAME {
+		t.Fatalf("expected conf.EnvCfg fields restored (%#v), got (%#v)", origVal, *conf.EnvCfg)
 	}
 }

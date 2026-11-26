@@ -19,14 +19,16 @@ func TestRegistryAuthAndMirrorPullTrimWhitespace(t *testing.T) {
 	origEnv := conf.EnvCfg
 	origCfg := config.Get()
 	dir := t.TempDir()
-	conf.EnvCfg.CONFIG_PATH = dir
-	conf.EnvCfg.CONFIG_FILE = "config.yaml"
+	testEnv := *origEnv
+	testEnv.CONFIG_PATH = dir
+	testEnv.CONFIG_FILE = "config.yaml"
+	conf.EnvCfg = &testEnv
 	cfgPath := filepath.Join(dir, "config.yaml")
 	t.Cleanup(func() {
-		conf.EnvCfg = origEnv
 		if origCfg != nil {
 			config.SetGlobal(origCfg)
 		}
+		conf.EnvCfg = origEnv
 	})
 
 	var pulledFromImage atomic.Value

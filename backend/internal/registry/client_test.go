@@ -59,14 +59,16 @@ func TestRateLimitCooldownDeadlineNotExtendedOnMirrorFallback(t *testing.T) {
 	origEnv := conf.EnvCfg
 	origCfg := config.Get()
 	dir := t.TempDir()
-	conf.EnvCfg.CONFIG_PATH = dir
-	conf.EnvCfg.CONFIG_FILE = "config.yaml"
+	testEnv := *origEnv
+	testEnv.CONFIG_PATH = dir
+	testEnv.CONFIG_FILE = "config.yaml"
+	conf.EnvCfg = &testEnv
 	cfgPath := filepath.Join(dir, "config.yaml")
 	t.Cleanup(func() {
-		conf.EnvCfg = origEnv
 		if origCfg != nil {
 			config.SetGlobal(origCfg)
 		}
+		conf.EnvCfg = origEnv
 	})
 
 	const officialManifest = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`
@@ -225,14 +227,16 @@ func TestMirrorManifestSizeLimitAndJSONValidation(t *testing.T) {
 	origEnv := conf.EnvCfg
 	origCfg := config.Get()
 	dir := t.TempDir()
-	conf.EnvCfg.CONFIG_PATH = dir
-	conf.EnvCfg.CONFIG_FILE = "config.yaml"
+	testEnv := *origEnv
+	testEnv.CONFIG_PATH = dir
+	testEnv.CONFIG_FILE = "config.yaml"
+	conf.EnvCfg = &testEnv
 	cfgPath := filepath.Join(dir, "config.yaml")
 	t.Cleanup(func() {
-		conf.EnvCfg = origEnv
 		if origCfg != nil {
 			config.SetGlobal(origCfg)
 		}
+		conf.EnvCfg = origEnv
 	})
 
 	const baseManifest = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`
@@ -436,11 +440,13 @@ func (rt *recordingRegistryTransport) snapshot() ([]recordedRegistryReq, []strin
 func TestFetchDigestExplicitHTTPAndPortScoping(t *testing.T) {
 	origEnv := conf.EnvCfg
 	origCfg := config.Get()
+	testEnv := *origEnv
+	conf.EnvCfg = &testEnv
 	t.Cleanup(func() {
-		conf.EnvCfg = origEnv
 		if origCfg != nil {
 			config.SetGlobal(origCfg)
 		}
+		conf.EnvCfg = origEnv
 	})
 
 	const manifestBody = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`

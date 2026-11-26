@@ -141,6 +141,8 @@ func TestListContainerDirectoryArchiveFallbackPreservesSpaces(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			_, _ = io.Copy(io.Discard, r.Body)
+			_ = r.Body.Close()
 			hj, ok := w.(http.Hijacker)
 			if !ok {
 				http.Error(w, "no hijack", http.StatusInternalServerError)
@@ -214,6 +216,8 @@ func TestListContainerDirectorySpecialFilesSkipArchiveFallback(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			_, _ = io.Copy(io.Discard, r.Body)
+			_ = r.Body.Close()
 			hj, ok := w.(http.Hijacker)
 			if !ok {
 				http.Error(w, "no hijack", http.StatusInternalServerError)
@@ -449,6 +453,8 @@ func TestReadContainerFileAutoFallsBackForSymlink(t *testing.T) {
 			w.Header().Set("Content-Type", "application/x-tar")
 			_, _ = w.Write(tarBuf.Bytes())
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			_, _ = io.Copy(io.Discard, r.Body)
+			_ = r.Body.Close()
 			hj, ok := w.(http.Hijacker)
 			if !ok {
 				http.Error(w, "no hijack", http.StatusInternalServerError)

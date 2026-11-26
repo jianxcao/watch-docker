@@ -387,3 +387,124 @@ func TestListContainersLazyParentIDLookupAndCache(t *testing.T) {
 		t.Fatalf("stale response overwrote fresh cached parent metadata: ok=%v meta=%#v", ok, metaAfter)
 	}
 }
+
+func TestListContainersUsesManifestDescriptorPlatformWithInspectFallback(t *testing.T) {
+	ctx := context.Background()
+
+	containers := []map[string]any{
+		{
+			"Id":      "c-amd64",
+			"Names":   []string{"/c-amd64"},
+			"Image":   "repo/app:latest",
+			"ImageID": "sha256:shared-multiarch",
+			"State":   "running",
+			"ImageManifestDescriptor": map[string]any{
+				"mediaType": "application/vnd.oci.image.manifest.v1+json",
+				"digest":    "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+				"size":      100,
+				"platform": map[string]any{
+					"os":           "linux",
+					"architecture": "amd64",
+				},
+			},
+		},
+		{
+			"Id":      "c-arm64",
+			"Names":   []string{"/c-arm64"},
+			"Image":   "repo/app:latest",
+			"ImageID": "sha256:shared-multiarch",
+			"State":   "running",
+			"ImageManifestDescriptor": map[string]any{
+				"mediaType": "application/vnd.oci.image.manifest.v1+json",
+				"digest":    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+				"size":      100,
+				"platform": map[string]any{
+					"os":           "linux",
+					"architecture": "arm64",
+					"variant":      "v8",
+				},
+			},
+		},
+		{
+			"Id":      "c-legacy",
+			"Names":   []string{"/c-legacy"},
+			"Image":   "repo/legacy:v1",
+			"ImageID": "sha256:legacy-image",
+			"State":   "running",
+		},
+	}
+
+	inspects := map[string]map[string]any{
+		"sha256:shared-multiarch": {
+			"Id":           "sha256:shared-multiarch",
+			"Os":           "linux",
+			"Architecture": "amd64",
+			"RepoTags":     []string{"repo/app:latest"},
+			"RepoDigests":  []string{"repo/app@sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+		},
+		"sha256:legacy-image": {
+			"Id":           "sha256:legacy-image",
+			"Os":           "linux",
+			"Architecture": "s390x",
+			"RepoTags":     []string{"repo/legacy:v1"},
+			"RepoDigests":  []string{"repo/legacy@sha256:3333333333333333333333333333333333333333333333333333333333333333"},
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(containers)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/") && strings.HasSuffix(r.URL.Path, "/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id":    "c",
+				"State": map[string]any{"StartedAt": "2026-11-26T00:00:00Z"},
+			})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			trimmed := strings.TrimSuffix(r.URL.Path, "/json")
+			imgID := trimmed[strings.LastIndex(trimmed, "/")+1:]
+			resp, ok := inspects[imgID]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dockerCli, err := client.New(client.WithHost("tcp://" + srv.Listener.Addr().String()))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer dockerCli.Close()
+
+	cli := &Client{
+		docker:       dockerCli,
+		imageCache:   make(map[string]cachedImageMeta),
+		startedCache: make(map[string]cachedStartMeta),
+	}
+
+	list, err := cli.ListContainers(ctx, true)
+	if err != nil {
+		t.Fatalf("ListContainers failed: %v", err)
+	}
+	byName := make(map[string]ContainerInfo, len(list))
+	for _, c := range list {
+		byName[c.Name] = c
+	}
+	if got := byName["c-amd64"]; got.ImageOS != "linux" || got.ImageArch != "amd64" || got.ImageVariant != "" {
+		t.Fatalf("unexpected c-amd64 platform: %#v", got)
+	}
+	if got := byName["c-arm64"]; got.ImageOS != "linux" || got.ImageArch != "arm64" || got.ImageVariant != "v8" {
+		t.Fatalf("expected c-arm64 platform linux/arm64/v8, got: %#v", got)
+	}
+	if got := byName["c-legacy"]; got.ImageOS != "linux" || got.ImageArch != "s390x" {
+		t.Fatalf("expected c-legacy fallback platform linux/s390x, got: %#v", got)
+	}
+}

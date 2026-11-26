@@ -155,6 +155,11 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 
 		repoDigests := imageDigests[ct.ImageID]
 		platform := imagePlatforms[ct.ImageID]
+		if ct.ImageManifestDescriptor != nil && ct.ImageManifestDescriptor.Platform != nil &&
+			ct.ImageManifestDescriptor.Platform.OS != "" && ct.ImageManifestDescriptor.Platform.Architecture != "" {
+			p := ct.ImageManifestDescriptor.Platform
+			platform = [3]string{p.OS, p.Architecture, p.Variant}
+		}
 
 		info := ContainerInfo{
 			ID:           ct.ID,

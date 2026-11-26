@@ -11,6 +11,8 @@ import (
 
 func TestCheckWebSocketOrigin(t *testing.T) {
 	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	conf.EnvCfg = &testEnv
 	t.Cleanup(func() {
 		conf.EnvCfg = origEnv
 	})
@@ -138,5 +140,21 @@ func TestLoginRateLimiterKeepsActiveLockoutAcrossWindowBoundary(t *testing.T) {
 
 	if blocked, remaining := limiter.RecordFailure(key); !blocked || remaining != 0 {
 		t.Fatalf("expected active lockout preserved across window boundary, got blocked=%v remaining=%d", blocked, remaining)
+	}
+}
+
+func TestCheckWebSocketOriginRestoresGlobalEnvCfg(t *testing.T) {
+	origPtr := conf.EnvCfg
+	origVal := *conf.EnvCfg
+
+	t.Run("run websocket origin suite", TestCheckWebSocketOrigin)
+
+	if conf.EnvCfg != origPtr {
+		t.Fatalf("expected conf.EnvCfg pointer restored to %p, got %p", origPtr, conf.EnvCfg)
+	}
+	if conf.EnvCfg.USER_NAME != origVal.USER_NAME ||
+		conf.EnvCfg.USER_PASSWORD != origVal.USER_PASSWORD ||
+		conf.EnvCfg.TWOFA_ALLOWED_DOMAINS != origVal.TWOFA_ALLOWED_DOMAINS {
+		t.Fatalf("expected conf.EnvCfg fields restored (%#v), got (%#v)", origVal, *conf.EnvCfg)
 	}
 }

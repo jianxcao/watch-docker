@@ -233,8 +233,8 @@ func (c *Client) ScanProjects(ctx context.Context) []ComposeProject {
 }
 
 var (
-	primaryComposeFiles  = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
-	overrideComposeFiles = []string{"compose.override.yaml", "compose.override.yml", "docker-compose.override.yaml", "docker-compose.override.yml"}
+	primaryComposeFiles  = []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
+	overrideComposeFiles = []string{"compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml"}
 )
 
 func isPrimaryComposeFileName(filename string) bool {
@@ -263,14 +263,7 @@ func (c *Client) isComposeFile(filename string) bool {
 }
 
 func (c *Client) findComposeFileInDir(dir string) string {
-	composeFiles := []string{
-		"docker-compose.yml",
-		"docker-compose.yaml",
-		"compose.yml",
-		"compose.yaml",
-	}
-
-	for _, cf := range composeFiles {
+	for _, cf := range primaryComposeFiles {
 		fullPath := filepath.Join(dir, cf)
 		if _, err := os.Stat(fullPath); err == nil {
 			return fullPath
@@ -683,8 +676,67 @@ func (p DeployProjectPlan) ComposeArgsPrefix() []string {
 }
 
 // SaveNewProject 保存新的 Compose 项目（严格校验项目名称及位于 APP_PATH 内，拒绝符号链接）
+// 当 force=false（仅保存新建草稿）时仅执行本地独占创建，不查询 Docker 运行时状态以支持离线保存。
 func (c *Client) SaveNewProject(ctx context.Context, name string, yamlContent string, force bool) (string, error) {
-	return c.SaveProject(ctx, name, "", yamlContent, force)
+	if force {
+		return c.SaveProject(ctx, name, "", yamlContent, true)
+	}
+	if err := ValidateProjectName(name); err != nil {
+		return "", err
+	}
+	appRoot, err := resolveAppRoot()
+	if err != nil {
+		return "", err
+	}
+	projectPath, err := ValidateProjectDir(filepath.Join(appRoot, name))
+	if err != nil {
+		return "", err
+	}
+
+	if stat, lerr := os.Lstat(projectPath); lerr == nil {
+		if stat.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("%w: %s", ErrSymlinkPath, projectPath)
+		}
+		logger.Logger.Warn("项目已存在，需要 force=true 才能覆盖", zap.String("path", projectPath))
+		return "", errors.New("项目已存在，如需覆盖请使用强制模式")
+	} else if !os.IsNotExist(lerr) {
+		return "", errors.New("检查项目目录失败: " + lerr.Error())
+	}
+
+	if err := os.Mkdir(projectPath, 0755); err != nil {
+		if os.IsExist(err) {
+			return "", errors.New("项目已存在，如需覆盖请使用强制模式")
+		}
+		logger.Logger.Error("创建项目目录失败", zap.String("path", projectPath), logger.ZapErr(err))
+		return "", errors.New("创建项目目录失败: " + err.Error())
+	}
+
+	targetFile := filepath.Join(projectPath, "docker-compose.yaml")
+	f, err := os.OpenFile(targetFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		_ = os.Remove(projectPath)
+		if os.IsExist(err) {
+			return "", errors.New("项目已存在，如需覆盖请使用强制模式")
+		}
+		logger.Logger.Error("创建 Compose 文件失败", zap.String("file", targetFile), logger.ZapErr(err))
+		return "", errors.New("写入 Compose 文件失败: " + err.Error())
+	}
+
+	_, writeErr := f.Write([]byte(yamlContent))
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(targetFile)
+		_ = os.Remove(projectPath)
+		werr := writeErr
+		if werr == nil {
+			werr = closeErr
+		}
+		logger.Logger.Error("写入 Compose 文件失败", zap.String("file", targetFile), logger.ZapErr(werr))
+		return "", errors.New("写入 Compose 文件失败: " + werr.Error())
+	}
+
+	logger.Logger.Info("已保存新建 Compose 草稿", zap.String("targetFile", targetFile))
+	return targetFile, nil
 }
 
 // SaveProject 保存或更新指定 Compose 项目的配置文件，并返回实际写入的文件路径。
@@ -798,7 +850,24 @@ func collectExistingComposeCandidates(projectPath string, names []string) ([]str
 	return found, nil
 }
 
-func candidateProjectNames(cands []runtimeCandidate) []string {
+type rawRuntimeCandidate struct {
+	name            string
+	rawSegments     []string
+	normalizedFiles []string
+}
+
+func normalizeCandidateConfigPath(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if resolved, err := resolvePathCheckingSymlinks(trimmed); err == nil {
+		return resolved
+	}
+	return normalizeComposePath(trimmed)
+}
+
+func rawCandidateProjectNames(cands []rawRuntimeCandidate) []string {
 	names := make([]string, len(cands))
 	for i, cand := range cands {
 		names[i] = cand.name
@@ -813,53 +882,39 @@ func (c *Client) lookupRuntimeCandidate(ctx context.Context, name, projectPath, 
 		return nil, fmt.Errorf("查询运行时 Compose 项目失败: %w", err)
 	}
 
-	var dirCandidates []runtimeCandidate
+	// 第一步：仅按记录中的项目名与规范化路径匹配和消除歧义，不提前 Lstat 未选中兄弟项目的文件
+	var rawDirCandidates []rawRuntimeCandidate
 	for _, item := range runtimeList {
 		rawConfigs := strings.TrimSpace(item.ConfigFiles)
 		if rawConfigs == "" {
 			continue
 		}
+		var rawSegments []string
+		var normalizedFiles []string
 		belongsToDir := false
-		for _, cfg := range strings.Split(rawConfigs, ",") {
-			normalized := normalizeComposePath(cfg)
-			if normalized != "" && filepath.Dir(normalized) == projectPath {
+		for _, seg := range strings.Split(rawConfigs, ",") {
+			trimmedSeg := strings.TrimSpace(seg)
+			if trimmedSeg == "" {
+				continue
+			}
+			rawSegments = append(rawSegments, trimmedSeg)
+			norm := normalizeCandidateConfigPath(trimmedSeg)
+			normalizedFiles = append(normalizedFiles, norm)
+			if norm != "" && filepath.Dir(norm) == projectPath {
 				belongsToDir = true
-				break
 			}
 		}
 		if !belongsToDir {
 			continue
 		}
-
-		runtimeName := strings.TrimSpace(item.Name)
-		if err := ValidateProjectName(runtimeName); err != nil {
-			return nil, fmt.Errorf("运行时项目名 %q 非法: %w", item.Name, err)
-		}
-		var files []string
-		seen := make(map[string]struct{})
-		for _, seg := range strings.Split(rawConfigs, ",") {
-			if strings.TrimSpace(seg) == "" {
-				continue
-			}
-			cleanFile, err := validateProjectMemberConfigFile(projectPath, name, seg)
-			if err != nil {
-				return nil, err
-			}
-			if _, ok := seen[cleanFile]; ok {
-				continue
-			}
-			seen[cleanFile] = struct{}{}
-			files = append(files, cleanFile)
-		}
-		if len(files) > 0 {
-			dirCandidates = append(dirCandidates, runtimeCandidate{
-				name:  runtimeName,
-				files: files,
-			})
-		}
+		rawDirCandidates = append(rawDirCandidates, rawRuntimeCandidate{
+			name:            strings.TrimSpace(item.Name),
+			rawSegments:     rawSegments,
+			normalizedFiles: normalizedFiles,
+		})
 	}
 
-	if len(dirCandidates) == 0 {
+	if len(rawDirCandidates) == 0 {
 		trimmedName := strings.TrimSpace(name)
 		for _, item := range runtimeList {
 			if !strings.EqualFold(strings.TrimSpace(item.Name), trimmedName) {
@@ -881,64 +936,249 @@ func (c *Client) lookupRuntimeCandidate(ctx context.Context, name, projectPath, 
 		return nil, nil
 	}
 
-	if len(dirCandidates) == 1 {
-		cand := dirCandidates[0]
-		if cleanExplicitFile != "" && !slices.Contains(cand.files, cleanExplicitFile) {
-			return nil, fmt.Errorf("目标配置文件 %s 与运行时项目 %s 的配置文件列表 [%s] 冲突", cleanExplicitFile, cand.name, strings.Join(cand.files, ", "))
+	var chosen rawRuntimeCandidate
+	if len(rawDirCandidates) == 1 {
+		cand := rawDirCandidates[0]
+		if cleanExplicitFile != "" && !slices.Contains(cand.normalizedFiles, cleanExplicitFile) {
+			return nil, fmt.Errorf("目标配置文件 %s 与运行时项目 %s 的配置文件列表 [%s] 冲突", cleanExplicitFile, cand.name, strings.Join(cand.normalizedFiles, ", "))
 		}
-		return &cand, nil
-	}
+		chosen = cand
+	} else {
+		allNames := rawCandidateProjectNames(rawDirCandidates)
+		if cleanExplicitFile == "" {
+			return nil, fmt.Errorf("项目目录 %s 存在多个运行时 Compose 项目 (%s)，请指定对应配置文件以消除歧义", projectPath, strings.Join(allNames, ", "))
+		}
 
-	allNames := candidateProjectNames(dirCandidates)
-	if cleanExplicitFile == "" {
-		return nil, fmt.Errorf("项目目录 %s 存在多个运行时 Compose 项目 (%s)，请指定对应配置文件以消除歧义", projectPath, strings.Join(allNames, ", "))
-	}
-
-	var fileMatches []runtimeCandidate
-	for _, cand := range dirCandidates {
-		if slices.Contains(cand.files, cleanExplicitFile) {
-			fileMatches = append(fileMatches, cand)
+		var fileMatches []rawRuntimeCandidate
+		for _, cand := range rawDirCandidates {
+			if slices.Contains(cand.normalizedFiles, cleanExplicitFile) {
+				fileMatches = append(fileMatches, cand)
+			}
+		}
+		if len(fileMatches) == 0 {
+			return nil, fmt.Errorf("目标配置文件 %s 与目录中多个运行时项目 (%s) 均不匹配", cleanExplicitFile, strings.Join(allNames, ", "))
+		}
+		if len(fileMatches) == 1 {
+			chosen = fileMatches[0]
+		} else {
+			trimmedName := strings.TrimSpace(name)
+			var nameMatches []rawRuntimeCandidate
+			for _, cand := range fileMatches {
+				if strings.EqualFold(cand.name, trimmedName) {
+					nameMatches = append(nameMatches, cand)
+				}
+			}
+			if len(nameMatches) != 1 {
+				return nil, fmt.Errorf("项目目录 %s 中配置文件 %s 匹配多个运行时 Compose 项目 (%s)，无法唯一定位",
+					projectPath, cleanExplicitFile, strings.Join(rawCandidateProjectNames(fileMatches), ", "))
+			}
+			chosen = nameMatches[0]
 		}
 	}
-	if len(fileMatches) == 0 {
-		return nil, fmt.Errorf("目标配置文件 %s 与目录中多个运行时项目 (%s) 均不匹配", cleanExplicitFile, strings.Join(allNames, ", "))
-	}
-	if len(fileMatches) == 1 {
-		cand := fileMatches[0]
-		return &cand, nil
-	}
 
-	trimmedName := strings.TrimSpace(name)
-	var nameMatches []runtimeCandidate
-	for _, cand := range fileMatches {
-		if strings.EqualFold(cand.name, trimmedName) {
-			nameMatches = append(nameMatches, cand)
+	// 第二步：唯一定位目标后，仅对选中项目的全部配置文件执行存在性、归属和符号链接校验
+	if err := ValidateProjectName(chosen.name); err != nil {
+		return nil, fmt.Errorf("运行时项目名 %q 非法: %w", chosen.name, err)
+	}
+	files := make([]string, 0, len(chosen.rawSegments))
+	seen := make(map[string]struct{}, len(chosen.rawSegments))
+	for _, seg := range chosen.rawSegments {
+		cleanFile, err := validateProjectMemberConfigFile(projectPath, name, seg)
+		if err != nil {
+			return nil, err
 		}
+		if _, ok := seen[cleanFile]; ok {
+			continue
+		}
+		seen[cleanFile] = struct{}{}
+		files = append(files, cleanFile)
 	}
-	if len(nameMatches) == 1 {
-		cand := nameMatches[0]
-		return &cand, nil
+	if len(files) == 0 {
+		return nil, fmt.Errorf("运行时项目 %s 缺少有效的配置文件", chosen.name)
 	}
-
-	return nil, fmt.Errorf("项目目录 %s 中配置文件 %s 匹配多个运行时 Compose 项目 (%s)，无法唯一定位",
-		projectPath, cleanExplicitFile, strings.Join(candidateProjectNames(fileMatches), ", "))
+	if cleanExplicitFile != "" && !slices.Contains(files, cleanExplicitFile) {
+		return nil, fmt.Errorf("目标配置文件 %s 与运行时项目 %s 的配置文件列表 [%s] 冲突", cleanExplicitFile, chosen.name, strings.Join(files, ", "))
+	}
+	return &runtimeCandidate{
+		name:  chosen.name,
+		files: files,
+	}, nil
 }
 
-func parseDotEnvValue(raw string, envMap map[string]string) string {
+func isComposeVarStart(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
+}
+
+func isComposeVarChar(ch byte) bool {
+	return isComposeVarStart(ch) || (ch >= '0' && ch <= '9')
+}
+
+// expandComposeVars 按 Compose 规范展开 $$、$VAR 与 ${VAR[:][-/?/+]...}（支持嵌套与默认值语义）
+func expandComposeVars(input string, lookup func(string) (string, bool)) (string, error) {
+	var sb strings.Builder
+	i := 0
+	for i < len(input) {
+		rel := strings.IndexByte(input[i:], '$')
+		if rel < 0 {
+			sb.WriteString(input[i:])
+			break
+		}
+		sb.WriteString(input[i : i+rel])
+		i += rel + 1
+		if i >= len(input) {
+			sb.WriteByte('$')
+			break
+		}
+		ch := input[i]
+		if ch == '$' {
+			sb.WriteByte('$')
+			i++
+			continue
+		}
+		if ch == '{' {
+			depth := 1
+			j := i + 1
+			for j < len(input) && depth > 0 {
+				switch input[j] {
+				case '{':
+					depth++
+				case '}':
+					depth--
+				}
+				if depth == 0 {
+					break
+				}
+				j++
+			}
+			if depth != 0 {
+				return "", fmt.Errorf("无效的变量表达式: %s", input[i-1:])
+			}
+			expr := input[i+1 : j]
+			if expr == "" || !isComposeVarStart(expr[0]) {
+				return "", fmt.Errorf("无效的变量表达式: ${%s}", expr)
+			}
+			nameEnd := 1
+			for nameEnd < len(expr) && isComposeVarChar(expr[nameEnd]) {
+				nameEnd++
+			}
+			varName := expr[:nameEnd]
+			rest := expr[nameEnd:]
+			val, exists := lookup(varName)
+
+			if rest == "" {
+				sb.WriteString(val)
+				i = j + 1
+				continue
+			}
+
+			var op, arg string
+			for _, candidateOp := range []string{":-", "-", ":+", "+", ":?", "?"} {
+				if strings.HasPrefix(rest, candidateOp) {
+					op = candidateOp
+					arg = rest[len(candidateOp):]
+					break
+				}
+			}
+			if op == "" {
+				return "", fmt.Errorf("不支持的变量替换语法: ${%s}", expr)
+			}
+
+			switch op {
+			case ":-":
+				if !exists || val == "" {
+					expandedArg, err := expandComposeVars(arg, lookup)
+					if err != nil {
+						return "", err
+					}
+					sb.WriteString(expandedArg)
+				} else {
+					sb.WriteString(val)
+				}
+			case "-":
+				if !exists {
+					expandedArg, err := expandComposeVars(arg, lookup)
+					if err != nil {
+						return "", err
+					}
+					sb.WriteString(expandedArg)
+				} else {
+					sb.WriteString(val)
+				}
+			case ":+":
+				if exists && val != "" {
+					expandedArg, err := expandComposeVars(arg, lookup)
+					if err != nil {
+						return "", err
+					}
+					sb.WriteString(expandedArg)
+				}
+			case "+":
+				if exists {
+					expandedArg, err := expandComposeVars(arg, lookup)
+					if err != nil {
+						return "", err
+					}
+					sb.WriteString(expandedArg)
+				}
+			case ":?":
+				if !exists || val == "" {
+					msg, err := expandComposeVars(arg, lookup)
+					if err != nil {
+						return "", err
+					}
+					if msg == "" {
+						msg = "未设置或为空"
+					}
+					return "", fmt.Errorf("环境变量 %s %s", varName, msg)
+				}
+				sb.WriteString(val)
+			case "?":
+				if !exists {
+					msg, err := expandComposeVars(arg, lookup)
+					if err != nil {
+						return "", err
+					}
+					if msg == "" {
+						msg = "未设置"
+					}
+					return "", fmt.Errorf("环境变量 %s %s", varName, msg)
+				}
+				sb.WriteString(val)
+			}
+			i = j + 1
+			continue
+		}
+		if isComposeVarStart(ch) {
+			j := i + 1
+			for j < len(input) && isComposeVarChar(input[j]) {
+				j++
+			}
+			val, _ := lookup(input[i:j])
+			sb.WriteString(val)
+			i = j
+			continue
+		}
+		sb.WriteByte('$')
+	}
+	return sb.String(), nil
+}
+
+func parseDotEnvValue(raw string, envMap map[string]string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return ""
+		return "", nil
 	}
-	lookup := func(key string) string {
+	lookup := func(key string) (string, bool) {
 		if v, ok := os.LookupEnv(key); ok {
-			return v
+			return v, true
 		}
-		return envMap[key]
+		v, ok := envMap[key]
+		return v, ok
 	}
 
 	if len(trimmed) >= 2 && trimmed[0] == '\'' {
 		if end := strings.IndexByte(trimmed[1:], '\''); end >= 0 {
-			return trimmed[1 : 1+end]
+			return trimmed[1 : 1+end], nil
 		}
 	}
 	if len(trimmed) >= 2 && trimmed[0] == '"' {
@@ -954,6 +1194,8 @@ func parseDotEnvValue(raw string, envMap map[string]string) string {
 					sb.WriteByte('\r')
 				case 't':
 					sb.WriteByte('\t')
+				case '$':
+					sb.WriteString("$$")
 				default:
 					sb.WriteByte(ch)
 				}
@@ -965,7 +1207,7 @@ func parseDotEnvValue(raw string, envMap map[string]string) string {
 				continue
 			}
 			if ch == '"' {
-				return os.Expand(sb.String(), lookup)
+				return expandComposeVars(sb.String(), lookup)
 			}
 			sb.WriteByte(ch)
 		}
@@ -977,29 +1219,31 @@ func parseDotEnvValue(raw string, envMap map[string]string) string {
 			break
 		}
 	}
-	return os.Expand(trimmed, lookup)
+	return expandComposeVars(trimmed, lookup)
 }
 
-func parseDotEnvFile(envPath string) (map[string]string, error) {
+func parseDotEnvFileInto(envPath string, requireExists bool, envMap map[string]string) error {
 	fi, err := os.Lstat(envPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			if requireExists {
+				return fmt.Errorf("环境文件不存在: %s", envPath)
+			}
+			return nil
 		}
-		return nil, fmt.Errorf("检查 .env 文件失败: %w", err)
+		return fmt.Errorf("检查环境文件失败: %w", err)
 	}
 	if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%w: %s", ErrSymlinkPath, envPath)
+		return fmt.Errorf("%w: %s", ErrSymlinkPath, envPath)
 	}
 
 	raw, err := os.ReadFile(envPath)
 	if err != nil {
-		return nil, fmt.Errorf("读取 .env 文件失败: %w", err)
+		return fmt.Errorf("读取环境文件失败: %w", err)
 	}
 	text := strings.TrimPrefix(string(raw), "\xef\xbb\xbf")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 
-	envMap := make(map[string]string)
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -1016,15 +1260,46 @@ func parseDotEnvFile(envPath string) (map[string]string, error) {
 		if key == "" {
 			continue
 		}
-		envMap[key] = parseDotEnvValue(rawVal, envMap)
+		val, perr := parseDotEnvValue(rawVal, envMap)
+		if perr != nil {
+			return fmt.Errorf("解析环境文件 %s 中的变量 %s 失败: %w", envPath, key, perr)
+		}
+		envMap[key] = val
 	}
-	return envMap, nil
+	return nil
 }
 
 func resolveDraftEnvComposeFiles(projectPath, projectName string) ([]string, bool, error) {
-	dotEnv, err := parseDotEnvFile(filepath.Join(projectPath, ".env"))
-	if err != nil {
-		return nil, false, err
+	dotEnv := make(map[string]string)
+	if rawEnvFiles, hasEnvFilesEnv := os.LookupEnv("COMPOSE_ENV_FILES"); hasEnvFilesEnv && strings.TrimSpace(rawEnvFiles) != "" {
+		for _, part := range strings.Split(rawEnvFiles, ",") {
+			trimmedEnv := strings.TrimSpace(part)
+			if trimmedEnv == "" {
+				return nil, false, fmt.Errorf("COMPOSE_ENV_FILES 配置 %q 包含空路径项", rawEnvFiles)
+			}
+			if strings.ContainsRune(trimmedEnv, 0) {
+				return nil, false, fmt.Errorf("非法的环境文件路径: %s", trimmedEnv)
+			}
+			envPath := trimmedEnv
+			if !filepath.IsAbs(envPath) {
+				envPath = filepath.Join(projectPath, envPath)
+			}
+			if err := parseDotEnvFileInto(envPath, true, dotEnv); err != nil {
+				return nil, false, err
+			}
+		}
+	} else {
+		disabled := false
+		if rawDisable, hasDisable := os.LookupEnv("COMPOSE_DISABLE_ENV_FILE"); hasDisable {
+			if b, berr := strconv.ParseBool(strings.TrimSpace(rawDisable)); berr == nil {
+				disabled = b
+			}
+		}
+		if !disabled {
+			if err := parseDotEnvFileInto(filepath.Join(projectPath, ".env"), false, dotEnv); err != nil {
+				return nil, false, err
+			}
+		}
 	}
 
 	sep, hasSepEnv := os.LookupEnv("COMPOSE_PATH_SEPARATOR")

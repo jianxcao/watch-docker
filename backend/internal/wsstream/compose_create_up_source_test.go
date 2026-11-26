@@ -260,7 +260,7 @@ func runComposeConfigServices(t *testing.T, execDir string, upArgs []string) []s
 	}
 	var services []string
 	for _, line := range strings.Split(string(res.Output), "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
+		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "time=") {
 			services = append(services, trimmed)
 		}
 	}
@@ -868,6 +868,244 @@ func TestComposeCreateUpSourcePreservesOverrideFilesAndRuntimeConfigFiles(t *tes
 			}
 			if gotM, _ := os.ReadFile(mainFile); string(gotM) != updatedMain {
 				t.Fatalf("compose.yaml not updated")
+			}
+		})
+	})
+
+	t.Run("compose env controls COMPOSE_DISABLE_ENV_FILE, COMPOSE_ENV_FILES, and :- defaults match native compose", func(t *testing.T) {
+		draftCli := &composecli.Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+				return nil, nil
+			},
+		}
+
+		// Case 1: COMPOSE_DISABLE_ENV_FILE=1 & COMPOSE_ENV_FILES=alt.env vs default .env
+		projDir := filepath.Join(resolvedAppDir, "env-controls-proj")
+		if err := os.MkdirAll(projDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		composeFile := filepath.Join(projDir, "compose.yaml")
+		prodFile := filepath.Join(projDir, "prod.yaml")
+		altFile := filepath.Join(projDir, "alt.yaml")
+		defaultEnv := filepath.Join(projDir, ".env")
+		altEnv := filepath.Join(projDir, "alt.env")
+
+		if err := os.WriteFile(composeFile, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(prodFile, []byte("services:\n  worker:\n    image: alpine:3.20\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(altFile, []byte("services:\n  scheduler:\n    image: busybox:1.36\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(defaultEnv, []byte("COMPOSE_FILE=compose.yaml:prod.yaml\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(altEnv, []byte("COMPOSE_FILE=compose.yaml:alt.yaml\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		badEnv := filepath.Join(projDir, "bad.env")
+		if err := os.WriteFile(badEnv, []byte("COMPOSE_FILE=../outside.yaml\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, tc := range []struct {
+			name     string
+			env      map[string]string
+			wantSvcs []string
+		}{
+			{
+				name:     "default .env",
+				env:      nil,
+				wantSvcs: []string{"web", "worker"},
+			},
+			{
+				name:     "COMPOSE_DISABLE_ENV_FILE=1",
+				env:      map[string]string{"COMPOSE_DISABLE_ENV_FILE": "1"},
+				wantSvcs: []string{"web"},
+			},
+			{
+				name:     "COMPOSE_ENV_FILES=alt.env",
+				env:      map[string]string{"COMPOSE_ENV_FILES": "alt.env"},
+				wantSvcs: []string{"scheduler", "web"},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				for k, v := range tc.env {
+					t.Setenv(k, v)
+				}
+				plan, err := draftCli.ResolveDeployPlan(context.Background(), "env-controls-proj", "")
+				if err != nil {
+					t.Fatalf("ResolveDeployPlan failed: %v", err)
+				}
+				gotSvcs := runComposeConfigServices(t, projDir, plan.ComposeArgsPrefix())
+				nativeSvcs := runComposeConfigServices(t, projDir, nil)
+				if !reflect.DeepEqual(gotSvcs, tc.wantSvcs) {
+					t.Fatalf("plan services=%v want=%v (args=%#v)", gotSvcs, tc.wantSvcs, plan.ComposeArgsPrefix())
+				}
+				if !reflect.DeepEqual(gotSvcs, nativeSvcs) {
+					t.Fatalf("plan services %v differ from native docker compose %v", gotSvcs, nativeSvcs)
+				}
+			})
+		}
+
+		t.Run("COMPOSE_ENV_FILES rejects traversal YAML target", func(t *testing.T) {
+			t.Setenv("COMPOSE_ENV_FILES", "bad.env")
+			if _, err := draftCli.ResolveDeployPlan(context.Background(), "env-controls-proj", ""); err == nil {
+				t.Fatalf("expected ResolveDeployPlan to reject traversal YAML target in COMPOSE_ENV_FILES")
+			}
+		})
+
+		// Case 2: .env variable expansion with ${STAGE:-prod} across unset / empty / "stage"
+		varProjDir := filepath.Join(resolvedAppDir, "dotenv-default-expand-proj")
+		if err := os.MkdirAll(varProjDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(varProjDir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx:1.25\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(varProjDir, "prod.yaml"), []byte("services:\n  prod_worker:\n    image: alpine:3.20\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(varProjDir, "stage.yaml"), []byte("services:\n  stage_worker:\n    image: alpine:3.21\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(varProjDir, ".env"), []byte("COMPOSE_FILE=compose.yaml:${STAGE:-prod}.yaml\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// 确保 STAGE 未设置
+		if origVal, had := os.LookupEnv("STAGE"); had {
+			t.Cleanup(func() { _ = os.Setenv("STAGE", origVal) })
+			_ = os.Unsetenv("STAGE")
+		}
+		for _, tc := range []struct {
+			name     string
+			setStage *string
+			wantFile string
+			wantSvcs []string
+		}{
+			{
+				name:     "STAGE unset selects prod.yaml",
+				setStage: nil,
+				wantFile: filepath.Join(varProjDir, "prod.yaml"),
+				wantSvcs: []string{"prod_worker", "web"},
+			},
+			{
+				name:     "STAGE empty selects prod.yaml",
+				setStage: func() *string { s := ""; return &s }(),
+				wantFile: filepath.Join(varProjDir, "prod.yaml"),
+				wantSvcs: []string{"prod_worker", "web"},
+			},
+			{
+				name:     "STAGE=stage selects stage.yaml",
+				setStage: func() *string { s := "stage"; return &s }(),
+				wantFile: filepath.Join(varProjDir, "stage.yaml"),
+				wantSvcs: []string{"stage_worker", "web"},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				if tc.setStage == nil {
+					_ = os.Unsetenv("STAGE")
+				} else {
+					t.Setenv("STAGE", *tc.setStage)
+				}
+				plan, err := draftCli.ResolveDeployPlan(context.Background(), "dotenv-default-expand-proj", "")
+				if err != nil {
+					t.Fatalf("ResolveDeployPlan failed: %v", err)
+				}
+				if len(plan.DeployFiles) != 2 || plan.DeployFiles[1] != tc.wantFile {
+					t.Fatalf("expected second deploy file %q, got %#v", tc.wantFile, plan.DeployFiles)
+				}
+				gotSvcs := runComposeConfigServices(t, varProjDir, plan.ComposeArgsPrefix())
+				nativeSvcs := runComposeConfigServices(t, varProjDir, nil)
+				if !reflect.DeepEqual(gotSvcs, tc.wantSvcs) {
+					t.Fatalf("plan services=%v want=%v", gotSvcs, tc.wantSvcs)
+				}
+				if !reflect.DeepEqual(gotSvcs, nativeSvcs) {
+					t.Fatalf("plan services %v differ from native docker compose %v", gotSvcs, nativeSvcs)
+				}
+			})
+		}
+
+		// Case 3: override file priority prefers .yml over .yaml for both compose.override.* and docker-compose.override.*
+		for _, prefix := range []string{"compose.override", "docker-compose.override"} {
+			t.Run("override priority prefers .yml for "+prefix, func(t *testing.T) {
+				ovDir := filepath.Join(resolvedAppDir, "ov-"+prefix)
+				if err := os.MkdirAll(ovDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(ovDir, "compose.yaml"), []byte("services:\n  api:\n    image: nginx:1.25\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				ymlPath := filepath.Join(ovDir, prefix+".yml")
+				yamlPath := filepath.Join(ovDir, prefix+".yaml")
+				if err := os.WriteFile(ymlPath, []byte("services:\n  svc_yml:\n    image: alpine:3.20\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(yamlPath, []byte("services:\n  svc_yaml:\n    image: busybox:1.36\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+
+				plan, err := draftCli.ResolveDeployPlan(context.Background(), "ov-"+prefix, "")
+				if err != nil {
+					t.Fatalf("ResolveDeployPlan failed: %v", err)
+				}
+				if len(plan.DeployFiles) != 2 || plan.DeployFiles[1] != ymlPath {
+					t.Fatalf("expected .yml override %q selected before .yaml, got %#v", ymlPath, plan.DeployFiles)
+				}
+				gotSvcs := runComposeConfigServices(t, ovDir, plan.ComposeArgsPrefix())
+				nativeSvcs := runComposeConfigServices(t, ovDir, nil)
+				if !reflect.DeepEqual(gotSvcs, []string{"api", "svc_yml"}) {
+					t.Fatalf("expected services [api svc_yml], got %v", gotSvcs)
+				}
+				if !reflect.DeepEqual(gotSvcs, nativeSvcs) {
+					t.Fatalf("plan services %v differ from native docker compose %v", gotSvcs, nativeSvcs)
+				}
+			})
+		}
+
+		// Case 4: selected project with missing retired.yaml aborts wsstream before write or up
+		t.Run("selected project referencing missing file aborts wsstream before write or up", func(t *testing.T) {
+			siteDir := filepath.Join(resolvedAppDir, "ws-site")
+			if err := os.MkdirAll(siteDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			mainYaml := filepath.Join(siteDir, "compose.yaml")
+			retiredYaml := filepath.Join(siteDir, "retired.yaml")
+			origYaml := "services:\n  live:\n    image: nginx:1.25\n"
+			if err := os.WriteFile(mainYaml, []byte(origYaml), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			cliMissing := &composecli.Client{
+				RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+					return []composecli.ListOutput{{
+						Name:        "live",
+						Status:      "running(1)",
+						ConfigFiles: mainYaml + "," + retiredYaml,
+					}}, nil
+				},
+			}
+			execFn, calls := okStreamExecutor()
+			out := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+				ProjectName:    "ws-site",
+				ComposeFile:    mainYaml,
+				YamlContent:    "services:\n  live:\n    image: nginx:1.29\n",
+				Force:          true,
+				ComposeDir:     siteDir,
+				ComposeClient:  cliMissing,
+				StreamExecutor: execFn,
+			}))
+			if !strings.Contains(out, `"status":"error"`) {
+				t.Fatalf("expected error status, got: %s", out)
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("expected 0 executor calls when selected project lists missing file, got %#v", *calls)
+			}
+			if got, _ := os.ReadFile(mainYaml); string(got) != origYaml {
+				t.Fatalf("compose.yaml modified despite missing retired.yaml: %q", string(got))
 			}
 		})
 	})

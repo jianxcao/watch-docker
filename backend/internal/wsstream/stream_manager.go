@@ -1,7 +1,9 @@
 package wsstream
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -24,6 +26,7 @@ var upgrader = websocket.Upgrader{
 type StreamManager[T MessageType] struct {
 	hubs          map[string]*StreamHub[T]
 	mu            sync.RWMutex
+	closed        bool
 	clientCounter uint64
 	counterMu     sync.Mutex
 }
@@ -35,10 +38,21 @@ func NewStreamManager[T MessageType]() *StreamManager[T] {
 	}
 }
 
-// GetOrCreateHub 获取或创建指定 key 的活跃 Hub
+// IsClosed 检查 StreamManager 是否已开始停机关闭
+func (m *StreamManager[T]) IsClosed() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.closed
+}
+
+// GetOrCreateHub 获取或创建指定 key 的活跃 Hub（管理器已关闭时返回 nil）
 func (m *StreamManager[T]) GetOrCreateHub(key string, sourceFactory func() StreamSource[T]) *StreamHub[T] {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.closed {
+		return nil
+	}
 
 	if hub, exists := m.hubs[key]; exists && !hub.IsClosed() {
 		logger.Logger.Debug("复用现有 StreamHub", zap.String("key", key))
@@ -77,15 +91,26 @@ func (m *StreamManager[T]) RemoveHubIfMatch(key string, target *StreamHub[T]) {
 }
 
 func (m *StreamManager[T]) UpgradeWebSocket(c *gin.Context) (*websocket.Conn, error) {
+	if m.IsClosed() {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "服务正在关闭"})
+		return nil, errors.New("stream manager closed")
+	}
 	return upgrader.Upgrade(c.Writer, c.Request, nil)
 }
 
 func (m *StreamManager[T]) StartHub(conn *websocket.Conn, key string, sourceFactory func() StreamSource[T]) {
+	if m.IsClosed() {
+		_ = conn.Close()
+		return
+	}
 	clientID := m.GenerateClientID()
 
 	// 若现有 Hub 正处于退出瞬间导致 RegisterClient 返回 false，则移除并重试新建一次
 	for attempt := 0; attempt < 2; attempt++ {
 		hub := m.GetOrCreateHub(key, sourceFactory)
+		if hub == nil {
+			break
+		}
 		client := NewClient(conn, hub, clientID)
 		if hub.RegisterClient(client) {
 			logger.Logger.Debug("新的 WebSocket 连接",
@@ -118,11 +143,14 @@ func (m *StreamManager[T]) GenerateClientID() string {
 	return fmt.Sprintf("client-%d", m.clientCounter)
 }
 
-// Close 关闭所有 Hub
+// Close 关闭所有 Hub 并拒绝后续新流创建
 func (m *StreamManager[T]) Close() {
 	m.mu.Lock()
+	m.closed = true
 	hubsToClose := make([]*StreamHub[T], 0, len(m.hubs))
 	for _, hub := range m.hubs {
+		hub.closing.Store(true)
+		hub.cancel()
 		hubsToClose = append(hubsToClose, hub)
 	}
 	m.hubs = make(map[string]*StreamHub[T])

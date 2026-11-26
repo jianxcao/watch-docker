@@ -2,8 +2,11 @@ package composecli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
@@ -123,9 +126,11 @@ func TestComposePathTraversalBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	origAppPath := conf.EnvCfg.APP_PATH
-	conf.EnvCfg.APP_PATH = appDir
-	defer func() { conf.EnvCfg.APP_PATH = origAppPath }()
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = appDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
 
 	c := &Client{}
 
@@ -561,6 +566,129 @@ exit 1`)
 				}
 				_ = secondOtherContent
 			})
+		}
+	})
+
+	t.Run("SaveNewProject succeeds offline without querying runtime and refuses overwrite while SaveProjectPlanForDeploy fails closed", func(t *testing.T) {
+		var listerCalls atomic.Int32
+		offlineCli := &Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+				listerCalls.Add(1)
+				return nil, errors.New("docker daemon offline")
+			},
+		}
+
+		draftYaml := "services:\n  web:\n    image: nginx:1.27\n"
+		savedFile, err := offlineCli.SaveNewProject(ctx, "offline-new-draft", draftYaml, false)
+		if err != nil {
+			t.Fatalf("expected SaveNewProject to succeed while Docker is offline: %v", err)
+		}
+		if listerCalls.Load() != 0 {
+			t.Fatalf("expected 0 runtime lister calls during SaveNewProject, got %d", listerCalls.Load())
+		}
+		if got, err := os.ReadFile(savedFile); err != nil || string(got) != draftYaml {
+			t.Fatalf("written yaml mismatch: got=%q err=%v", string(got), err)
+		}
+
+		// 同名重复新建拒绝覆盖，且不触发运行时查询
+		if _, err := offlineCli.SaveNewProject(ctx, "offline-new-draft", "services:\n  other:\n    image: busybox:1.36\n", false); err == nil {
+			t.Fatalf("expected duplicate SaveNewProject to refuse overwrite")
+		}
+		if listerCalls.Load() != 0 {
+			t.Fatalf("expected 0 runtime lister calls on duplicate SaveNewProject, got %d", listerCalls.Load())
+		}
+		if got, _ := os.ReadFile(savedFile); string(got) != draftYaml {
+			t.Fatalf("duplicate SaveNewProject overwrote original file: %q", string(got))
+		}
+
+		// 以同一查询错误执行 SaveProjectPlanForDeploy（保存并部署/重新部署），必须在写盘前失败并保持原文件完整
+		if _, err := offlineCli.SaveProjectPlanForDeploy(ctx, "offline-new-draft", savedFile, "services:\n  mutated:\n    image: alpine:3.21\n", true); err == nil {
+			t.Fatalf("expected SaveProjectPlanForDeploy to fail when runtime query errors")
+		}
+		if listerCalls.Load() != 1 {
+			t.Fatalf("expected 1 runtime lister call during SaveProjectPlanForDeploy, got %d", listerCalls.Load())
+		}
+		if got, _ := os.ReadFile(savedFile); string(got) != draftYaml {
+			t.Fatalf("SaveProjectPlanForDeploy modified file despite runtime error: %q", string(got))
+		}
+	})
+
+	t.Run("missing file on unselected sibling runtime project does not block selected project in either record order", func(t *testing.T) {
+		siteDir := filepath.Join(resolvedAppDir, "site")
+		if err := os.MkdirAll(siteDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		composeYaml := filepath.Join(siteDir, "compose.yaml")
+		retiredYaml := filepath.Join(siteDir, "retired.yaml")
+		origSiteYaml := "services:\n  live:\n    image: nginx:1.25\n"
+		if err := os.WriteFile(composeYaml, []byte(origSiteYaml), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		orders := []struct {
+			name  string
+			items []ListOutput
+		}{
+			{
+				name: "live-then-retired",
+				items: []ListOutput{
+					{Name: "live", Status: "running(1)", ConfigFiles: composeYaml},
+					{Name: "retired", Status: "exited(1)", ConfigFiles: retiredYaml},
+				},
+			},
+			{
+				name: "retired-then-live",
+				items: []ListOutput{
+					{Name: "retired", Status: "exited(1)", ConfigFiles: retiredYaml},
+					{Name: "live", Status: "running(1)", ConfigFiles: composeYaml},
+				},
+			},
+		}
+
+		for _, tc := range orders {
+			t.Run(tc.name, func(t *testing.T) {
+				cli := &Client{
+					RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+						return tc.items, nil
+					},
+				}
+				roPlan, err := cli.ResolveDeployPlan(ctx, "site", composeYaml)
+				if err != nil {
+					t.Fatalf("ResolveDeployPlan failed (%s): %v", tc.name, err)
+				}
+				wantPrefix := []string{"-p", "live", "-f", composeYaml}
+				if !reflect.DeepEqual(roPlan.ComposeArgsPrefix(), wantPrefix) {
+					t.Fatalf("unexpected ResolveDeployPlan prefix: got=%#v want=%#v", roPlan.ComposeArgsPrefix(), wantPrefix)
+				}
+
+				updatedYaml := "services:\n  live:\n    image: nginx:1.28\n"
+				savePlan, err := cli.SaveProjectPlanForDeploy(ctx, "site", composeYaml, updatedYaml, true)
+				if err != nil {
+					t.Fatalf("SaveProjectPlanForDeploy failed (%s): %v", tc.name, err)
+				}
+				if !reflect.DeepEqual(savePlan.ComposeArgsPrefix(), wantPrefix) {
+					t.Fatalf("unexpected SaveProjectPlanForDeploy prefix: got=%#v want=%#v", savePlan.ComposeArgsPrefix(), wantPrefix)
+				}
+			})
+		}
+
+		// 若缺失文件被列为 live 自身的第二份配置，保存必须失败且不得写盘
+		beforeFail := "services:\n  live:\n    image: nginx:1.29\n"
+		if err := os.WriteFile(composeYaml, []byte(beforeFail), 0644); err != nil {
+			t.Fatal(err)
+		}
+		brokenSelectedCli := &Client{
+			RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+				return []ListOutput{
+					{Name: "live", Status: "running(1)", ConfigFiles: composeYaml + "," + retiredYaml},
+				}, nil
+			},
+		}
+		if _, err := brokenSelectedCli.SaveProjectPlanForDeploy(ctx, "site", composeYaml, "services:\n  live:\n    image: nginx:1.30\n", true); err == nil {
+			t.Fatalf("expected SaveProjectPlanForDeploy to fail when selected project lists missing retired.yaml")
+		}
+		if got, _ := os.ReadFile(composeYaml); string(got) != beforeFail {
+			t.Fatalf("compose.yaml modified despite missing member config file: %q", string(got))
 		}
 	})
 }
