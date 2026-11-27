@@ -465,7 +465,11 @@ func (c *Client) ResolveComposeTarget(ctx context.Context, projectName, composeF
 			projectPath, cleanFile, err := ValidateComposeFilePath(trimmedFile)
 			if err == nil {
 				if fi, lerr := os.Lstat(cleanFile); lerr == nil && fi.Mode().IsRegular() {
-					return projectPath, nil, nil
+					envArgs, eerr := managedEnvFileArgs(projectPath)
+					if eerr != nil {
+						return "", nil, eerr
+					}
+					return projectPath, envArgs, nil
 				} else if lerr != nil && !os.IsNotExist(lerr) {
 					return "", nil, fmt.Errorf("检查 composeFile 失败: %w", lerr)
 				}
@@ -633,9 +637,14 @@ func (c *Client) resolveManagedCustomRuntimeTarget(ctx context.Context, projectN
 	if !strings.EqualFold(projectName, cand.name) && !strings.EqualFold(projectName, dirName) {
 		return "", nil, fmt.Errorf("项目名称 %s 与运行时项目 %s 不匹配", projectName, cand.name)
 	}
+	_, cliEnvFiles, err := resolveManagedProjectEnvFiles(projectDir)
+	if err != nil {
+		return "", nil, err
+	}
 	plan := DeployProjectPlan{
 		ProjectDir:         projectDir,
 		RuntimeProjectName: cand.name,
+		EnvFiles:           cliEnvFiles,
 		DeployFiles:        cand.files,
 	}
 	return projectDir, plan.ComposeArgsPrefix(), nil
@@ -765,9 +774,14 @@ func (c *Client) PullProject(ctx context.Context, composeFile string) error {
 	if _, err := os.Lstat(cleanFile); err != nil {
 		return errors.New("compose 文件不存在: " + err.Error())
 	}
+	envArgs, err := managedEnvFileArgs(projectPath)
+	if err != nil {
+		return err
+	}
+	args := append(slices.Clone(envArgs), "pull")
 	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
 		ExecPath:      projectPath,
-		Args:          []string{"pull"},
+		Args:          args,
 		OperationName: "pull project",
 		NeedOutput:    true,
 	})
@@ -813,9 +827,14 @@ func (c *Client) DeleteProject(ctx context.Context, projectName, composeFile str
 	}
 
 	if currentStatus != StatusDraft {
+		envArgs, err := managedEnvFileArgs(projectPath)
+		if err != nil {
+			return err
+		}
+		args := append(slices.Clone(envArgs), "down", "--volumes", "--remove-orphans")
 		res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
 			ExecPath:      projectPath,
-			Args:          []string{"down", "--volumes", "--remove-orphans"},
+			Args:          args,
 			OperationName: "delete project (status changed)",
 			NeedOutput:    true,
 		})
@@ -842,7 +861,11 @@ func (c *Client) CreateProject(ctx context.Context, composeFile string, isRuning
 	if _, err := os.Lstat(cleanFile); err != nil {
 		return errors.New("compose 文件不存在: " + err.Error())
 	}
-	args := []string{"up", "-d", "--remove-orphans"}
+	envArgs, err := managedEnvFileArgs(projectPath)
+	if err != nil {
+		return err
+	}
+	args := append(slices.Clone(envArgs), "up", "-d", "--remove-orphans")
 	if isRuning {
 		args = append(args, "--force-recreate")
 	}
@@ -864,16 +887,22 @@ type DeployProjectPlan struct {
 	ProjectDir         string
 	SavedFile          string
 	RuntimeProjectName string   // 非空表示匹配到已有运行时项目（需传 -p <RuntimeProjectName>）；空表示草稿或新建项目
+	EnvFiles           []string // 需要显式传给 --env-file 的环境文件路径列表（为空时遵循 Compose 默认发现）
 	DeployFiles        []string // 按顺序传给 -f 的配置文件绝对路径列表
 }
 
-// ComposeArgsPrefix 构建供 docker compose 子命令（如 up、ps）复用的 [-p <name>] -f <file1> [-f <file2> ...] 前缀参数。
+// ComposeArgsPrefix 构建供 docker compose 子命令（如 up、ps）复用的 [--env-file <env>] [-p <name>] -f <file1> [-f <file2> ...] 前缀参数。
 func (p DeployProjectPlan) ComposeArgsPrefix() []string {
-	capHint := len(p.DeployFiles) * 2
+	capHint := len(p.EnvFiles)*2 + len(p.DeployFiles)*2
 	if p.RuntimeProjectName != "" {
 		capHint += 2
 	}
 	args := make([]string, 0, capHint)
+	for _, f := range p.EnvFiles {
+		if f != "" {
+			args = append(args, "--env-file", f)
+		}
+	}
 	if p.RuntimeProjectName != "" {
 		args = append(args, "-p", p.RuntimeProjectName)
 	}
@@ -1242,7 +1271,136 @@ func (c *Client) lookupRuntimeCandidate(ctx context.Context, name, projectPath, 
 	}, nil
 }
 
+func expandComposeUserHome(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			if p == "~" {
+				return home
+			}
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
+func isOptionalDefaultDotEnvEntry(rawEntry string) bool {
+	return filepath.Clean(filepath.ToSlash(strings.TrimSpace(rawEntry))) == ".env"
+}
+
+// resolveManagedProjectEnvFiles 解析受管项目目录下通过 COMPOSE_ENV_FILES 传入的环境文件列表：
+// 1. 当所有条目均存在于磁盘、未因空白trim或"~"展开改写路径，且未跳过缺失可选 ".env" 时，
+//    返回 realEnvFiles 并保持 cliEnvFiles 为空（由同步了工作目录和 PWD 的 docker compose 原生解析）；
+// 2. 若列表中包含前后空白或"~/"前缀（原生 COMPOSE_ENV_FILES 可能未做 trim 或未展开 "~"），或本地默认 ".env" 缺失被跳过，
+//    则返回需要显式传给 --env-file 的 cliEnvFiles（若有效文件为空则回退 os.DevNull）；
+// 3. 若显式指定了其他相对/绝对环境文件（如 "../.env.global"）但文件不存在，则明确报错并提示确认容器挂载路径。
+func resolveManagedProjectEnvFiles(projectDir string) (realEnvFiles []string, cliEnvFiles []string, err error) {
+	rawEnvFiles, hasEnvFiles := os.LookupEnv("COMPOSE_ENV_FILES")
+	if !hasEnvFiles || strings.TrimSpace(rawEnvFiles) == "" {
+		return nil, nil, nil
+	}
+
+	parts := strings.Split(rawEnvFiles, ",")
+	realEnvFiles = make([]string, 0, len(parts))
+	needsExplicitFlags := false
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			return nil, nil, fmt.Errorf("COMPOSE_ENV_FILES 配置 %q 包含空路径项", rawEnvFiles)
+		}
+		if strings.ContainsRune(trimmed, 0) {
+			return nil, nil, fmt.Errorf("非法的环境文件路径: %s", trimmed)
+		}
+		if part != trimmed {
+			needsExplicitFlags = true
+		}
+		expanded := expandComposeUserHome(trimmed)
+		if expanded != trimmed {
+			needsExplicitFlags = true
+		}
+		envPath := expanded
+		if !filepath.IsAbs(envPath) {
+			envPath = filepath.Join(projectDir, envPath)
+		}
+		envPath = filepath.Clean(envPath)
+
+		handleNotExist := func() error {
+			if isOptionalDefaultDotEnvEntry(trimmed) {
+				needsExplicitFlags = true
+				return nil
+			}
+			return fmt.Errorf("COMPOSE_ENV_FILES 指定的环境文件不存在: %s（解析自 %q；若运行在容器中，请确认该文件所在宿主机目录已按相同路径挂载到容器内）", envPath, trimmed)
+		}
+
+		fi, lerr := os.Lstat(envPath)
+		if lerr != nil {
+			if os.IsNotExist(lerr) {
+				if herr := handleNotExist(); herr != nil {
+					return nil, nil, herr
+				}
+				continue
+			}
+			return nil, nil, fmt.Errorf("检查环境文件失败: %w", lerr)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+			return nil, nil, fmt.Errorf("%w: %s", ErrSymlinkPath, envPath)
+		}
+		// 通过 open 绕过 VirtioFS 等绑定挂载的 getattr 缓存，确保宿主机删除文件后立即命中存在性检查。
+		f, oerr := os.Open(envPath)
+		if oerr != nil {
+			if os.IsNotExist(oerr) {
+				if herr := handleNotExist(); herr != nil {
+					return nil, nil, herr
+				}
+				continue
+			}
+			return nil, nil, fmt.Errorf("检查环境文件失败: %w", oerr)
+		}
+		ffi, serr := f.Stat()
+		_ = f.Close()
+		if serr != nil {
+			if os.IsNotExist(serr) {
+				if herr := handleNotExist(); herr != nil {
+					return nil, nil, herr
+				}
+				continue
+			}
+			return nil, nil, fmt.Errorf("检查环境文件失败: %w", serr)
+		}
+		if !ffi.Mode().IsRegular() || !os.SameFile(fi, ffi) {
+			return nil, nil, fmt.Errorf("%w: %s", ErrSymlinkPath, envPath)
+		}
+		realEnvFiles = append(realEnvFiles, envPath)
+	}
+
+	if !needsExplicitFlags {
+		return realEnvFiles, nil, nil
+	}
+	if len(realEnvFiles) == 0 {
+		return nil, []string{os.DevNull}, nil
+	}
+	return realEnvFiles, slices.Clone(realEnvFiles), nil
+}
+
+func managedEnvFileArgs(projectDir string) ([]string, error) {
+	_, cliEnvFiles, err := resolveManagedProjectEnvFiles(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(cliEnvFiles) == 0 {
+		return nil, nil
+	}
+	args := make([]string, 0, len(cliEnvFiles)*2)
+	for _, f := range cliEnvFiles {
+		args = append(args, "--env-file", f)
+	}
+	return args, nil
+}
+
 func parseDotEnvFileInto(envPath string, requireExists bool, envMap map[string]string) error {
+	return parseDotEnvFileIntoInDir(envPath, "", requireExists, envMap)
+}
+
+func parseDotEnvFileIntoInDir(envPath, projectDir string, requireExists bool, envMap map[string]string) error {
 	fi, err := os.Lstat(envPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1259,6 +1417,12 @@ func parseDotEnvFileInto(envPath string, requireExists bool, envMap map[string]s
 
 	raw, err := os.ReadFile(envPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			if requireExists {
+				return fmt.Errorf("环境文件不存在: %s", envPath)
+			}
+			return nil
+		}
 		return fmt.Errorf("读取环境文件失败: %w", err)
 	}
 
@@ -1266,7 +1430,18 @@ func parseDotEnvFileInto(envPath string, requireExists bool, envMap map[string]s
 	if next == nil {
 		next = make(map[string]string)
 	}
+	projectPWD := ""
+	if trimmedDir := strings.TrimSpace(projectDir); trimmedDir != "" {
+		if absDir, aerr := filepath.Abs(trimmedDir); aerr == nil {
+			projectPWD = absDir
+		} else {
+			projectPWD = filepath.Clean(trimmedDir)
+		}
+	}
 	lookup := func(key string) (string, bool) {
+		if key == "PWD" && projectPWD != "" {
+			return projectPWD, true
+		}
 		if value, ok := os.LookupEnv(key); ok {
 			return value, true
 		}
@@ -1283,19 +1458,12 @@ func parseDotEnvFileInto(envPath string, requireExists bool, envMap map[string]s
 func resolveDraftEnvComposeFiles(projectPath, projectName string) ([]string, bool, error) {
 	dotEnv := make(map[string]string)
 	if rawEnvFiles, hasEnvFilesEnv := os.LookupEnv("COMPOSE_ENV_FILES"); hasEnvFilesEnv && strings.TrimSpace(rawEnvFiles) != "" {
-		for _, part := range strings.Split(rawEnvFiles, ",") {
-			trimmedEnv := strings.TrimSpace(part)
-			if trimmedEnv == "" {
-				return nil, false, fmt.Errorf("COMPOSE_ENV_FILES 配置 %q 包含空路径项", rawEnvFiles)
-			}
-			if strings.ContainsRune(trimmedEnv, 0) {
-				return nil, false, fmt.Errorf("非法的环境文件路径: %s", trimmedEnv)
-			}
-			envPath := trimmedEnv
-			if !filepath.IsAbs(envPath) {
-				envPath = filepath.Join(projectPath, envPath)
-			}
-			if err := parseDotEnvFileInto(envPath, true, dotEnv); err != nil {
+		realEnvFiles, _, err := resolveManagedProjectEnvFiles(projectPath)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, envPath := range realEnvFiles {
+			if err := parseDotEnvFileIntoInDir(envPath, projectPath, true, dotEnv); err != nil {
 				return nil, false, err
 			}
 		}
@@ -1307,7 +1475,7 @@ func resolveDraftEnvComposeFiles(projectPath, projectName string) ([]string, boo
 			}
 		}
 		if !disabled {
-			if err := parseDotEnvFileInto(filepath.Join(projectPath, ".env"), false, dotEnv); err != nil {
+			if err := parseDotEnvFileIntoInDir(filepath.Join(projectPath, ".env"), projectPath, false, dotEnv); err != nil {
 				return nil, false, err
 			}
 		}
@@ -1402,6 +1570,11 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 		return DeployProjectPlan{}, false, errors.New("项目目录不存在")
 	}
 
+	_, cliEnvFiles, err := resolveManagedProjectEnvFiles(projectPath)
+	if err != nil {
+		return DeployProjectPlan{}, false, err
+	}
+
 	// Tier 1: 查询运行时项目列表（查询失败直接报错，绝不静默降级为草稿）
 	runtimeCand, err := c.lookupRuntimeCandidate(ctx, name, projectPath, cleanExplicitFile, draftSelectionExplicit)
 	if err != nil {
@@ -1423,6 +1596,7 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 			ProjectDir:         projectPath,
 			SavedFile:          savedFile,
 			RuntimeProjectName: runtimeCand.name,
+			EnvFiles:           cliEnvFiles,
 			DeployFiles:        runtimeCand.files,
 		}, dirExists, nil
 	}
@@ -1432,6 +1606,7 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 		return DeployProjectPlan{
 			ProjectDir:  projectPath,
 			SavedFile:   targetFile,
+			EnvFiles:    cliEnvFiles,
 			DeployFiles: []string{targetFile},
 		}, false, nil
 	}
@@ -1446,6 +1621,7 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 	if err != nil {
 		return DeployProjectPlan{}, false, err
 	}
+	plan.EnvFiles = cliEnvFiles
 	return plan, true, nil
 }
 
@@ -1631,6 +1807,10 @@ func (c *Client) ResolveManagedCardPlan(ctx context.Context, projectName, compos
 	if err != nil {
 		return DeployProjectPlan{}, err
 	}
+	_, cliEnvFiles, err := resolveManagedProjectEnvFiles(projectDir)
+	if err != nil {
+		return DeployProjectPlan{}, err
+	}
 	if cand != nil {
 		if !strings.EqualFold(trimmedName, cand.name) && !strings.EqualFold(trimmedName, dirName) {
 			return DeployProjectPlan{}, fmt.Errorf("项目名称 %s 与运行时项目 %s 不匹配", trimmedName, cand.name)
@@ -1642,6 +1822,7 @@ func (c *Client) ResolveManagedCardPlan(ctx context.Context, projectName, compos
 		return DeployProjectPlan{
 			ProjectDir:         projectDir,
 			RuntimeProjectName: cand.name,
+			EnvFiles:           cliEnvFiles,
 			DeployFiles:        cand.files,
 		}, nil
 	}
@@ -1660,6 +1841,7 @@ func (c *Client) ResolveManagedCardPlan(ctx context.Context, projectName, compos
 	if plan.ProjectDir == "" || len(plan.DeployFiles) == 0 {
 		return DeployProjectPlan{}, fmt.Errorf("项目目录 %s 中未找到有效的 Compose 配置文件", projectDir)
 	}
+	plan.EnvFiles = cliEnvFiles
 	return plan, nil
 }
 

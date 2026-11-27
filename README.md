@@ -346,6 +346,8 @@ services:
     restart: unless-stopped
 ```
 
+> 💡 **提示**：若在环境变量中传递 `COMPOSE_ENV_FILES`（例如 `COMPOSE_ENV_FILES=../.env.global,.env`），请确保 `.env.global` 等外部环境文件所在目录已按与宿主机一致的路径挂载进容器（或直接置于已挂载的 `APP_PATH` 目录内，如 `/volume1/docker/.env.global`），以便容器内执行 `docker compose up` 时能够读取到该文件。
+
 **2. 启动服务：**
 
 ```bash

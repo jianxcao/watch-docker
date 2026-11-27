@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -661,5 +663,103 @@ func TestStreamDataIntegrity(t *testing.T) {
 		}
 	} else {
 		t.Log("没有读取到数据（可能是环境问题）")
+	}
+}
+
+func TestExecuteDockerComposeCommandSyncsPWDWithExecPath(t *testing.T) {
+	tmpRoot := t.TempDir()
+	resolvedRoot, err := filepath.EvalSymlinks(tmpRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(resolvedRoot, "bin")
+	srcDir := filepath.Join(resolvedRoot, "src")
+	workDir := filepath.Join(resolvedRoot, "apps", "demo")
+	for _, d := range []string{binDir, srcDir, workDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 使用独立编译的 Go 假 docker 二进制，避免 /bin/sh 启动时自动改写 PWD 环境变量
+	helperSrc := filepath.Join(srcDir, "main.go")
+	helperCode := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "getwd: %v\n", err)
+		os.Exit(1)
+	}
+	pwd, ok := os.LookupEnv("PWD")
+	fmt.Printf("CWD=%s|HAS_PWD=%t|ENV_PWD=%s\n", wd, ok, pwd)
+}
+`
+	if err := os.WriteFile(helperSrc, []byte(helperCode), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fakeDocker := filepath.Join(binDir, "docker")
+	buildCmd := exec.Command("go", "build", "-o", fakeDocker, helperSrc)
+	if out, berr := buildCmd.CombinedOutput(); berr != nil {
+		t.Fatalf("build helper binary failed: %v\n%s", berr, string(out))
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PWD", "/app")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1. ExecPath 非空时，同步/流式命令都应将子进程 PWD 同步为 ExecPath 的绝对路径
+	res := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
+		ExecPath:      workDir,
+		Args:          []string{"config"},
+		OperationName: "pwd sync test",
+		NeedOutput:    true,
+	})
+	if res.Error != nil {
+		t.Fatalf("ExecuteDockerComposeCommand failed: %v", res.Error)
+	}
+	wantLine := "CWD=" + workDir + "|HAS_PWD=true|ENV_PWD=" + workDir
+	if got := strings.TrimSpace(string(res.Output)); got != wantLine {
+		t.Fatalf("sync PWD mismatch: got %q, want %q", got, wantLine)
+	}
+
+	streamRes := ExecuteDockerComposeCommandStream(ctx, ExecDockerComposeStreamOptions{
+		ExecPath:      workDir,
+		Args:          []string{"logs"},
+		OperationName: "stream pwd sync test",
+	})
+	if streamRes.Error != nil {
+		t.Fatalf("ExecuteDockerComposeCommandStream failed: %v", streamRes.Error)
+	}
+	streamOut, rerr := io.ReadAll(streamRes.Reader)
+	_ = streamRes.Reader.Close()
+	if rerr != nil {
+		t.Fatalf("read stream output failed: %v", rerr)
+	}
+	if exitCode := <-streamRes.ExitCode; exitCode != 0 {
+		t.Fatalf("expected exitCode 0, got %d", exitCode)
+	}
+	if got := strings.TrimSpace(string(streamOut)); got != wantLine {
+		t.Fatalf("stream PWD mismatch: got %q, want %q", got, wantLine)
+	}
+
+	// 2. ExecPath 为空时保留继承环境中的 PWD
+	noDirRes := ExecuteDockerComposeCommand(ctx, ExecDockerComposeOptions{
+		ExecPath:      "",
+		Args:          []string{"ls"},
+		OperationName: "inherit pwd test",
+		NeedOutput:    true,
+	})
+	if noDirRes.Error != nil {
+		t.Fatalf("ExecuteDockerComposeCommand without ExecPath failed: %v", noDirRes.Error)
+	}
+	if !strings.Contains(string(noDirRes.Output), "|HAS_PWD=true|ENV_PWD=/app") {
+		t.Fatalf("expected inherited ENV_PWD=/app when ExecPath is empty, got %q", string(noDirRes.Output))
 	}
 }

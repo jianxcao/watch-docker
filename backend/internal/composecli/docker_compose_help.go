@@ -3,13 +3,43 @@ package composecli
 import (
 	"context"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+func buildComposeCommandEnv(execPath string) []string {
+	trimmed := strings.TrimSpace(execPath)
+	if trimmed == "" {
+		return nil
+	}
+	absDir, err := filepath.Abs(trimmed)
+	if err != nil {
+		return nil
+	}
+	env := os.Environ()
+	out := make([]string, 0, len(env)+1)
+	replaced := false
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "PWD=") {
+			if !replaced {
+				out = append(out, "PWD="+absDir)
+				replaced = true
+			}
+			continue
+		}
+		out = append(out, entry)
+	}
+	if !replaced {
+		out = append(out, "PWD="+absDir)
+	}
+	return out
+}
 
 type ExecDockerComposeOptions struct {
 	ExecPath      string
@@ -176,6 +206,7 @@ func ExecuteDockerComposeCommand(ctx context.Context, options ExecDockerComposeO
 	cmd := exec.CommandContext(ctx, "docker", fullArgs...)
 	if options.ExecPath != "" {
 		cmd.Dir = options.ExecPath
+		cmd.Env = buildComposeCommandEnv(options.ExecPath)
 	}
 	result := &ExecDockerComposeResult{}
 	if options.NeedOutput {
@@ -194,6 +225,7 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 	cmd := exec.CommandContext(cmdCtx, "docker", fullArgs...)
 	if options.ExecPath != "" {
 		cmd.Dir = options.ExecPath
+		cmd.Env = buildComposeCommandEnv(options.ExecPath)
 	}
 	logger.Logger.Info("ExecuteDockerComposeCommandStream", zap.String("args", strings.Join(fullArgs, " ")))
 

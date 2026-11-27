@@ -241,7 +241,7 @@ func TestComposeCreateUpSourceUsesSpecifiedComposeFileAndStopsOnSaveError(t *tes
 func extractComposePrefixFlags(args []string) []string {
 	var flags []string
 	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "-p" || args[i] == "-f" {
+		if args[i] == "--env-file" || args[i] == "-p" || args[i] == "-f" {
 			flags = append(flags, args[i], args[i+1])
 			i++
 		}
@@ -1357,5 +1357,222 @@ func TestComposeDeployMultilineDotEnv(t *testing.T) {
 	}
 	if len(*callsBad) != 0 {
 		t.Fatalf("expected 0 executor calls on unterminated dotenv quote, got %#v", *callsBad)
+	}
+}
+
+func TestComposeEnvFilesGlobalAndOptionalDotEnvInContainerWorkdir(t *testing.T) {
+	for _, k := range []string{
+		"COMPOSE_FILE",
+		"COMPOSE_PATH_SEPARATOR",
+		"COMPOSE_DISABLE_ENV_FILE",
+		"COMPOSE_ENV_FILES",
+		"GLOBAL_VAR",
+		"OVERRIDE_VAR",
+		"FROM_PWD",
+		"STAGE",
+	} {
+		key := k
+		if orig, had := os.LookupEnv(key); had {
+			t.Cleanup(func() { _ = os.Setenv(key, orig) })
+			_ = os.Unsetenv(key)
+		} else {
+			t.Cleanup(func() { _ = os.Unsetenv(key) })
+		}
+	}
+
+	tmpRoot := t.TempDir()
+	containerAppDir := filepath.Join(tmpRoot, "app")
+	dockerRoot := filepath.Join(tmpRoot, "docker")
+	existingDir := filepath.Join(dockerRoot, "existing-app")
+	for _, d := range []string{containerAppDir, existingDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolvedContainerAppDir, err := filepath.EvalSymlinks(containerAppDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedDockerRoot, err := filepath.EvalSymlinks(dockerRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedExistingDir := filepath.Join(resolvedDockerRoot, "existing-app")
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedDockerRoot
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	// 模拟容器启动环境：WORKDIR 为 /app、PWD=/app，COMPOSE_ENV_FILES 传入 ../.env.global,.env
+	t.Chdir(resolvedContainerAppDir)
+	t.Setenv("PWD", resolvedContainerAppDir)
+	t.Setenv("COMPOSE_ENV_FILES", "../.env.global,.env")
+
+	globalEnvFile := filepath.Join(resolvedDockerRoot, ".env.global")
+	if err := os.WriteFile(globalEnvFile, []byte("GLOBAL_VAR=from_global\nOVERRIDE_VAR=global_default\nFROM_PWD=${PWD}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	existingCompose := filepath.Join(resolvedExistingDir, "compose.yaml")
+	if err := os.WriteFile(existingCompose, []byte(
+		"services:\n  web:\n    image: nginx:alpine\n    environment:\n      GLOBAL_VAR: ${GLOBAL_VAR}\n      OVERRIDE_VAR: ${OVERRIDE_VAR}\n      PROJ_PWD: ${PWD}\n      SUB_PWD: ${FROM_PWD}\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resolvedExistingDir, ".env"), []byte("OVERRIDE_VAR=local_override\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cli := &composecli.Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]composecli.ListOutput, error) {
+			return nil, nil
+		},
+	}
+	ctx := context.Background()
+
+	readComposeServiceEnv := func(t *testing.T, execDir string, prefixArgs []string) map[string]string {
+		t.Helper()
+		args := append(append([]string(nil), extractComposePrefixFlags(prefixArgs)...), "config", "--format", "json")
+		res := composecli.ExecuteDockerComposeCommand(ctx, composecli.ExecDockerComposeOptions{
+			ExecPath:      execDir,
+			Args:          args,
+			OperationName: "inspect interpolated env",
+			NeedOutput:    true,
+		})
+		if res.Error != nil {
+			t.Fatalf("docker compose config --format json failed (execDir=%q args=%#v): %v\noutput: %s", execDir, args, res.Error, string(res.Output))
+		}
+		var parsed struct {
+			Services map[string]struct {
+				Environment map[string]string `json:"environment"`
+			} `json:"services"`
+		}
+		if err := json.Unmarshal(res.Output, &parsed); err != nil {
+			t.Fatalf("unmarshal config json failed: %v\noutput: %s", err, string(res.Output))
+		}
+		return parsed.Services["web"].Environment
+	}
+
+	// A. 已有项目同时拥有 ../.env.global 与本地 .env，且含 ${PWD} 插值：应解析为项目目录而非容器 /app
+	cardPlan, err := cli.ResolveManagedCardPlan(ctx, "existing-app", existingCompose)
+	if err != nil {
+		t.Fatalf("ResolveManagedCardPlan existing-app failed: %v", err)
+	}
+	if len(cardPlan.EnvFiles) != 0 {
+		t.Fatalf("expected native COMPOSE_ENV_FILES resolution (no extra --env-file) when all entries exist, got %#v", cardPlan.EnvFiles)
+	}
+	targetDir, targetPrefix, err := cli.ResolveComposeTarget(ctx, "existing-app", existingCompose)
+	if err != nil {
+		t.Fatalf("ResolveComposeTarget existing-app failed: %v", err)
+	}
+	if targetDir != resolvedExistingDir || len(targetPrefix) != 0 {
+		t.Fatalf("unexpected existing target: dir=%q prefix=%#v", targetDir, targetPrefix)
+	}
+	envA := readComposeServiceEnv(t, resolvedExistingDir, cardPlan.ComposeArgsPrefix())
+	if envA["GLOBAL_VAR"] != "from_global" || envA["OVERRIDE_VAR"] != "local_override" || envA["PROJ_PWD"] != resolvedExistingDir || envA["SUB_PWD"] != resolvedExistingDir {
+		t.Fatalf("unexpected interpolated env for existing-app: %#v (want PWD=%q)", envA, resolvedExistingDir)
+	}
+
+	// B. Web UI 新建项目目录（无本地 .env）：COMPOSE_ENV_FILES=../.env.global,.env 仍应通过并注入 --env-file ../.env.global 绝对路径
+	freshDir := filepath.Join(resolvedDockerRoot, "fresh-global-only")
+	execFresh, callsFresh := okStreamExecutor()
+	outFresh := drainCreateUpStream(t, NewComposeCreateUpSource(ComposeCreateUpSourceOptions{
+		ProjectName:    "fresh-global-only",
+		ComposeFile:    "",
+		YamlContent:    "services:\n  web:\n    image: nginx:alpine\n    environment:\n      GLOBAL_VAR: ${GLOBAL_VAR}\n      PROJ_PWD: ${PWD}\n      SUB_PWD: ${FROM_PWD}\n",
+		Force:          true,
+		ComposeDir:     freshDir,
+		ComposeClient:  cli,
+		StreamExecutor: execFresh,
+	}))
+	if !strings.Contains(outFresh, `"status":"success"`) {
+		t.Fatalf("expected fresh-global-only create-and-up to succeed without local .env, got: %s", outFresh)
+	}
+	if len(*callsFresh) != 2 {
+		t.Fatalf("expected 2 stream calls (up + ps), got %#v", *callsFresh)
+	}
+	wantFreshCompose := filepath.Join(freshDir, "docker-compose.yaml")
+	upArgs := (*callsFresh)[0].Args
+	if !slices.Contains(upArgs, "--env-file") || !slices.Contains(upArgs, globalEnvFile) || !slices.Contains(upArgs, wantFreshCompose) {
+		t.Fatalf("expected resolved --env-file %q and -f %q in up args, got %#v", globalEnvFile, wantFreshCompose, upArgs)
+	}
+	envB := readComposeServiceEnv(t, freshDir, upArgs)
+	if envB["GLOBAL_VAR"] != "from_global" || envB["PROJ_PWD"] != freshDir || envB["SUB_PWD"] != freshDir {
+		t.Fatalf("unexpected interpolated env for fresh-global-only: %#v (want PWD=%q)", envB, freshDir)
+	}
+	freshTargetDir, freshTargetPrefix, err := cli.ResolveComposeTarget(ctx, "fresh-global-only", wantFreshCompose)
+	if err != nil {
+		t.Fatalf("ResolveComposeTarget fresh-global-only failed: %v", err)
+	}
+	if freshTargetDir != freshDir || !slices.Equal(freshTargetPrefix, []string{"--env-file", globalEnvFile}) {
+		t.Fatalf("unexpected fresh target: dir=%q prefix=%#v (want --env-file %q)", freshTargetDir, freshTargetPrefix, globalEnvFile)
+	}
+
+	// B2. COMPOSE_ENV_FILES 含逗号后空格（"../.env.global, .env"）且 .env 内含 ${PWD}/compose.yaml:${PWD}/extra.yaml：
+	// Go 预检需用项目目录替换容器 PWD=/app 并显式传递 --env-file 避开原生 Compose 不 trim 空格的限制
+	t.Run("comma whitespace and dotenv PWD COMPOSE_FILE expansion", func(t *testing.T) {
+		spaceDir := filepath.Join(resolvedDockerRoot, "space-pwd-app")
+		if err := os.MkdirAll(spaceDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		spaceCompose := filepath.Join(spaceDir, "compose.yaml")
+		spaceExtra := filepath.Join(spaceDir, "extra.yaml")
+		spaceDotEnv := filepath.Join(spaceDir, ".env")
+		if err := os.WriteFile(spaceCompose, []byte("services:\n  web:\n    image: nginx:alpine\n    environment:\n      GLOBAL_VAR: ${GLOBAL_VAR}\n      PROJ_PWD: ${PWD}\n      SUB_PWD: ${FROM_PWD}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(spaceExtra, []byte("services:\n  worker:\n    image: alpine:3.22\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(spaceDotEnv, []byte("COMPOSE_FILE=${PWD}/compose.yaml:${PWD}/extra.yaml\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("COMPOSE_PATH_SEPARATOR", ":")
+		t.Setenv("COMPOSE_ENV_FILES", "../.env.global, .env")
+
+		spacePlan, serr := cli.ResolveManagedCardPlan(ctx, "space-pwd-app", spaceCompose)
+		if serr != nil {
+			t.Fatalf("ResolveManagedCardPlan space-pwd-app failed: %v", serr)
+		}
+		if !slices.Equal(spacePlan.EnvFiles, []string{globalEnvFile, spaceDotEnv}) {
+			t.Fatalf("expected explicit trimmed EnvFiles [%q %q], got %#v", globalEnvFile, spaceDotEnv, spacePlan.EnvFiles)
+		}
+		if !slices.Equal(spacePlan.DeployFiles, []string{spaceCompose, spaceExtra}) {
+			t.Fatalf("expected DeployFiles [%q %q] using project PWD, got %#v", spaceCompose, spaceExtra, spacePlan.DeployFiles)
+		}
+		_, svcs := runComposeConfigJSONNameAndServices(t, spaceDir, spacePlan.ComposeArgsPrefix())
+		slices.Sort(svcs)
+		if !slices.Equal(svcs, []string{"web", "worker"}) {
+			t.Fatalf("expected services [web worker], got %#v", svcs)
+		}
+		envSpace := readComposeServiceEnv(t, spaceDir, spacePlan.ComposeArgsPrefix())
+		if envSpace["GLOBAL_VAR"] != "from_global" || envSpace["PROJ_PWD"] != spaceDir || envSpace["SUB_PWD"] != spaceDir {
+			t.Fatalf("unexpected interpolated env for space-pwd-app: %#v (want PWD=%q)", envSpace, spaceDir)
+		}
+	})
+
+	// C. 当 ../.env.global 确实缺失（例如容器未挂载上级目录）时，明确报错并提示宿主机挂载路径
+	if err := os.Remove(globalEnvFile); err != nil {
+		t.Fatal(err)
+	}
+	for name, opErr := range map[string]error{
+		"PrepareSaveProjectPlanForDeploy": func() error {
+			_, perr := cli.PrepareSaveProjectPlanForDeploy(ctx, "fresh-global-only", "", true)
+			return perr
+		}(),
+		"ResolveManagedCardPlan": func() error {
+			_, perr := cli.ResolveManagedCardPlan(ctx, "existing-app", existingCompose)
+			return perr
+		}(),
+		"ResolveComposeTarget": func() error {
+			_, _, perr := cli.ResolveComposeTarget(ctx, "existing-app", existingCompose)
+			return perr
+		}(),
+	} {
+		if opErr == nil || !strings.Contains(opErr.Error(), globalEnvFile) || !strings.Contains(opErr.Error(), "挂载") {
+			t.Fatalf("%s expected clear missing .env.global + mount hint error, got %v", name, opErr)
+		}
 	}
 }
