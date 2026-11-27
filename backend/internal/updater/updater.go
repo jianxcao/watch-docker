@@ -3,76 +3,41 @@ package updater
 import (
 	"context"
 	"fmt"
+	"maps"
+	"path"
+	"reflect"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
-
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 )
 
 type Updater struct {
 	docker      *dockercli.Client
-	updateLocks sync.Map // map[string]*sync.Mutex - 每个容器ID对应一个锁
+	updateLocks sync.Map // map[string]*sync.Mutex - key 为归一化后的 64 位完整容器 ID
 }
 
 func New(d *dockercli.Client) *Updater { return &Updater{docker: d} }
 
-// getContainerLock 获取或创建指定容器的互斥锁
 func (u *Updater) getContainerLock(containerID string) *sync.Mutex {
 	lockInterface, _ := u.updateLocks.LoadOrStore(containerID, &sync.Mutex{})
 	return lockInterface.(*sync.Mutex)
 }
 
-// UpdateContainer 拉取镜像并按原配置重建容器，尽量无感更新。
-func (u *Updater) UpdateContainer(ctx context.Context, containerID string, imageRef string) error {
-	// 获取容器专属锁，防止并发更新同一容器
-	mutex := u.getContainerLock(containerID)
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	logger.Logger.Info("开始更新容器", zap.String("containerID", containerID), zap.String("imageRef", imageRef))
-
-	// 初始化更新上下文
-	uctx := &updateContext{
-		containerID: containerID,
-		imageRef:    imageRef,
-	}
-
-	// 1. 拉取镜像
-	if err := u.pullImage(ctx, imageRef); err != nil {
-		return err
-	}
-
-	// 2. 准备旧容器（停止、重命名、清理资源）
-	if err := u.prepareOldContainer(ctx, uctx); err != nil {
-		return err
-	}
-
-	// 3. 创建新容器（带重试）
-	if err := u.createContainerWithRetry(ctx, uctx); err != nil {
-		u.rollbackOnCreateFailure(ctx, uctx)
-		return err
-	}
-
-	// 4. 根据旧容器状态决定是否启动新容器
-	if uctx.wasRunning {
-		// 只有旧容器原来在运行时，才启动新容器
-		if err := u.startContainerWithRetry(ctx, uctx); err != nil {
-			u.rollbackOnStartFailure(ctx, uctx)
-			return err
-		}
-		logger.Logger.Info("新容器已启动（因为旧容器原来在运行）", zap.String("containerID", uctx.newID))
-	} else {
-		logger.Logger.Info("新容器已创建但未启动（因为旧容器原来是停止状态）", zap.String("containerID", uctx.newID))
-	}
-
-	// 5. 最终清理旧容器及相关资源
-	u.finalCleanup(ctx, uctx)
-	return nil
+// UpdateContainer 拉取镜像并按原配置重建容器，返回新容器 ID。
+func (u *Updater) UpdateContainer(ctx context.Context, containerID string, imageRef string) (string, error) {
+	return u.UpdateContainerWithProgress(ctx, containerID, imageRef, nil)
 }
 
 // UpdateProgressCallback 更新进度回调
@@ -81,92 +46,142 @@ type UpdateProgressCallback struct {
 	OnPullProgress func(progress dockercli.PullProgress)
 }
 
-// UpdateContainerWithProgress 带进度回调的容器更新
-func (u *Updater) UpdateContainerWithProgress(ctx context.Context, containerID, imageRef string, cb *UpdateProgressCallback) error {
-	mutex := u.getContainerLock(containerID)
+// UpdateContainerWithProgress 带进度回调的容器更新，返回新容器 ID。
+func (u *Updater) UpdateContainerWithProgress(ctx context.Context, containerID, imageRef string, cb *UpdateProgressCallback) (string, error) {
+	// 先 inspect 获取规范化后的 64 位完整容器 ID 再加锁，确保定时任务与手动触发锁到同一容器
+	canonicalID := containerID
+	if info, err := u.docker.InspectContainer(ctx, containerID); err == nil {
+		canonicalID = info.ID
+	}
+
+	mutex := u.getContainerLock(canonicalID)
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	logger.Logger.Info("开始更新容器（带进度）", zap.String("containerID", containerID), zap.String("imageRef", imageRef))
+	logger.Logger.Info("开始更新容器", zap.String("containerID", canonicalID), zap.String("imageRef", imageRef))
+
+	// 加锁后重新 inspect，防止等待锁期间容器已被并发更新/删除后继续误拉取
+	lockedInfo, err := u.docker.InspectContainer(ctx, canonicalID)
+	if err != nil {
+		return "", fmt.Errorf("inspect: %w", err)
+	}
+
+	var targetPlatform *ocispec.Platform
+	if lockedInfo.ImageManifestDescriptor != nil && lockedInfo.ImageManifestDescriptor.Platform != nil &&
+		lockedInfo.ImageManifestDescriptor.Platform.OS != "" && lockedInfo.ImageManifestDescriptor.Platform.Architecture != "" {
+		p := *lockedInfo.ImageManifestDescriptor.Platform
+		targetPlatform = &p
+	} else if lockedInfo.Image != "" {
+		if imgInfo, ierr := u.docker.ImageInspect(ctx, lockedInfo.Image); ierr == nil && imgInfo.Os != "" && imgInfo.Architecture != "" {
+			targetPlatform = &ocispec.Platform{
+				OS:           imgInfo.Os,
+				Architecture: imgInfo.Architecture,
+				Variant:      imgInfo.Variant,
+			}
+		}
+	}
 
 	uctx := &updateContext{
-		containerID: containerID,
-		imageRef:    imageRef,
+		containerID:    lockedInfo.ID,
+		imageRef:       strings.TrimSpace(imageRef),
+		targetPlatform: targetPlatform,
+	}
+	if uctx.imageRef == "" && lockedInfo.Config != nil {
+		uctx.imageRef = strings.TrimSpace(lockedInfo.Config.Image)
 	}
 
-	// 1. 拉取镜像（带进度）
+	// 1. 拉取镜像（保留原容器平台架构）
 	if cb != nil && cb.OnStep != nil {
-		cb.OnStep("pulling", "正在拉取镜像 "+imageRef)
+		cb.OnStep("pulling", "正在拉取镜像 "+uctx.imageRef)
 	}
-	logger.Logger.Info("开始拉取镜像", zap.String("imageRef", imageRef))
-	err := u.docker.ImagePullWithProgress(ctx, imageRef, func(p dockercli.PullProgress) {
-		if cb != nil && cb.OnPullProgress != nil {
-			cb.OnPullProgress(p)
+	if cb != nil && cb.OnPullProgress != nil {
+		err := u.docker.ImagePullWithPlatform(ctx, uctx.imageRef, uctx.targetPlatform, cb.OnPullProgress)
+		if err != nil {
+			logger.Logger.Error("拉取镜像失败", zap.String("imageRef", uctx.imageRef), zap.Error(err))
+			return "", fmt.Errorf("pull: %w", err)
 		}
-	})
-	if err != nil {
-		logger.Logger.Error("拉取镜像失败", zap.String("imageRef", imageRef), zap.Error(err))
-		return fmt.Errorf("pull: %w", err)
+	} else {
+		if err := u.pullImageWithPlatform(ctx, uctx.imageRef, uctx.targetPlatform); err != nil {
+			return "", err
+		}
 	}
-	logger.Logger.Info("镜像拉取成功", zap.String("imageRef", imageRef))
 
-	// 2. 准备旧容器
+	// 2. 准备旧容器（先读取完整配置与旧镜像默认配置、再停止与重命名）
 	if cb != nil && cb.OnStep != nil {
 		cb.OnStep("stopping", "正在停止旧容器")
 	}
-	if err := u.prepareOldContainer(ctx, uctx); err != nil {
-		return err
+	stoppedAutoRemoved, err := u.prepareOldContainer(ctx, uctx)
+	if err != nil {
+		return "", err
 	}
 
-	// 3. 创建新容器
+	// 3. 创建新容器（带重试），并在启动前附加额外网络
 	if cb != nil && cb.OnStep != nil {
 		cb.OnStep("creating", "正在创建新容器")
 	}
 	if err := u.createContainerWithRetry(ctx, uctx); err != nil {
-		u.rollbackOnCreateFailure(ctx, uctx)
-		return err
+		if !stoppedAutoRemoved {
+			u.rollbackOnCreateFailure(ctx, uctx)
+		}
+		return "", err
 	}
 
-	// 4. 启动新容器
+	// 4. 根据旧容器状态决定是否启动新容器
 	if uctx.wasRunning {
 		if cb != nil && cb.OnStep != nil {
 			cb.OnStep("starting", "正在启动新容器")
 		}
 		if err := u.startContainerWithRetry(ctx, uctx); err != nil {
-			u.rollbackOnStartFailure(ctx, uctx)
-			return err
+			if !stoppedAutoRemoved {
+				u.rollbackOnStartFailure(ctx, uctx)
+			} else {
+				rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+				_ = u.docker.RemoveContainer(rbCtx, uctx.newID, true)
+				cancel()
+			}
+			return "", err
 		}
-		logger.Logger.Info("新容器已启动", zap.String("containerID", uctx.newID))
+		logger.Logger.Info("新容器已启动（因为旧容器原来在运行）", zap.String("containerID", uctx.newID))
 	} else {
-		logger.Logger.Info("新容器已创建但未启动", zap.String("containerID", uctx.newID))
+		logger.Logger.Info("新容器已创建但未启动（因为旧容器原来是停止状态）", zap.String("containerID", uctx.newID))
 	}
 
-	// 5. 清理
+	// 5. 最终清理旧容器与旧镜像（脱离调用方 ctx，避免新容器已启动后因请求超时遗留 *-old-* 备份容器）
 	if cb != nil && cb.OnStep != nil {
 		cb.OnStep("cleanup", "正在清理旧容器")
 	}
-	u.finalCleanup(ctx, uctx)
-	return nil
+	cleanCtx, cleanCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cleanCancel()
+	if !stoppedAutoRemoved {
+		u.finalCleanup(cleanCtx, uctx)
+	} else {
+		// --rm 容器已由 daemon 自动删除，仅尝试清理不再被使用的旧镜像
+		if uctx.oldInfo.Image != "" {
+			_ = u.docker.SafeRemoveImage(cleanCtx, uctx.oldInfo.Image)
+		}
+	}
+
+	return uctx.newID, nil
 }
 
-// updateContext 更新操作的上下文信息
 type updateContext struct {
-	containerID string
-	imageRef    string
-	oldInfo     container.InspectResponse
-	oldName     string
-	backupName  string
-	newID       string
-	wasRunning  bool // 记录旧容器是否在运行状态
+	containerID   string
+	imageRef      string
+	oldInfo       container.InspectResponse
+	oldImage      *image.InspectResponse
+	oldName       string
+	backupName     string
+	newID          string
+	wasRunning     bool
+	extraNetworks  map[string]*network.EndpointSettings
+	targetPlatform *ocispec.Platform
 }
 
 const maxRetries = 3
 
-// pullImage 拉取镜像
-func (u *Updater) pullImage(ctx context.Context, imageRef string) error {
+func (u *Updater) pullImageWithPlatform(ctx context.Context, imageRef string, platform *ocispec.Platform) error {
 	logger.Logger.Info("开始拉取镜像", zap.String("imageRef", imageRef))
-	err := u.docker.ImagePull(ctx, imageRef)
-	if err != nil {
+	if err := u.docker.ImagePullWithPlatform(ctx, imageRef, platform, nil); err != nil {
 		logger.Logger.Error("拉取镜像失败", zap.String("imageRef", imageRef), zap.Error(err))
 		return fmt.Errorf("pull: %w", err)
 	}
@@ -174,85 +189,477 @@ func (u *Updater) pullImage(ctx context.Context, imageRef string) error {
 	return nil
 }
 
-// prepareOldContainer 准备旧容器：获取信息、停止、等待、重命名、清理资源
-func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) error {
-	// 读取旧容器详细信息与配置
-	oldInfo, err := u.docker.InspectContainer(ctx, uctx.containerID)
+func (u *Updater) restartOldIfStopped(ctx context.Context, uctx *updateContext) {
+	if !uctx.wasRunning {
+		return
+	}
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	info, err := u.docker.InspectContainer(rbCtx, uctx.containerID)
 	if err != nil {
-		return fmt.Errorf("inspect: %w", err)
+		return
 	}
-	uctx.oldInfo = oldInfo
-
-	// 记录旧容器的运行状态
-	uctx.wasRunning = oldInfo.State.Running
-	logger.Logger.Info("旧容器详细信息与配置读取成功",
-		zap.String("containerID", uctx.containerID),
-		zap.Bool("wasRunning", uctx.wasRunning))
-
-	// 如果旧容器在运行，则停止它
-	if uctx.wasRunning {
-		err = u.docker.StopContainer(ctx, uctx.containerID, 100)
-		if err != nil {
-			return fmt.Errorf("停止旧容器失败: %w", err)
-		}
-		logger.Logger.Info("旧容器停止成功", zap.String("containerID", uctx.containerID))
-	} else {
-		logger.Logger.Info("旧容器原本就是停止状态，无需停止", zap.String("containerID", uctx.containerID))
-	}
-
-	// 等待容器完全停止，确保文件系统完全释放（只对原来运行的容器执行）
-	if uctx.wasRunning {
-		err = u.docker.WaitContainerStopped(ctx, uctx.containerID, 30)
-		if err != nil {
-			logger.Logger.Warn("等待容器停止超时，继续执行", zap.String("containerID", uctx.containerID), zap.Error(err))
-		}
-		logger.Logger.Info("容器完全停止，文件系统已释放", zap.String("containerID", uctx.containerID))
-	}
-
-	// 检查容器是否仍然存在，如果容器已被删除则直接返回（认为是正常情况）
-	_, err = u.docker.InspectContainer(ctx, uctx.containerID)
-	if err != nil {
-		logger.Logger.Info("容器不存在，无需继续更新操作",
-			zap.String("containerID", uctx.containerID),
-			zap.Error(err))
-		return nil
-	}
-
-	// 获取容器名称并重命名旧容器
-	uctx.oldName = oldInfo.Name
-	if len(uctx.oldName) > 0 && uctx.oldName[0] == '/' {
-		uctx.oldName = uctx.oldName[1:]
-	}
-	uctx.backupName = fmt.Sprintf("%s-old-%d", uctx.oldName, time.Now().Unix())
-	if uctx.oldName != "" {
-		err = u.docker.RenameContainer(ctx, uctx.containerID, uctx.backupName)
-		if err != nil {
-			return fmt.Errorf("重命名旧容器失败: %w", err)
+	if info.State == nil || !info.State.Running {
+		if sErr := u.docker.StartContainer(rbCtx, uctx.containerID); sErr != nil {
+			logger.Logger.Error("prepare 失败后恢复启动旧容器失败", zap.String("containerID", uctx.containerID), zap.Error(sErr))
+		} else {
+			logger.Logger.Info("prepare 失败后已恢复启动旧容器", zap.String("containerID", uctx.containerID))
 		}
 	}
-
-	// 清理旧容器相关资源，确保没有冲突
-	logger.Logger.Info("清理旧容器相关资源，防止创建冲突", zap.String("containerID", uctx.containerID))
-	err = u.docker.CleanupContainerResources(ctx, oldInfo)
-	if err != nil {
-		logger.Logger.Warn("清理旧容器资源失败，继续执行", zap.String("containerID", uctx.containerID), zap.Error(err))
-	}
-
-	return nil
 }
 
-// createContainerWithRetry 创建新容器（带重试机制）
-func (u *Updater) createContainerWithRetry(ctx context.Context, uctx *updateContext) error {
-	// 准备新容器配置
-	newCfg := uctx.oldInfo.Config
+// prepareOldContainer 读取信息、在停止前保存旧名称（兼容 --rm 容器）、停止并重命名旧容器。
+func (u *Updater) prepareOldContainer(ctx context.Context, uctx *updateContext) (autoRemoved bool, err error) {
+	oldInfo, err := u.docker.InspectContainer(ctx, uctx.containerID)
+	if err != nil {
+		return false, fmt.Errorf("inspect: %w", err)
+	}
+	uctx.oldInfo = oldInfo
+	if oldInfo.State != nil {
+		uctx.wasRunning = oldInfo.State.Running
+	}
+
+	// 在 StopContainer 之前记录容器名，防止 AutoRemove(--rm) 容器停止即销毁导致名字丢失
+	uctx.oldName = strings.TrimPrefix(oldInfo.Name, "/")
+
+	// 读取旧镜像配置以便后续剥离旧镜像自带默认值（让新镜像自己的 Entrypoint/Cmd/Healthcheck/Labels 生效）
+	if oldInfo.Image != "" {
+		if imgInfo, ierr := u.docker.ImageInspect(ctx, oldInfo.Image); ierr == nil {
+			uctx.oldImage = imgInfo
+		}
+	}
+
+	if uctx.wasRunning {
+		if err = u.docker.StopContainer(ctx, uctx.containerID, 100); err != nil {
+			u.restartOldIfStopped(ctx, uctx)
+			return false, fmt.Errorf("stop: %w", err)
+		}
+		if err = u.docker.WaitContainerStopped(ctx, uctx.containerID, 30); err != nil {
+			if ctx.Err() != nil {
+				u.restartOldIfStopped(ctx, uctx)
+				return false, fmt.Errorf("stop wait: %w", err)
+			}
+			logger.Logger.Warn("等待容器停止异常，继续检查", zap.String("containerID", uctx.containerID), zap.Error(err))
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		u.restartOldIfStopped(ctx, uctx)
+		return false, err
+	}
+
+	// 使用脱离调用方 ctx 的检查上下文，仅确认 errdefs.IsNotFound 时才判定为 --rm 自动移除
+	checkCtx, checkCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	_, inspErr := u.docker.InspectContainer(checkCtx, uctx.containerID)
+	checkCancel()
+	if inspErr != nil {
+		if errdefs.IsNotFound(inspErr) {
+			logger.Logger.Info("旧容器停止后已不存在（可能为 --rm 自动移除），直接按保存配置重建",
+				zap.String("containerID", uctx.containerID),
+				zap.String("oldName", uctx.oldName))
+			return true, nil
+		}
+		u.restartOldIfStopped(ctx, uctx)
+		return false, fmt.Errorf("post-stop inspect: %w", inspErr)
+	}
+
+	uctx.backupName = fmt.Sprintf("%s-old-%d", uctx.oldName, time.Now().UnixNano())
+	if uctx.oldName != "" {
+		if err = u.docker.RenameContainer(ctx, uctx.containerID, uctx.backupName); err != nil {
+			u.restartOldIfStopped(ctx, uctx)
+			return false, fmt.Errorf("重命名旧容器失败: %w", err)
+		}
+	}
+
+	return false, nil
+}
+
+func isASCIIAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func isWindowsDrivePath(p string) bool {
+	if len(p) < 2 || !isASCIIAlpha(p[0]) || p[1] != ':' {
+		return false
+	}
+	return len(p) == 2 || p[2] == '\\' || p[2] == '/'
+}
+
+func isWindowsDriveTargetPrefix(p string) bool {
+	if len(p) < 2 || !isASCIIAlpha(p[0]) || p[1] != ':' {
+		return false
+	}
+	return len(p) == 2 || p[2] == '\\' || p[2] == '/' || p[2] == ':'
+}
+
+func mountTargetKey(target string) string {
+	if path.IsAbs(target) {
+		return path.Clean(target)
+	}
+	if isWindowsDrivePath(target) {
+		cleaned := path.Clean("/" + strings.ReplaceAll(target[2:], "\\", "/"))
+		return strings.ToLower(target[:2] + cleaned)
+	}
+	return target
+}
+
+func isDestinationOnlyBind(bind string) bool {
+	if bind == "" {
+		return false
+	}
+	if isWindowsDrivePath(bind) {
+		return !strings.Contains(bind[2:], ":")
+	}
+	return !strings.Contains(bind, ":")
+}
+
+func splitBindSourceAndTarget(bind string) (source, target string) {
+	if isDestinationOnlyBind(bind) {
+		return "", bind
+	}
+	var rest string
+	if isWindowsDrivePath(bind) {
+		sep := strings.IndexByte(bind[2:], ':')
+		if sep < 0 {
+			return "", bind
+		}
+		sep += 2
+		source = bind[:sep]
+		rest = bind[sep+1:]
+	} else {
+		sep := strings.IndexByte(bind, ':')
+		if sep < 0 {
+			return "", ""
+		}
+		source = bind[:sep]
+		rest = bind[sep+1:]
+	}
+	if rest == "" {
+		return "", ""
+	}
+	if isWindowsDriveTargetPrefix(rest) {
+		if sep := strings.IndexByte(rest[2:], ':'); sep >= 0 {
+			target = rest[:sep+2]
+		} else {
+			target = rest
+		}
+		return source, target
+	}
+	if sep := strings.IndexByte(rest, ':'); sep >= 0 {
+		target = rest[:sep]
+	} else {
+		target = rest
+	}
+	return source, target
+}
+
+func cloneExposedPorts(src network.PortSet) network.PortSet {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(network.PortSet, len(src))
+	for p := range src {
+		out[p] = struct{}{}
+	}
+	return out
+}
+
+func (u *Updater) buildNewContainerConfigs(uctx *updateContext) (*container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, map[string]*network.EndpointSettings) {
+	// 1. 克隆并清洗 Container Config，剥离与旧镜像默认值完全相同的字段
+	var newCfg container.Config
+	if uctx.oldInfo.Config != nil {
+		newCfg = *uctx.oldInfo.Config
+		if uctx.oldInfo.Config.Env != nil {
+			newCfg.Env = slices.Clone(uctx.oldInfo.Config.Env)
+		}
+		if uctx.oldInfo.Config.Labels != nil {
+			newCfg.Labels = maps.Clone(uctx.oldInfo.Config.Labels)
+		}
+		newCfg.ExposedPorts = cloneExposedPorts(uctx.oldInfo.Config.ExposedPorts)
+	}
 	newCfg.Image = uctx.imageRef
-	netCfg := &network.NetworkingConfig{EndpointsConfig: uctx.oldInfo.NetworkSettings.Networks}
+
+	var imgExposed map[string]struct{}
+	if uctx.oldImage != nil && uctx.oldImage.Config != nil {
+		imgCfg := uctx.oldImage.Config
+		imgExposed = imgCfg.ExposedPorts
+
+		// 保留用户显式 --entrypoint "" 对镜像默认 Entrypoint 的清空覆盖
+		entryOverridden := false
+		if len(imgCfg.Entrypoint) > 0 && len(newCfg.Entrypoint) == 0 {
+			newCfg.Entrypoint = []string{""}
+			entryOverridden = true
+		} else if reflect.DeepEqual(newCfg.Entrypoint, imgCfg.Entrypoint) {
+			newCfg.Entrypoint = nil
+		} else if len(newCfg.Entrypoint) > 0 {
+			entryOverridden = true
+		}
+
+		if !entryOverridden && reflect.DeepEqual(newCfg.Cmd, imgCfg.Cmd) {
+			newCfg.Cmd = nil
+		}
+		if newCfg.WorkingDir == imgCfg.WorkingDir {
+			newCfg.WorkingDir = ""
+		}
+		// 保留旧容器的非空 User：Docker inspect 无法区分镜像默认 USER 与用户显式指定的 --user，
+		// 若按字符串相等清空，新镜像改成默认 root 时会导致容器更新后静默提权；空字符串仍交由新镜像决定。
+		if imgCfg.Healthcheck != nil && reflect.DeepEqual(newCfg.Healthcheck, imgCfg.Healthcheck) {
+			newCfg.Healthcheck = nil
+		}
+		// 保留旧容器的有效 Config.Env（含空值 KEY=）：ContainerInspect 无法区分显式 --env 与旧镜像默认值，
+		// 保留旧容器环境可防止新镜像默认值反向覆盖已有部署配置，同时仍由 Docker 补入新镜像独有的环境变量。
+		// 剥离与旧镜像完全相同的 LABEL，避免覆盖新镜像版本元信息
+		if len(imgCfg.Labels) > 0 && len(newCfg.Labels) > 0 {
+			for k, v := range newCfg.Labels {
+				if strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "watchdocker.") {
+					continue
+				}
+				if imgVal, ok := imgCfg.Labels[k]; ok && imgVal == v {
+					delete(newCfg.Labels, k)
+				}
+			}
+		}
+	}
+
+	// 2. 克隆 HostConfig 并显式迁移匿名卷挂载，确保数据不丢失
+	var newHostCfg container.HostConfig
+	if uctx.oldInfo.HostConfig != nil {
+		newHostCfg = *uctx.oldInfo.HostConfig
+		newHostCfg.Mounts = append([]mount.Mount(nil), uctx.oldInfo.HostConfig.Mounts...)
+		newHostCfg.Binds = append([]string(nil), uctx.oldInfo.HostConfig.Binds...)
+		if uctx.oldInfo.HostConfig.PortBindings != nil {
+			newHostCfg.PortBindings = maps.Clone(uctx.oldInfo.HostConfig.PortBindings)
+		}
+	}
+
+	if !newHostCfg.AutoRemove && len(newHostCfg.VolumesFrom) == 0 && (len(newHostCfg.Binds) > 0 || len(newHostCfg.Mounts) > 0) {
+		volByDest := make(map[string]struct {
+			name string
+			rw   bool
+			dest string
+		}, len(uctx.oldInfo.Mounts))
+		for _, m := range uctx.oldInfo.Mounts {
+			volName := dockercli.ResolveMountVolumeName(m)
+			destKey := mountTargetKey(m.Destination)
+			if volName != "" && destKey != "" {
+				volByDest[destKey] = struct {
+					name string
+					rw   bool
+					dest string
+				}{name: volName, rw: m.RW, dest: m.Destination}
+			}
+		}
+		for i := range newHostCfg.Mounts {
+			if newHostCfg.Mounts[i].Type == mount.TypeVolume && newHostCfg.Mounts[i].Source == "" {
+				if v, ok := volByDest[mountTargetKey(newHostCfg.Mounts[i].Target)]; ok {
+					newHostCfg.Mounts[i].Source = v.name
+					if !v.rw {
+						newHostCfg.Mounts[i].ReadOnly = true
+					}
+				}
+			}
+		}
+		for i, b := range newHostCfg.Binds {
+			if !isDestinationOnlyBind(b) {
+				continue
+			}
+			v, ok := volByDest[mountTargetKey(b)]
+			if !ok {
+				continue
+			}
+			rewritten := v.name + ":" + v.dest
+			if !v.rw {
+				rewritten += ":ro"
+			}
+			newHostCfg.Binds[i] = rewritten
+		}
+	}
+
+	existingTargets := make(map[string]struct{})
+	existingSources := make(map[string]struct{})
+	existingSourcesLower := make(map[string]struct{})
+	for _, m := range newHostCfg.Mounts {
+		if tgtKey := mountTargetKey(m.Target); tgtKey != "" {
+			existingTargets[tgtKey] = struct{}{}
+		}
+		if m.Source != "" {
+			existingSources[m.Source] = struct{}{}
+			existingSourcesLower[strings.ToLower(m.Source)] = struct{}{}
+		}
+	}
+	for _, b := range newHostCfg.Binds {
+		src, tgt := splitBindSourceAndTarget(b)
+		if tgtKey := mountTargetKey(tgt); tgtKey != "" {
+			existingTargets[tgtKey] = struct{}{}
+		}
+		if src != "" {
+			existingSources[src] = struct{}{}
+			existingSourcesLower[strings.ToLower(src)] = struct{}{}
+		}
+	}
+
+	if !newHostCfg.AutoRemove && len(newHostCfg.VolumesFrom) == 0 {
+		for _, m := range uctx.oldInfo.Mounts {
+			volName := dockercli.ResolveMountVolumeName(m)
+			destKey := mountTargetKey(m.Destination)
+			if volName != "" && destKey != "" {
+				_, hasTarget := existingTargets[destKey]
+				_, hasSource := existingSources[volName]
+				if !hasSource && isWindowsDrivePath(m.Destination) {
+					_, hasSource = existingSourcesLower[strings.ToLower(volName)]
+				}
+				if !hasTarget && !hasSource {
+					newHostCfg.Mounts = append(newHostCfg.Mounts, mount.Mount{
+						Type:     mount.TypeVolume,
+						Source:   volName,
+						Target:   m.Destination,
+						ReadOnly: !m.RW,
+					})
+					existingTargets[destKey] = struct{}{}
+					existingSources[volName] = struct{}{}
+					existingSourcesLower[strings.ToLower(volName)] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// 3. 构造干净的网络配置：处理 container:<id>/none/host 端口冲突、保留原主网络与 bridge 约束
+	var netCfg *network.NetworkingConfig
+	var extraNetworks map[string]*network.EndpointSettings
+
+	netMode := newHostCfg.NetworkMode
+	if netMode.IsContainer() || netMode.IsNone() {
+		newCfg.ExposedPorts = nil
+		newHostCfg.PortBindings = nil
+		newHostCfg.PublishAllPorts = false
+		if netMode.IsContainer() {
+			newCfg.Hostname = ""
+			newCfg.Domainname = ""
+		}
+	} else {
+		// 仅保留用户在 PortBindings 引用的端口或镜像本身未声明的额外 EXPOSE 端口
+		if len(imgExposed) > 0 && len(newCfg.ExposedPorts) > 0 {
+			for rawPort := range imgExposed {
+				portSpec := rawPort
+				if !strings.Contains(portSpec, "/") {
+					portSpec += "/tcp"
+				}
+				if p, err := network.ParsePort(portSpec); err == nil {
+					if _, bound := newHostCfg.PortBindings[p]; !bound {
+						delete(newCfg.ExposedPorts, p)
+					}
+				}
+			}
+			if len(newCfg.ExposedPorts) == 0 {
+				newCfg.ExposedPorts = nil
+			}
+		}
+
+		if !netMode.IsHost() && uctx.oldInfo.NetworkSettings != nil && len(uctx.oldInfo.NetworkSettings.Networks) > 0 {
+			shortOld := uctx.containerID
+			if len(shortOld) > 12 {
+				shortOld = shortOld[:12]
+			}
+
+			netNames := make([]string, 0, len(uctx.oldInfo.NetworkSettings.Networks))
+			for name := range uctx.oldInfo.NetworkSettings.Networks {
+				netNames = append(netNames, name)
+			}
+			sort.Strings(netNames)
+
+			origPrimary := strings.TrimSpace(string(netMode))
+			if origPrimary == "" || origPrimary == "default" {
+				if _, hasBridge := uctx.oldInfo.NetworkSettings.Networks["bridge"]; hasBridge {
+					origPrimary = "bridge"
+				}
+			}
+			primaryName := netNames[0]
+			if _, ok := uctx.oldInfo.NetworkSettings.Networks[origPrimary]; ok {
+				primaryName = origPrimary
+			} else if origPrimary != "" {
+				for _, name := range netNames {
+					ep := uctx.oldInfo.NetworkSettings.Networks[name]
+					if ep != nil && ep.NetworkID != "" && (ep.NetworkID == origPrimary || (len(origPrimary) >= 12 && strings.HasPrefix(ep.NetworkID, origPrimary))) {
+						primaryName = name
+						break
+					}
+				}
+			}
+			newHostCfg.NetworkMode = container.NetworkMode(primaryName)
+
+			sanitizeEndpoint := func(netName string, ep *network.EndpointSettings) *network.EndpointSettings {
+				if ep == nil {
+					return &network.EndpointSettings{}
+				}
+				var mac network.HardwareAddr
+				if len(ep.MacAddress) > 0 {
+					mac = slices.Clone(ep.MacAddress)
+				}
+				if netName == "bridge" {
+					// Docker 26+ 禁止默认 bridge 网络携带 Aliases/IPAMConfig/Links
+					return &network.EndpointSettings{
+						DriverOpts: maps.Clone(ep.DriverOpts),
+						MacAddress: mac,
+					}
+				}
+				cleanEp := &network.EndpointSettings{
+					Links:      append([]string(nil), ep.Links...),
+					DriverOpts: maps.Clone(ep.DriverOpts),
+					GwPriority: ep.GwPriority,
+					MacAddress: mac,
+				}
+				if ep.IPAMConfig != nil {
+					cleanEp.IPAMConfig = ep.IPAMConfig.Copy()
+				}
+				for _, alias := range ep.Aliases {
+					if alias != "" && alias != shortOld && alias != uctx.containerID {
+						cleanEp.Aliases = append(cleanEp.Aliases, alias)
+					}
+				}
+				return cleanEp
+			}
+
+			netCfg = &network.NetworkingConfig{
+				EndpointsConfig: map[string]*network.EndpointSettings{
+					primaryName: sanitizeEndpoint(primaryName, uctx.oldInfo.NetworkSettings.Networks[primaryName]),
+				},
+			}
+			if len(netNames) > 1 {
+				extraNetworks = make(map[string]*network.EndpointSettings, len(netNames)-1)
+				for _, name := range netNames {
+					if name == primaryName {
+						continue
+					}
+					extraNetworks[name] = sanitizeEndpoint(name, uctx.oldInfo.NetworkSettings.Networks[name])
+				}
+			}
+		}
+	}
+
+	var platform *ocispec.Platform
+	if uctx.targetPlatform != nil && uctx.targetPlatform.OS != "" && uctx.targetPlatform.Architecture != "" {
+		p := *uctx.targetPlatform
+		platform = &p
+	} else if uctx.oldImage != nil && uctx.oldImage.Os != "" && uctx.oldImage.Architecture != "" {
+		platform = &ocispec.Platform{
+			OS:           uctx.oldImage.Os,
+			Architecture: uctx.oldImage.Architecture,
+			Variant:      uctx.oldImage.Variant,
+		}
+	}
+
+	return &newCfg, &newHostCfg, netCfg, platform, extraNetworks
+}
+
+func (u *Updater) createContainerWithRetry(ctx context.Context, uctx *updateContext) error {
+	newCfg, newHostCfg, netCfg, platform, extraNetworks := u.buildNewContainerConfigs(uctx)
+	uctx.extraNetworks = extraNetworks
+
 	logger.Logger.Info("创建新容器", zap.String("containerName", uctx.oldName), zap.String("imageRef", uctx.imageRef))
 
-	// 尝试创建新容器，增加重试机制
 	var createErr error
 	for i := 0; i < maxRetries; i++ {
-		uctx.newID, createErr = u.docker.CreateContainer(ctx, uctx.oldName, newCfg, uctx.oldInfo.HostConfig, netCfg)
+		uctx.newID, createErr = u.docker.CreateContainerWithPlatform(ctx, uctx.oldName, newCfg, newHostCfg, netCfg, platform)
 		if createErr == nil {
 			break
 		}
@@ -264,19 +671,42 @@ func (u *Updater) createContainerWithRetry(ctx context.Context, uctx *updateCont
 			zap.Error(createErr))
 
 		if i < maxRetries-1 {
-			// 在重试前等待并清理旧容器相关资源
-			time.Sleep(time.Duration(i+1) * 2 * time.Second)
-			_ = u.docker.CleanupContainerResources(ctx, uctx.oldInfo)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(i+1) * 2 * time.Second):
+			}
 		}
 	}
 
 	if createErr != nil {
-		return fmt.Errorf("创建新容器多次重试后仍失败: %w", createErr)
+		return fmt.Errorf("create: 创建新容器多次重试后仍失败: %w", createErr)
 	}
+
+	if len(uctx.extraNetworks) > 0 {
+		extraNames := make([]string, 0, len(uctx.extraNetworks))
+		for netName := range uctx.extraNetworks {
+			extraNames = append(extraNames, netName)
+		}
+		sort.Strings(extraNames)
+		for _, netName := range extraNames {
+			if err := u.docker.ConnectContainerToNetwork(ctx, netName, uctx.newID, uctx.extraNetworks[netName]); err != nil {
+				logger.Logger.Error("附加额外网络失败",
+					zap.String("network", netName),
+					zap.String("newContainerID", uctx.newID),
+					zap.Error(err))
+				// 清理未完整创建的新容器，交由外层回滚
+				rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+				_ = u.docker.RemoveContainer(rbCtx, uctx.newID, true)
+				cancel()
+				return fmt.Errorf("create: 连接附加网络 %s 失败: %w", netName, err)
+			}
+		}
+	}
+
 	return nil
 }
 
-// startContainerWithRetry 启动新容器（带重试机制）
 func (u *Updater) startContainerWithRetry(ctx context.Context, uctx *updateContext) error {
 	var startErr error
 	for i := 0; i < maxRetries; i++ {
@@ -292,68 +722,83 @@ func (u *Updater) startContainerWithRetry(ctx context.Context, uctx *updateConte
 			zap.Error(startErr))
 
 		if i < maxRetries-1 {
-			// 在重试前等待并清理旧容器相关资源
-			time.Sleep(time.Duration(i+1) * 2 * time.Second)
-			_ = u.docker.CleanupContainerResources(ctx, uctx.oldInfo)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(i+1) * 2 * time.Second):
+			}
 		}
 	}
 
 	if startErr != nil {
-		return fmt.Errorf("启动新容器失败: %w", startErr)
+		return fmt.Errorf("start new: 启动新容器失败: %w", startErr)
 	}
 	return nil
 }
 
-// rollbackOnCreateFailure 创建失败时的回滚操作
+// rollbackOnCreateFailure 创建失败时的回滚操作（脱离外部 ctx 取消，并在原运行中时恢复启动）
 func (u *Updater) rollbackOnCreateFailure(ctx context.Context, uctx *updateContext) {
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+
 	if uctx.oldName != "" {
-		logger.Logger.Info("回滚容器名称", zap.String("containerID", uctx.containerID), zap.String("oldName", uctx.oldName))
-		_ = u.docker.RenameContainer(ctx, uctx.containerID, uctx.oldName)
+		logger.Logger.Info("回滚旧容器名称", zap.String("containerID", uctx.containerID), zap.String("oldName", uctx.oldName))
+		if err := u.docker.RenameContainer(rbCtx, uctx.containerID, uctx.oldName); err != nil {
+			logger.Logger.Error("回滚容器名称失败", zap.String("containerID", uctx.containerID), zap.Error(err))
+		}
+	}
+	if uctx.wasRunning {
+		if err := u.docker.StartContainer(rbCtx, uctx.containerID); err != nil {
+			logger.Logger.Error("回滚重启旧容器失败", zap.String("containerID", uctx.containerID), zap.Error(err))
+		} else {
+			logger.Logger.Info("创建失败回滚：已重启旧容器", zap.String("containerID", uctx.containerID))
+		}
 	}
 }
 
-// rollbackOnStartFailure 启动失败时的回滚操作
+// rollbackOnStartFailure 启动失败时的回滚操作（脱离外部 ctx 取消）
 func (u *Updater) rollbackOnStartFailure(ctx context.Context, uctx *updateContext) {
-	logger.Logger.Error("启动新容器多次重试后仍失败，开始回滚",
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+
+	logger.Logger.Error("启动新容器失败，开始回滚",
 		zap.String("containerID", uctx.containerID),
 		zap.String("newID", uctx.newID),
 		zap.String("oldName", uctx.oldName))
 
-	// 删除新容器
-	_ = u.docker.RemoveContainerWithVolumes(ctx, uctx.newID, true)
+	// 不带 RemoveVolumes 删除新容器，避免误删已迁移给新容器的匿名卷
+	_ = u.docker.RemoveContainer(rbCtx, uctx.newID, true)
 
-	// 恢复旧容器名称
 	if uctx.oldName != "" {
-		_ = u.docker.RenameContainer(ctx, uctx.containerID, uctx.oldName)
+		_ = u.docker.RenameContainer(rbCtx, uctx.containerID, uctx.oldName)
 	}
 
-	// 根据原始状态决定是否重新启动旧容器
 	if uctx.wasRunning {
-		_ = u.docker.StartContainer(ctx, uctx.containerID)
-		logger.Logger.Info("已重新启动旧容器（因为原来在运行）", zap.String("containerID", uctx.containerID))
+		if err := u.docker.StartContainer(rbCtx, uctx.containerID); err != nil {
+			logger.Logger.Error("回滚重启旧容器失败", zap.String("containerID", uctx.containerID), zap.Error(err))
+		} else {
+			logger.Logger.Info("已重新启动旧容器（因为原来在运行）", zap.String("containerID", uctx.containerID))
+		}
 	}
 }
 
 // finalCleanup 最终清理旧容器及相关资源
 func (u *Updater) finalCleanup(ctx context.Context, uctx *updateContext) {
-	logger.Logger.Info("容器更新成功，开始清理旧容器及相关资源",
+	logger.Logger.Info("容器更新成功，开始清理旧容器",
 		zap.String("oldContainerID", uctx.containerID),
 		zap.String("newContainerID", uctx.newID))
 
-	// 先删除旧容器（必须先删除容器，否则镜像检查时会发现容器还在使用镜像而无法删除）
-	err := u.docker.RemoveContainerWithVolumes(ctx, uctx.containerID, true)
-	if err != nil {
-		logger.Logger.Warn("删除旧容器失败，但继续清理资源", zap.String("containerID", uctx.containerID), zap.Error(err))
+	// 必须使用 RemoveVolumes=false（RemoveContainer），因为旧容器的匿名卷已由新容器挂载继承！
+	if err := u.docker.RemoveContainer(ctx, uctx.containerID, true); err != nil {
+		logger.Logger.Warn("删除旧容器失败", zap.String("containerID", uctx.containerID), zap.Error(err))
 	} else {
 		logger.Logger.Info("旧容器删除成功", zap.String("containerID", uctx.containerID))
 	}
 
-	// 删除容器后，再清理旧容器相关的镜像、网络、卷等资源
-	logger.Logger.Info("安全清理旧容器的相关资源", zap.String("oldImageID", uctx.oldInfo.Image))
-	err = u.docker.CleanupContainerResources(ctx, uctx.oldInfo)
-	if err != nil {
+	// 清理不再被使用的旧镜像与真正孤立的匿名卷
+	if err := u.docker.CleanupContainerResources(ctx, uctx.oldInfo); err != nil {
 		logger.Logger.Warn("清理旧容器资源失败", zap.String("containerID", uctx.containerID), zap.Error(err))
 	}
 
-	logger.Logger.Info("容器更新完成", zap.String("containerName", uctx.oldName), zap.String("imageRef", uctx.imageRef))
+	logger.Logger.Info("容器更新完成", zap.String("containerName", uctx.oldName), zap.String("imageRef", uctx.imageRef), zap.String("newID", uctx.newID))
 }

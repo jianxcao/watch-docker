@@ -6,13 +6,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
+	"github.com/containerd/errdefs"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 )
 
@@ -30,6 +31,11 @@ type ContainerInfo struct {
 	Created      int64             `json:"created"`
 	StartedAt    string            `json:"startedAt"` // 容器启动时间
 	Ports        []PortInfo        `json:"ports"`     // 端口映射信息
+
+	// 以下字段仅供后端扫描匹配多架构镜像与 config digest，不序列化到前端
+	ImageOS      string `json:"-"`
+	ImageArch    string `json:"-"`
+	ImageVariant string `json:"-"`
 }
 
 // PortInfo 端口映射信息
@@ -40,12 +46,13 @@ type PortInfo struct {
 	Type        string `json:"type"`        // 端口类型 (tcp/udp)
 }
 
-// ListContainers 列出容器并附带镜像的 RepoTags/RepoDigests（通过额外的 ImageInspect 合并）
+// ListContainers 列出容器并附带镜像的 RepoTags/RepoDigests（通过带缓存的 ImageInspect 合并）
 func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]ContainerInfo, error) {
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{All: includeStopped})
+	listRes, err := c.docker.ContainerList(ctx, client.ContainerListOptions{All: includeStopped})
 	if err != nil {
 		return nil, err
 	}
+	containers := listRes.Items
 
 	// 先收集需要 inspect 的镜像 ID，避免重复请求
 	imageIDSet := make(map[string]struct{})
@@ -55,21 +62,69 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 		}
 	}
 
-	imageTags := make(map[string][]string)
-	imageDigests := make(map[string][]string)
-	imageLocalFlags := make(map[string]bool)
+	// 先按需逐个 inspect 并用已有元数据分类，仅在确实需要 ParentID 时才回查镜像列表
+	imageTags := make(map[string][]string, len(imageIDSet))
+	imageDigests := make(map[string][]string, len(imageIDSet))
+	imageLocalFlags := make(map[string]bool, len(imageIDSet))
+	imagePlatforms := make(map[string][3]string, len(imageIDSet))
+	pendingParent := make(map[string]time.Time)
 	for imageID := range imageIDSet {
-		img, err := c.inspectImage(ctx, imageID)
-		if err != nil {
-			// inspect 失败则该镜像的 tags/digests 留空
+		meta, ierr := c.inspectImageMeta(ctx, imageID)
+		if ierr != nil {
 			continue
 		}
+		img := meta.Inspect
 		imageTags[imageID] = img.RepoTags
 		if digests := comparableRepoDigests(img); len(digests) > 0 {
 			imageDigests[imageID] = digests
 		}
-		imageLocalFlags[imageID] = isLocalImage(img, imageDigests[imageID])
+		imagePlatforms[imageID] = [3]string{img.Os, img.Architecture, img.Variant}
+
+		local, needsParent := classifyLocalImage(img, imageDigests[imageID])
+		if !needsParent {
+			imageLocalFlags[imageID] = local
+			continue
+		}
+		if meta.ParentKnown {
+			imageLocalFlags[imageID] = strings.TrimSpace(meta.ParentID) != ""
+			continue
+		}
+		pendingParent[imageID] = meta.FetchedAt
 	}
+
+	if len(pendingParent) > 0 {
+		parentMap := make(map[string]string, len(pendingParent))
+		if imgListRes, lerr := c.docker.ImageList(ctx, client.ImageListOptions{All: true}); lerr == nil {
+			for _, im := range imgListRes.Items {
+				parentMap[im.ID] = im.ParentID
+			}
+			for imageID, fetchedAt := range pendingParent {
+				if parentID, ok := parentMap[imageID]; ok {
+					c.setCachedImageParent(imageID, fetchedAt, parentID)
+					imageLocalFlags[imageID] = strings.TrimSpace(parentID) != ""
+				} else {
+					imageLocalFlags[imageID] = false
+				}
+			}
+		} else {
+			for imageID := range pendingParent {
+				imageLocalFlags[imageID] = false
+			}
+		}
+	}
+
+	// 清理已消失容器的 startedAt 缓存
+	activeIDs := make(map[string]struct{}, len(containers))
+	for _, ct := range containers {
+		activeIDs[ct.ID] = struct{}{}
+	}
+	c.cacheMu.Lock()
+	for id := range c.startedCache {
+		if _, ok := activeIDs[id]; !ok {
+			delete(c.startedCache, id)
+		}
+	}
+	c.cacheMu.Unlock()
 
 	result := make([]ContainerInfo, 0, len(containers))
 	for _, ct := range containers {
@@ -78,26 +133,20 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 			name = strings.TrimPrefix(ct.Names[0], "/")
 		}
 		if name == "" {
-			if len(ct.ID) >= 12 {
-				name = ct.ID[:12]
-			} else {
-				name = ct.ID
-			}
+			name = shortID(ct.ID)
 		}
 
-		// 获取容器详细信息（包含启动时间）
-		var startedAt string
-		if inspect, err := c.docker.ContainerInspect(ctx, ct.ID); err == nil {
-			if inspect.State != nil {
-				startedAt = inspect.State.StartedAt
-			}
-		}
+		stateStr := containerSummaryStateString(ct.State)
+		startedAt := c.getContainerStartedAt(ctx, ct.ID, stateStr)
 
-		// 转换端口信息
 		ports := make([]PortInfo, 0, len(ct.Ports))
 		for _, port := range ct.Ports {
+			ipStr := ""
+			if port.IP.IsValid() {
+				ipStr = port.IP.String()
+			}
 			ports = append(ports, PortInfo{
-				IP:          port.IP,
+				IP:          ipStr,
 				PrivatePort: int(port.PrivatePort),
 				PublicPort:  int(port.PublicPort),
 				Type:        port.Type,
@@ -105,6 +154,12 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 		}
 
 		repoDigests := imageDigests[ct.ImageID]
+		platform := imagePlatforms[ct.ImageID]
+		if ct.ImageManifestDescriptor != nil && ct.ImageManifestDescriptor.Platform != nil &&
+			ct.ImageManifestDescriptor.Platform.OS != "" && ct.ImageManifestDescriptor.Platform.Architecture != "" {
+			p := ct.ImageManifestDescriptor.Platform
+			platform = [3]string{p.OS, p.Architecture, p.Variant}
+		}
 
 		info := ContainerInfo{
 			ID:           ct.ID,
@@ -115,11 +170,14 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 			RepoDigests:  repoDigests,
 			IsLocalImage: imageLocalFlags[ct.ImageID],
 			Labels:       ct.Labels,
-			State:        ct.State,
+			State:        stateStr,
 			Status:       ct.Status,
 			Created:      ct.Created,
 			StartedAt:    startedAt,
 			Ports:        ports,
+			ImageOS:      platform[0],
+			ImageArch:    platform[1],
+			ImageVariant: platform[2],
 		}
 		result = append(result, info)
 	}
@@ -127,13 +185,29 @@ func (c *Client) ListContainers(ctx context.Context, includeStopped bool) ([]Con
 }
 
 func (c *Client) inspectImage(ctx context.Context, imageID string) (image.InspectResponse, error) {
-	img, err := c.docker.ImageInspect(ctx, imageID, client.ImageInspectWithManifests(true))
+	meta, err := c.inspectImageMeta(ctx, imageID)
+	if err != nil {
+		return image.InspectResponse{}, err
+	}
+	return meta.Inspect, nil
+}
+
+func (c *Client) inspectImageMeta(ctx context.Context, imageID string) (cachedImageMeta, error) {
+	if cached, ok := c.getCachedImageMeta(imageID); ok {
+		return cached, nil
+	}
+
+	res, err := c.docker.ImageInspect(ctx, imageID, client.ImageInspectWithManifests(true))
 	if err == nil {
-		return img, nil
+		return c.setCachedImageInspect(imageID, res.InspectResponse), nil
 	}
 
 	// 旧 daemon 不支持 manifests 查询时退回基础 inspect。
-	return c.docker.ImageInspect(ctx, imageID)
+	res, err = c.docker.ImageInspect(ctx, imageID)
+	if err != nil {
+		return cachedImageMeta{}, err
+	}
+	return c.setCachedImageInspect(imageID, res.InspectResponse), nil
 }
 
 func comparableRepoDigests(img image.InspectResponse) []string {
@@ -166,14 +240,28 @@ func comparableRepoDigests(img image.InspectResponse) []string {
 	return digests
 }
 
-func isLocalImage(img image.InspectResponse, comparableDigests []string) bool {
+func classifyLocalImage(img image.InspectResponse, comparableDigests []string) (local bool, needsParent bool) {
+	if len(img.RepoDigests) > 0 {
+		return false, false
+	}
+	if img.Identity != nil && len(img.Identity.Build) > 0 && len(img.Identity.Pull) == 0 {
+		return true, false
+	}
 	if len(comparableDigests) > 0 {
-		return false
+		return false, false
 	}
-	if strings.TrimSpace(img.Parent) != "" {
-		return true
+	if !hasNamedRepoTag(img.RepoTags) {
+		return true, false
 	}
-	return !hasNamedRepoTag(img.RepoTags)
+	return false, true
+}
+
+func isLocalImage(img image.InspectResponse, parentID string, comparableDigests []string) bool {
+	local, needsParent := classifyLocalImage(img, comparableDigests)
+	if !needsParent {
+		return local
+	}
+	return strings.TrimSpace(parentID) != ""
 }
 
 func hasNamedRepoTag(tags []string) bool {
@@ -189,7 +277,11 @@ func hasNamedRepoTag(tags []string) bool {
 
 // InspectContainer 返回容器的详细信息
 func (c *Client) InspectContainer(ctx context.Context, id string) (container.InspectResponse, error) {
-	return c.docker.ContainerInspect(ctx, id)
+	res, err := c.docker.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return container.InspectResponse{}, err
+	}
+	return res.Container, nil
 }
 
 // StopContainer 停止容器（可选超时时间，单位秒）
@@ -200,7 +292,11 @@ func (c *Client) StopContainer(ctx context.Context, id string, timeoutSeconds in
 		timeout = &t
 	}
 
-	return c.docker.ContainerStop(ctx, id, container.StopOptions{Timeout: timeout})
+	_, err := c.docker.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: timeout})
+	if err == nil {
+		c.InvalidateContainerCache(id)
+	}
+	return err
 }
 
 // RestartContainer 重启容器（可选超时时间，单位秒）
@@ -211,40 +307,77 @@ func (c *Client) RestartContainer(ctx context.Context, id string, timeoutSeconds
 		timeout = &t
 	}
 
-	return c.docker.ContainerRestart(ctx, id, container.StopOptions{Timeout: timeout})
+	_, err := c.docker.ContainerRestart(ctx, id, client.ContainerRestartOptions{Timeout: timeout})
+	if err == nil {
+		c.InvalidateContainerCache(id)
+	}
+	return err
 }
 
 // RenameContainer 重命名容器
 func (c *Client) RenameContainer(ctx context.Context, id string, newName string) error {
-	return c.docker.ContainerRename(ctx, id, newName)
+	_, err := c.docker.ContainerRename(ctx, id, client.ContainerRenameOptions{NewName: newName})
+	return err
 }
 
 // CreateContainer 使用给定配置与名称创建容器
 func (c *Client) CreateContainer(ctx context.Context, name string, cfg *container.Config, host *container.HostConfig, netCfg *network.NetworkingConfig) (string, error) {
-	resp, err := c.docker.ContainerCreate(ctx, cfg, host, netCfg, nil, name)
+	return c.CreateContainerWithPlatform(ctx, name, cfg, host, netCfg, nil)
+}
+
+// CreateContainerWithPlatform 使用给定配置、平台与名称创建容器
+func (c *Client) CreateContainerWithPlatform(ctx context.Context, name string, cfg *container.Config, host *container.HostConfig, netCfg *network.NetworkingConfig, platform *ocispec.Platform) (string, error) {
+	resp, err := c.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       host,
+		NetworkingConfig: netCfg,
+		Platform:         platform,
+		Name:             name,
+	})
 	if err != nil {
 		return "", err
 	}
 	return resp.ID, nil
 }
 
+// ConnectContainerToNetwork 将指定容器连接到给定网络（用于多网络附加配置）
+func (c *Client) ConnectContainerToNetwork(ctx context.Context, networkID, containerID string, endpoint *network.EndpointSettings) error {
+	_, err := c.docker.NetworkConnect(ctx, networkID, client.NetworkConnectOptions{
+		Container:      containerID,
+		EndpointConfig: endpoint,
+	})
+	return err
+}
+
 // StartContainer 启动容器
 func (c *Client) StartContainer(ctx context.Context, id string) error {
-	return c.docker.ContainerStart(ctx, id, container.StartOptions{})
+	_, err := c.docker.ContainerStart(ctx, id, client.ContainerStartOptions{})
+	if err == nil {
+		c.InvalidateContainerCache(id)
+	}
+	return err
 }
 
 // RemoveContainer 删除容器
 func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) error {
-	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{Force: force, RemoveVolumes: false, RemoveLinks: false})
+	_, err := c.docker.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: force, RemoveVolumes: false, RemoveLinks: false})
+	if err == nil {
+		c.InvalidateContainerCache(id)
+	}
+	return err
 }
 
 // RemoveContainerWithVolumes 删除容器并清理关联的匿名卷
 func (c *Client) RemoveContainerWithVolumes(ctx context.Context, id string, force bool) error {
-	return c.docker.ContainerRemove(ctx, id, container.RemoveOptions{
+	_, err := c.docker.ContainerRemove(ctx, id, client.ContainerRemoveOptions{
 		Force:         force,
 		RemoveVolumes: true,
-		RemoveLinks:   false, // 清理传统的容器链接（如果存在）
+		RemoveLinks:   false,
 	})
+	if err == nil {
+		c.InvalidateContainerCache(id)
+	}
+	return err
 }
 
 // WaitContainerStopped 等待容器完全停止
@@ -253,48 +386,63 @@ func (c *Client) WaitContainerStopped(ctx context.Context, id string, maxWaitSec
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		inspect, err := c.docker.ContainerInspect(ctx, id)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		res, err := c.docker.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 		if err != nil {
-			// 容器不存在或无法访问，认为已停止
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errdefs.IsNotFound(err) {
+				// 容器已不存在（例如 --rm 自动移除），认为已停止
+				return nil
+			}
+			return err
+		}
+
+		if res.Container.State != nil && !res.Container.State.Running {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(300 * time.Millisecond):
+			}
 			return nil
 		}
 
-		if inspect.State != nil && !inspect.State.Running {
-			// 额外等待一小段时间确保文件系统完全释放
-			time.Sleep(500 * time.Millisecond)
-			return nil
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
 		}
-
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	// 超时后强制杀死容器
-	_ = c.docker.ContainerKill(ctx, id, "SIGKILL")
-	time.Sleep(500 * time.Millisecond)
+	_, _ = c.docker.ContainerKill(ctx, id, client.ContainerKillOptions{Signal: "SIGKILL"})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(300 * time.Millisecond):
+	}
 	return nil
 }
 
 // PruneSystem 清理悬挂的文件系统、网络、镜像等
 func (c *Client) PruneSystem(ctx context.Context) error {
-	// 清理悬挂的卷
-	volFilter := filters.NewArgs()
-	res, err := c.docker.VolumesPrune(ctx, volFilter)
+	res, err := c.docker.VolumePrune(ctx, client.VolumePruneOptions{})
 	logger.Logger.Info("VolumesPrune", zap.Any("res", res))
 	if err != nil {
 		return err
 	}
 
-	// 清理未使用的网络（不支持dangling过滤器，使用空过滤器清理未使用的网络）
-	netFilter := filters.NewArgs()
-	netRes, err := c.docker.NetworksPrune(ctx, netFilter)
+	netRes, err := c.docker.NetworkPrune(ctx, client.NetworkPruneOptions{})
 	logger.Logger.Info("NetworksPrune", zap.Any("res", netRes))
 	if err != nil {
 		return err
 	}
 
-	// 清理悬挂的镜像
-	imgFilter := filters.NewArgs(filters.Arg("dangling", "true"))
-	imgRes, err := c.docker.ImagesPrune(ctx, imgFilter)
+	imgFilter := make(client.Filters).Add("dangling", "true")
+	imgRes, err := c.docker.ImagePrune(ctx, client.ImagePruneOptions{Filters: imgFilter})
 	logger.Logger.Info("ImagesPrune", zap.Any("res", imgRes))
 	return err
 }
@@ -305,21 +453,21 @@ func (c *Client) SafeRemoveImage(ctx context.Context, imageID string) error {
 		return nil
 	}
 
-	// 检查是否有其他容器在使用这个镜像
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{All: true})
+	listRes, err := c.docker.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return err
 	}
 
-	for _, ct := range containers {
+	for _, ct := range listRes.Items {
 		if ct.ImageID == imageID {
-			// 有其他容器使用，不删除镜像
 			return nil
 		}
 	}
 	logger.Logger.Info("没有其他容器使用，可以安全删除镜像", zap.String("imageID", imageID))
-	// 没有其他容器使用，可以安全删除
-	_, err = c.docker.ImageRemove(ctx, imageID, image.RemoveOptions{Force: true})
+	_, err = c.docker.ImageRemove(ctx, imageID, client.ImageRemoveOptions{Force: true})
+	if err == nil {
+		c.InvalidateImageCache()
+	}
 	return err
 }
 
@@ -330,109 +478,135 @@ func (c *Client) SafeRemoveNetworks(ctx context.Context, networkIDs []string) er
 			continue
 		}
 
-		// 检查网络信息
-		netInfo, err := c.docker.NetworkInspect(ctx, networkID, network.InspectOptions{})
+		res, err := c.docker.NetworkInspect(ctx, networkID, client.NetworkInspectOptions{})
 		if err != nil {
-			continue // 网络可能已删除，跳过
+			continue
 		}
+		netInfo := res.Network
 
-		// 跳过系统网络（bridge, host, none）
 		if netInfo.Name == "bridge" || netInfo.Name == "host" || netInfo.Name == "none" {
 			continue
 		}
 
-		// 检查是否有其他容器连接到这个网络
 		if len(netInfo.Containers) > 0 {
-			continue // 有其他容器使用，不删除
+			continue
 		}
 
-		// 安全删除自定义网络
-		_ = c.docker.NetworkRemove(ctx, networkID)
+		_, _ = c.docker.NetworkRemove(ctx, networkID, client.NetworkRemoveOptions{})
 	}
 	return nil
 }
 
+// isHex64 检查卷名是否为 Docker 自动生成的 64 位十六进制匿名卷 ID
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// ResolveMountVolumeName 解析卷挂载名称；若 MountPoint 未填充 Name，则尝试从标准 Docker 卷 _data 路径提取。
+func ResolveMountVolumeName(m container.MountPoint) string {
+	if m.Type != mount.TypeVolume {
+		return ""
+	}
+	if m.Name != "" {
+		return m.Name
+	}
+	if m.Source == "" {
+		return ""
+	}
+	norm := strings.TrimSuffix(strings.ReplaceAll(m.Source, "\\", "/"), "/")
+	if !strings.HasSuffix(norm, "/_data") {
+		return ""
+	}
+	parent := strings.TrimSuffix(norm, "/_data")
+	idx := strings.LastIndex(parent, "/")
+	if idx < 0 {
+		return ""
+	}
+	prefix, volName := parent[:idx], parent[idx+1:]
+	if volName != "" && (prefix == "/volumes" || strings.HasSuffix(prefix, "/volumes")) {
+		return volName
+	}
+	return ""
+}
+
+// isAnonymousVolume 准确判断卷是否为匿名卷，避免误删长名字的命名卷
+func isAnonymousVolume(volName string, labels map[string]string) bool {
+	if labels["com.docker.compose.volume"] != "" {
+		return false
+	}
+	if _, ok := labels["com.docker.volume.anonymous"]; ok {
+		return true
+	}
+	return isHex64(volName)
+}
+
 // SafeRemoveVolumes 安全删除匿名卷（检查是否有其他容器使用）
 func (c *Client) SafeRemoveVolumes(ctx context.Context, volumeNames []string) error {
+	if len(volumeNames) == 0 {
+		return nil
+	}
+
+	// 只调用一次 ContainerList，直接从 ct.Mounts 收集正在使用的卷（避免 O(V*N) ContainerInspect）
+	listRes, err := c.docker.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return err
+	}
+	inUse := make(map[string]struct{})
+	for _, ct := range listRes.Items {
+		for _, m := range ct.Mounts {
+			if volName := ResolveMountVolumeName(m); volName != "" {
+				inUse[volName] = struct{}{}
+			}
+		}
+	}
+
 	for _, volumeName := range volumeNames {
 		if volumeName == "" {
 			continue
 		}
-
-		// 检查卷是否存在
-		_, err := c.docker.VolumeInspect(ctx, volumeName)
-		if err != nil {
-			continue // 卷可能已删除，跳过
-		}
-
-		// 只删除匿名卷（名称像随机字符串的卷，通常很长且包含随机字符）
-		if len(volumeName) < 40 {
-			// 短名称通常是命名卷，跳过
+		if _, used := inUse[volumeName]; used {
 			continue
 		}
 
-		// 检查是否有其他容器使用这个卷
-		containers, err := c.docker.ContainerList(ctx, container.ListOptions{All: true})
+		volRes, err := c.docker.VolumeInspect(ctx, volumeName, client.VolumeInspectOptions{})
 		if err != nil {
 			continue
 		}
 
-		inUse := false
-		for _, ct := range containers {
-			// 检查容器的挂载信息
-			inspect, err := c.docker.ContainerInspect(ctx, ct.ID)
-			if err != nil {
-				continue
-			}
-
-			for _, mount := range inspect.Mounts {
-				if mount.Name == volumeName {
-					inUse = true
-					break
-				}
-			}
-			if inUse {
-				break
-			}
+		if !isAnonymousVolume(volRes.Volume.Name, volRes.Volume.Labels) {
+			continue
 		}
 
-		if !inUse {
-			// 没有其他容器使用，安全删除
-			_ = c.docker.VolumeRemove(ctx, volumeName, false)
-		}
+		_, _ = c.docker.VolumeRemove(ctx, volumeName, client.VolumeRemoveOptions{Force: false})
 	}
 	return nil
 }
 
 // ExportContainer 导出容器为tar格式的文件流
 func (c *Client) ExportContainer(ctx context.Context, id string) (io.ReadCloser, error) {
-	return c.docker.ContainerExport(ctx, id)
+	return c.docker.ContainerExport(ctx, id, client.ContainerExportOptions{})
 }
 
 // CleanupContainerResources 根据容器信息安全清理相关资源
 func (c *Client) CleanupContainerResources(ctx context.Context, containerInfo container.InspectResponse) error {
-	// 1. 清理镜像
 	if containerInfo.Image != "" {
 		_ = c.SafeRemoveImage(ctx, containerInfo.Image)
 	}
 
-	// // 2. 清理自定义网络 不清理网络
-	// if containerInfo.NetworkSettings != nil && containerInfo.NetworkSettings.Networks != nil {
-	// 	var networkIDs []string
-	// 	for _, netEndpoint := range containerInfo.NetworkSettings.Networks {
-	// 		if netEndpoint.NetworkID != "" {
-	// 			networkIDs = append(networkIDs, netEndpoint.NetworkID)
-	// 		}
-	// 	}
-	// 	_ = c.SafeRemoveNetworks(ctx, networkIDs)
-	// }
-
-	// 3. 清理匿名卷
 	if len(containerInfo.Mounts) > 0 {
 		var volumeNames []string
-		for _, mount := range containerInfo.Mounts {
-			if mount.Type == "volume" && mount.Name != "" {
-				volumeNames = append(volumeNames, mount.Name)
+		for _, m := range containerInfo.Mounts {
+			if volName := ResolveMountVolumeName(m); volName != "" {
+				volumeNames = append(volumeNames, volName)
 			}
 		}
 		_ = c.SafeRemoveVolumes(ctx, volumeNames)
@@ -443,7 +617,7 @@ func (c *Client) CleanupContainerResources(ctx context.Context, containerInfo co
 
 // ContainerLogs 获取容器日志流
 func (c *Client) ContainerLogs(ctx context.Context, containerID string, since string, timestamps bool, tail string, follow bool) (io.ReadCloser, error) {
-	options := container.LogsOptions{
+	options := client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Since:      since,
@@ -455,24 +629,28 @@ func (c *Client) ContainerLogs(ctx context.Context, containerID string, since st
 }
 
 // ContainerExecCreate 在容器中创建 exec 实例
-func (c *Client) ContainerExecCreate(ctx context.Context, containerID string, config container.ExecOptions) (container.ExecCreateResponse, error) {
-	return c.docker.ContainerExecCreate(ctx, containerID, config)
+func (c *Client) ContainerExecCreate(ctx context.Context, containerID string, config client.ExecCreateOptions) (client.ExecCreateResult, error) {
+	return c.docker.ExecCreate(ctx, containerID, config)
 }
 
 // ContainerExecAttach 附加到 exec 实例
-func (c *Client) ContainerExecAttach(ctx context.Context, execID string, config container.ExecStartOptions) (types.HijackedResponse, error) {
-	return c.docker.ContainerExecAttach(ctx, execID, config)
+func (c *Client) ContainerExecAttach(ctx context.Context, execID string, config client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	return c.docker.ExecAttach(ctx, execID, config)
 }
 
 // ContainerExecResize 调整 exec 实例的终端大小
-func (c *Client) ContainerExecResize(ctx context.Context, execID string, options container.ResizeOptions) error {
-	return c.docker.ContainerExecResize(ctx, execID, options)
+func (c *Client) ContainerExecResize(ctx context.Context, execID string, options client.ExecResizeOptions) error {
+	_, err := c.docker.ExecResize(ctx, execID, options)
+	return err
 }
 
-func (c *Client) ContainerStats(ctx context.Context, containerID string, stream bool) (container.StatsResponseReader, error) {
-	resp, err := c.docker.ContainerStats(ctx, containerID, stream)
+func (c *Client) ContainerStats(ctx context.Context, containerID string, stream bool) (client.ContainerStatsResult, error) {
+	resp, err := c.docker.ContainerStats(ctx, containerID, client.ContainerStatsOptions{
+		Stream:                stream,
+		IncludePreviousSample: false,
+	})
 	if err != nil {
-		return container.StatsResponseReader{}, err
+		return client.ContainerStatsResult{}, err
 	}
 	return resp, nil
 }

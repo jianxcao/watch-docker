@@ -26,9 +26,12 @@
             </n-gi>
             <n-gi>
               <n-form-item label="退出时自动移除容器">
-                <n-switch v-model:value="formValue.autoRemove" />
+                <n-switch
+                  v-model:value="formValue.autoRemove"
+                  @update:value="handleAutoRemoveChange"
+                />
                 <template #feedback>
-                  <n-text depth="3" style="font-size: 12px"> 容器退出时自动删除 </n-text>
+                  <n-text depth="3" style="font-size: 12px"> 容器退出时自动删除（与重启策略互斥） </n-text>
                 </template>
               </n-form-item></n-gi
             >
@@ -46,6 +49,7 @@
                 <n-select
                   v-model:value="formValue.restartPolicyName"
                   :options="restartPolicyOptions"
+                  :disabled="formValue.autoRemove"
                 />
               </n-form-item>
             </n-gi>
@@ -56,7 +60,7 @@
               >
                 <n-input-number
                   v-model:value="formValue.restartPolicyMaxRetry"
-                  :disabled="formValue.restartPolicyName !== 'on-failure'"
+                  :disabled="formValue.autoRemove || formValue.restartPolicyName !== 'on-failure'"
                   :min="0"
                   placeholder="0 表示无限制"
                   class="w-full"
@@ -155,6 +159,15 @@ const formValue = defineModel<RuntimeResourceFormValue>({
     shmSizeMB: 0,
   }),
 })
+
+const handleAutoRemoveChange = (val: boolean) => {
+  if (val) {
+    formValue.value.restartPolicyName = ''
+    formValue.value.restartPolicyMaxRetry = 0
+  } else if (!formValue.value.restartPolicyName) {
+    formValue.value.restartPolicyName = 'unless-stopped'
+  }
+}
 
 const formRef = ref<FormInst | null>(null)
 

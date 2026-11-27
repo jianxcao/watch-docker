@@ -6,12 +6,14 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/go-connections/nat"
+	"net/netip"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
@@ -41,7 +43,7 @@ func (s *Server) setupContainerRoutes(protected *gin.RouterGroup) {
 	protected.GET("/containers/:id/export", s.handleExportContainer())
 	protected.POST("/containers/import", s.handleImportContainer())
 	protected.POST("/system/prune", s.handlePruneSystem())
-	protected.GET("/update/all", s.handleUpdateAll())
+	protected.POST("/update/all", s.handleUpdateAll())
 
 	// 文件操作路由组
 	files := protected.Group("/containers/:id/files")
@@ -194,6 +196,40 @@ type EndpointIPAMConfig struct {
 	IPv6Address string `json:"ipv6Address"`
 }
 
+// parseContainerPort 解析容器端口字符串，未指定协议时默认 tcp。
+func parseContainerPort(portStr string) (network.Port, error) {
+	p := strings.TrimSpace(portStr)
+	if p == "" {
+		return network.Port{}, fmt.Errorf("empty port")
+	}
+	if !strings.Contains(p, "/") {
+		p += "/tcp"
+	}
+	return network.ParsePort(p)
+}
+
+// parseOptionalAddr 解析可选 IP 字符串；空字符串返回零值 netip.Addr。
+func parseOptionalAddr(raw string) (netip.Addr, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return netip.Addr{}, nil
+	}
+	return netip.ParseAddr(trimmed)
+}
+
+func isHexString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 // handleCreateContainer 处理容器创建
 func (s *Server) handleCreateContainer() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -205,6 +241,7 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 		}
 
 		// 验证必填字段
+		req.Image = strings.TrimSpace(req.Image)
 		if req.Image == "" {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "镜像名称不能为空"))
 			return
@@ -235,25 +272,42 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 
 		// 设置暴露端口
 		if len(req.ExposedPorts) > 0 {
-			config.ExposedPorts = make(nat.PortSet)
+			config.ExposedPorts = make(network.PortSet, len(req.ExposedPorts))
 			for port := range req.ExposedPorts {
-				p, err := nat.NewPort("tcp", port)
-				if err == nil {
-					config.ExposedPorts[p] = struct{}{}
+				p, err := parseContainerPort(port)
+				if err != nil {
+					c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("无效的暴露端口 %q: %v", port, err)))
+					return
 				}
+				config.ExposedPorts[p] = struct{}{}
+			}
+		}
+
+		// 解析 DNS 地址
+		var dnsAddrs []netip.Addr
+		if len(req.Dns) > 0 {
+			dnsAddrs = make([]netip.Addr, 0, len(req.Dns))
+			for _, dnsStr := range req.Dns {
+				addr, err := netip.ParseAddr(strings.TrimSpace(dnsStr))
+				if err != nil {
+					c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("无效的 DNS 地址 %q: %v", dnsStr, err)))
+					return
+				}
+				dnsAddrs = append(dnsAddrs, addr)
 			}
 		}
 
 		// 构建主机配置
+		trimmedNetMode := strings.TrimSpace(req.NetworkMode)
 		hostConfig := &container.HostConfig{
 			Binds:           req.Binds,                                                                                                                                  // 数据卷绑定
 			RestartPolicy:   container.RestartPolicy{Name: container.RestartPolicyMode(req.RestartPolicy.Name), MaximumRetryCount: req.RestartPolicy.MaximumRetryCount}, // 重启策略
 			AutoRemove:      req.AutoRemove,                                                                                                                             // 容器退出时自动删除
-			NetworkMode:     container.NetworkMode(req.NetworkMode),                                                                                                     // 网络模式
+			NetworkMode:     container.NetworkMode(trimmedNetMode),                                                                                                      // 网络模式
 			Privileged:      req.Privileged,                                                                                                                             // 特权模式
 			PublishAllPorts: req.PublishAllPorts,                                                                                                                        // 发布所有端口
 			ReadonlyRootfs:  req.ReadonlyRootfs,                                                                                                                         // 只读根文件系统
-			DNS:             req.Dns,                                                                                                                                    // DNS 服务器
+			DNS:             dnsAddrs,                                                                                                                                   // DNS 服务器
 			DNSSearch:       req.DnsSearch,                                                                                                                              // DNS 搜索域
 			DNSOptions:      req.DnsOptions,                                                                                                                             // DNS 选项
 			ExtraHosts:      req.ExtraHosts,                                                                                                                             // 额外的主机映射
@@ -278,28 +332,32 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			Runtime: req.Runtime,                      // 运行时(如 nvidia)
 		}
 
-		// 设置端口绑定(将主机端口映射到容器端口)
+		// 设置端口绑定(将主机端口映射到容器端口，同时自动声明 ExposedPorts)
 		if len(req.PortBindings) > 0 {
-			hostConfig.PortBindings = make(nat.PortMap)
+			hostConfig.PortBindings = make(network.PortMap, len(req.PortBindings))
+			if config.ExposedPorts == nil {
+				config.ExposedPorts = make(network.PortSet, len(req.PortBindings))
+			}
 			for portStr, bindings := range req.PortBindings {
-				port, err := nat.NewPort("tcp", portStr)
+				port, err := parseContainerPort(portStr)
 				if err != nil {
-					// 尝试解析端口字符串(可能包含协议,格式: 80/tcp)
-					parts := strings.Split(portStr, "/")
-					if len(parts) == 2 {
-						port, err = nat.NewPort(parts[1], parts[0])
-					}
+					c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("无效的端口配置 %q: %v", portStr, err)))
+					return
 				}
-				if err == nil {
-					var portBindings []nat.PortBinding
-					for _, binding := range bindings {
-						portBindings = append(portBindings, nat.PortBinding{
-							HostIP:   binding.HostIP,   // 主机 IP 地址
-							HostPort: binding.HostPort, // 主机端口
-						})
+				config.ExposedPorts[port] = struct{}{}
+				portBindings := make([]network.PortBinding, 0, len(bindings))
+				for _, binding := range bindings {
+					hostIP, err := parseOptionalAddr(binding.HostIP)
+					if err != nil {
+						c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("无效的主机 IP %q: %v", binding.HostIP, err)))
+						return
 					}
-					hostConfig.PortBindings[port] = portBindings
+					portBindings = append(portBindings, network.PortBinding{
+						HostIP:   hostIP,
+						HostPort: binding.HostPort,
+					})
 				}
+				hostConfig.PortBindings[port] = portBindings
 			}
 		}
 
@@ -329,33 +387,153 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			}
 		}
 
-		// 构建网络配置(配置容器连接到的网络)
+		// 构建网络配置(主网络写入 Create，其余网络创建后通过 ConnectNetwork 附加)
 		var networkConfig *network.NetworkingConfig
-		if req.NetworkConfig != nil && req.NetworkConfig.EndpointsConfig != nil {
-			networkConfig = &network.NetworkingConfig{
-				EndpointsConfig: make(map[string]*network.EndpointSettings),
+		var extraNetworks map[string]*network.EndpointSettings
+		if req.NetworkConfig != nil && len(req.NetworkConfig.EndpointsConfig) > 0 &&
+			!hostConfig.NetworkMode.IsHost() && !hostConfig.NetworkMode.IsNone() && !hostConfig.NetworkMode.IsContainer() {
+			netNames := make([]string, 0, len(req.NetworkConfig.EndpointsConfig))
+			for netName := range req.NetworkConfig.EndpointsConfig {
+				netNames = append(netNames, netName)
 			}
-			for netName, endpoint := range req.NetworkConfig.EndpointsConfig {
-				endpointSettings := &network.EndpointSettings{
-					Links:               endpoint.Links,               // 容器链接
-					Aliases:             endpoint.Aliases,             // 网络别名
-					NetworkID:           endpoint.NetworkID,           // 网络 ID
-					EndpointID:          endpoint.EndpointID,          // 端点 ID
-					Gateway:             endpoint.Gateway,             // 网关地址
-					IPAddress:           endpoint.IPAddress,           // IPv4 地址
-					IPPrefixLen:         endpoint.IPPrefixLen,         // IPv4 前缀长度
-					IPv6Gateway:         endpoint.IPv6Gateway,         // IPv6 网关
-					GlobalIPv6Address:   endpoint.GlobalIPv6Address,   // 全局 IPv6 地址
-					GlobalIPv6PrefixLen: endpoint.GlobalIPv6PrefixLen, // IPv6 前缀长度
-					MacAddress:          endpoint.MacAddress,          // MAC 地址
+			sort.Strings(netNames)
+
+			buildEndpoint := func(netName string, endpoint *EndpointSettings) (*network.EndpointSettings, error) {
+				if endpoint == nil {
+					return &network.EndpointSettings{}, nil
+				}
+				gw, err := parseOptionalAddr(endpoint.Gateway)
+				if err != nil {
+					return nil, fmt.Errorf("网络 %s 网关无效: %w", netName, err)
+				}
+				ipAddr, err := parseOptionalAddr(endpoint.IPAddress)
+				if err != nil {
+					return nil, fmt.Errorf("网络 %s IPv4 地址无效: %w", netName, err)
+				}
+				ip6Gw, err := parseOptionalAddr(endpoint.IPv6Gateway)
+				if err != nil {
+					return nil, fmt.Errorf("网络 %s IPv6 网关无效: %w", netName, err)
+				}
+				ip6Addr, err := parseOptionalAddr(endpoint.GlobalIPv6Address)
+				if err != nil {
+					return nil, fmt.Errorf("网络 %s IPv6 地址无效: %w", netName, err)
+				}
+				macAddr, err := dockercli.ParseMACAddress(endpoint.MacAddress)
+				if err != nil {
+					return nil, fmt.Errorf("网络 %s MAC 地址无效: %w", netName, err)
+				}
+				ep := &network.EndpointSettings{
+					Links:               endpoint.Links,
+					Aliases:             endpoint.Aliases,
+					NetworkID:           endpoint.NetworkID,
+					EndpointID:          endpoint.EndpointID,
+					Gateway:             gw,
+					IPAddress:           ipAddr,
+					IPPrefixLen:         endpoint.IPPrefixLen,
+					IPv6Gateway:         ip6Gw,
+					GlobalIPv6Address:   ip6Addr,
+					GlobalIPv6PrefixLen: endpoint.GlobalIPv6PrefixLen,
+					MacAddress:          macAddr,
 				}
 				if endpoint.IPAMConfig != nil {
-					endpointSettings.IPAMConfig = &network.EndpointIPAMConfig{
-						IPv4Address: endpoint.IPAMConfig.IPv4Address, // 自定义 IPv4 地址
-						IPv6Address: endpoint.IPAMConfig.IPv6Address, // 自定义 IPv6 地址
+					v4, err := parseOptionalAddr(endpoint.IPAMConfig.IPv4Address)
+					if err != nil {
+						return nil, fmt.Errorf("网络 %s IPAM IPv4 无效: %w", netName, err)
+					}
+					v6, err := parseOptionalAddr(endpoint.IPAMConfig.IPv6Address)
+					if err != nil {
+						return nil, fmt.Errorf("网络 %s IPAM IPv6 无效: %w", netName, err)
+					}
+					ep.IPAMConfig = &network.EndpointIPAMConfig{
+						IPv4Address: v4,
+						IPv6Address: v6,
 					}
 				}
-				networkConfig.EndpointsConfig[netName] = endpointSettings
+				return ep, nil
+			}
+
+			primaryName := netNames[0]
+			hasPrimaryEndpoint := true
+			if rawMode := trimmedNetMode; rawMode != "" {
+				if rawMode == "default" {
+					if _, hasDefault := req.NetworkConfig.EndpointsConfig["default"]; !hasDefault {
+						if _, hasBridge := req.NetworkConfig.EndpointsConfig["bridge"]; hasBridge {
+							rawMode = "bridge"
+						}
+					}
+				}
+				if _, ok := req.NetworkConfig.EndpointsConfig[rawMode]; ok {
+					primaryName = rawMode
+				} else {
+					creatingNets := make(map[string]bool, len(req.NetworksToCreate))
+					for _, n := range req.NetworksToCreate {
+						if name := strings.TrimSpace(n.Name); name != "" {
+							creatingNets[name] = true
+						}
+					}
+					var exactIDMatches, prefixIDMatches []string
+					allowPrefixMatch := len(rawMode) >= 4 && isHexString(rawMode) && !creatingNets[rawMode]
+					for _, netName := range netNames {
+						ep := req.NetworkConfig.EndpointsConfig[netName]
+						if ep == nil {
+							continue
+						}
+						netID := strings.TrimSpace(ep.NetworkID)
+						if netID == "" {
+							continue
+						}
+						if netID == rawMode {
+							exactIDMatches = append(exactIDMatches, netName)
+						} else if allowPrefixMatch && strings.HasPrefix(netID, rawMode) {
+							prefixIDMatches = append(prefixIDMatches, netName)
+						}
+					}
+					switch {
+					case len(exactIDMatches) > 1:
+						c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("主网络 %q 匹配到多个端点", rawMode)))
+						return
+					case len(exactIDMatches) == 1:
+						primaryName = exactIDMatches[0]
+					case len(prefixIDMatches) > 1:
+						c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, fmt.Sprintf("主网络 ID 前缀 %q 存在歧义", rawMode)))
+						return
+					case len(prefixIDMatches) == 1:
+						primaryName = prefixIDMatches[0]
+					default:
+						primaryName = rawMode
+						hasPrimaryEndpoint = false
+					}
+				}
+			}
+
+			hostConfig.NetworkMode = container.NetworkMode(primaryName)
+			if hasPrimaryEndpoint {
+				primaryEp, err := buildEndpoint(primaryName, req.NetworkConfig.EndpointsConfig[primaryName])
+				if err != nil {
+					c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
+					return
+				}
+				networkConfig = &network.NetworkingConfig{
+					EndpointsConfig: map[string]*network.EndpointSettings{
+						primaryName: primaryEp,
+					},
+				}
+			}
+
+			extraNetworks = make(map[string]*network.EndpointSettings, len(netNames))
+			for _, netName := range netNames {
+				if hasPrimaryEndpoint && netName == primaryName {
+					continue
+				}
+				ep, err := buildEndpoint(netName, req.NetworkConfig.EndpointsConfig[netName])
+				if err != nil {
+					c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, err.Error()))
+					return
+				}
+				extraNetworks[netName] = ep
+			}
+			if len(extraNetworks) == 0 {
+				extraNetworks = nil
 			}
 		}
 
@@ -489,6 +667,35 @@ func (s *Server) handleCreateContainer() gin.HandlerFunc {
 			return
 		}
 
+		// 若指定了多个网络，附加其余网络（失败时回滚已创建的容器）
+		if len(extraNetworks) > 0 {
+			extraNames := make([]string, 0, len(extraNetworks))
+			for netName := range extraNetworks {
+				extraNames = append(extraNames, netName)
+			}
+			sort.Strings(extraNames)
+			for _, netName := range extraNames {
+				if err := s.docker.ConnectContainerToNetwork(ctx, netName, containerID, extraNetworks[netName]); err != nil {
+					s.logger.Error("connect extra network failed",
+						zap.String("name", req.Name),
+						zap.String("containerID", containerID),
+						zap.String("network", netName),
+						zap.Error(err))
+					rollbackCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+					removeErr := s.docker.RemoveContainer(rollbackCtx, containerID, true)
+					cancelRollback()
+					if removeErr != nil {
+						s.logger.Error("创建容器后回滚失败",
+							zap.String("containerID", containerID),
+							zap.String("network", netName),
+							zap.Error(removeErr))
+					}
+					c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, fmt.Sprintf("连接网络 %s 失败: %s", netName, err.Error())))
+					return
+				}
+			}
+		}
+
 		s.logger.Info("container created successfully",
 			zap.String("name", req.Name),
 			zap.String("containerID", containerID))
@@ -526,6 +733,7 @@ func (s *Server) handleUpdateContainer() gin.HandlerFunc {
 		id := c.Param("id")
 		var body reqBody
 		_ = c.ShouldBindJSON(&body)
+		body.Image = strings.TrimSpace(body.Image)
 		if body.Image == "" {
 			// try inspect to get current image
 			info, err := s.docker.InspectContainer(c.Request.Context(), id)
@@ -534,16 +742,23 @@ func (s *Server) handleUpdateContainer() gin.HandlerFunc {
 				c.JSON(http.StatusOK, NewErrorResCode(CodeImageRequired, "image required"))
 				return
 			}
-			body.Image = info.Config.Image
+			if info.Config != nil {
+				body.Image = strings.TrimSpace(info.Config.Image)
+			}
+		}
+		if body.Image == "" {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeImageRequired, "image required"))
+			return
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Minute)
 		defer cancel()
-		if err := s.updater.UpdateContainer(ctx, id, body.Image); err != nil {
+		newID, err := s.updater.UpdateContainer(ctx, id, body.Image)
+		if err != nil {
 			s.logger.Error("update container", zap.String("container", id), zap.String("image", body.Image), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(codeForUpdateErr(err), err.Error()))
 			return
 		}
-		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true}))
+		c.JSON(http.StatusOK, NewSuccessRes(gin.H{"ok": true, "newContainerId": newID}))
 	}
 }
 
@@ -567,14 +782,14 @@ func (s *Server) handleBatchUpdate() gin.HandlerFunc {
 		failed := make(map[string]string)
 		failedCodes := make(map[string]int)
 		for _, st := range statuses {
-			if st.Skipped || st.Status != "UpdateAvailable" {
+			if st.Skipped || st.SkippedUpdate || st.Status != "UpdateAvailable" {
 				continue
 			}
 			if !st.Running && !cfg.Docker.IncludeStopped {
 				continue
 			}
 			uctx, cancelOne := context.WithTimeout(ctx, 5*time.Minute)
-			if err := s.updater.UpdateContainer(uctx, st.ID, st.Image); err != nil {
+			if _, err := s.updater.UpdateContainer(uctx, st.ID, st.Image); err != nil {
 				failed[st.Name] = err.Error()
 				failedCodes[st.Name] = codeForUpdateErr(err)
 				s.logger.Error("auto update failed", zap.String("container", st.Name), zap.String("image", st.Image), zap.Error(err))
@@ -787,9 +1002,9 @@ func (s *Server) handleDeleteContainer() gin.HandlerFunc {
 		// 删除关联的卷
 		if removeVolumes && len(containerInfo.Mounts) > 0 {
 			var volumeNames []string
-			for _, mount := range containerInfo.Mounts {
-				if mount.Type == "volume" && mount.Name != "" {
-					volumeNames = append(volumeNames, mount.Name)
+			for _, m := range containerInfo.Mounts {
+				if volName := dockercli.ResolveMountVolumeName(m); volName != "" {
+					volumeNames = append(volumeNames, volName)
 				}
 			}
 			if len(volumeNames) > 0 {
@@ -1104,77 +1319,7 @@ func (s *Server) handleUpdateContainerFileContent() gin.HandlerFunc {
 	}
 }
 
-// createTarArchive 创建简单的 tar 包（用于文件上传）
-func createTarArchive(filename string, content []byte) ([]byte, error) {
-	// TAR header 512 字节
-	header := make([]byte, 512)
-
-	// 文件名 (100 bytes)
-	nameBytes := []byte(filename)
-	if len(nameBytes) > 100 {
-		return nil, fmt.Errorf("filename too long (max 100 bytes)")
-	}
-	copy(header[0:], nameBytes)
-
-	// 文件模式 (8 bytes) - 0644
-	copy(header[100:], "0000644\x00")
-
-	// UID (8 bytes)
-	copy(header[108:], "0000000\x00")
-
-	// GID (8 bytes)
-	copy(header[116:], "0000000\x00")
-
-	// 文件大小 (12 bytes octal)
-	sizeStr := fmt.Sprintf("%011o\x00", len(content))
-	copy(header[124:], sizeStr)
-
-	// 修改时间 (12 bytes octal)
-	mtimeStr := fmt.Sprintf("%011o\x00", time.Now().Unix())
-	copy(header[136:], mtimeStr)
-
-	// Checksum 占位符 (8 bytes)
-	copy(header[148:], "        ")
-
-	// 类型标志 - '0' 表示普通文件
-	header[156] = '0'
-
-	// Magic - "ustar\x00"
-	copy(header[257:], "ustar\x00")
-
-	// Version - "00"
-	copy(header[263:], "00")
-
-	// Owner name (32 bytes)
-	copy(header[265:], "root")
-
-	// Group name (32 bytes)
-	copy(header[297:], "root")
-
-	// 计算校验和
-	checksum := 0
-	for i := 0; i < 512; i++ {
-		checksum += int(header[i])
-	}
-	checksumStr := fmt.Sprintf("%06o\x00 ", checksum)
-	copy(header[148:], checksumStr)
-
-	// 计算填充到 512 字节边界
-	paddingSize := (512 - (len(content) % 512)) % 512
-	padding := make([]byte, paddingSize)
-
-	// 结束标记（两个 512 字节的零块）
-	endMarker := make([]byte, 1024)
-
-	// 组合所有部分
-	result := append(header, content...)
-	result = append(result, padding...)
-	result = append(result, endMarker...)
-
-	return result, nil
-}
-
-// handleUploadContainerFiles 处理多文件上传
+// handleUploadContainerFiles 处理多文件上传（流式打包为 tar 上传，避免整文件读入内存）
 func (s *Server) handleUploadContainerFiles() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		containerID := c.Param("id")
@@ -1202,23 +1347,9 @@ func (s *Server) handleUploadContainerFiles() gin.HandlerFunc {
 				continue
 			}
 
-			// 读取文件内容
-			content, err := io.ReadAll(file)
-			file.Close() // 立即关闭文件
-			if err != nil {
-				errors = append(errors, fmt.Sprintf("%s: failed to read", fileHeader.Filename))
-				continue
-			}
-
-			// 创建 tar 包
-			tarData, err := createTarArchive(fileHeader.Filename, content)
-			if err != nil {
-				errors = append(errors, fmt.Sprintf("%s: failed to create archive", fileHeader.Filename))
-				continue
-			}
-
-			// 上传到容器
-			err = s.docker.PutContainerArchive(c.Request.Context(), containerID, path, tarData)
+			// 流式上传到容器
+			err = s.docker.PutSingleFileStream(c.Request.Context(), containerID, path, fileHeader.Filename, fileHeader.Size, file)
+			file.Close()
 			if err != nil {
 				errors = append(errors, fmt.Sprintf("%s: %v", fileHeader.Filename, err))
 				continue
@@ -1288,40 +1419,24 @@ func (s *Server) handleDownloadContainerFile() gin.HandlerFunc {
 			return
 		}
 
-		// 优先使用下载令牌验证
+		// 优先使用下载令牌验证（原子性消费，避免 TOCTOU 竞态重放）
 		if downloadToken != "" {
 			tokenManager := auth.GetDownloadTokenManager()
-			if err := tokenManager.ValidateDownloadToken(downloadToken, containerID, path); err != nil {
-				s.logger.Warn("invalid download token", zap.Error(err), zap.String("token", downloadToken))
+			if err := tokenManager.ConsumeDownloadToken(downloadToken, containerID, path); err != nil {
+				s.logger.Warn("invalid download token", zap.Error(err))
 				c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "无效或已过期的下载令牌"))
 				return
 			}
-			// 标记令牌已使用（用后即焚）
-			defer tokenManager.MarkTokenUsed(downloadToken)
-		} else {
-			// 使用常规 token 验证
-			if auth.IsAuthEnabled() {
-				token := c.Query("token")
-				if token == "" {
-					authHeader := c.GetHeader("Authorization")
-					if authHeader != "" {
-						tokenParts := strings.SplitN(authHeader, " ", 2)
-						if len(tokenParts) == 2 && tokenParts[0] == "Bearer" {
-							token = tokenParts[1]
-						}
-					}
-				}
-
-				if token == "" {
-					c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "需要登录"))
-					return
-				}
-
-				// 验证 token
-				if _, err := auth.ValidateToken(token); err != nil {
-					c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "无效的token"))
-					return
-				}
+		} else if auth.IsAuthEnabled() {
+			token, err := auth.ExtractTokenFromRequest(c)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "需要登录"))
+				return
+			}
+			// 仅接受完整访问令牌，拒绝 2FA 临时令牌直接下载容器文件
+			if _, err := auth.ValidateFullAccessClaims(token); err != nil {
+				c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "无效的token"))
+				return
 			}
 		}
 
@@ -1334,8 +1449,8 @@ func (s *Server) handleDownloadContainerFile() gin.HandlerFunc {
 		}
 		defer reader.Close()
 
-		// 获取文件名
-		filename := filepath.Base(path)
+		// 获取文件名（逐字保留空格，仅过滤头注入字符）
+		filename := strings.NewReplacer("\"", "_", "\r", "", "\n", "").Replace(filepath.Base(path))
 
 		// 设置响应头
 		c.Header("Content-Type", "application/x-tar")

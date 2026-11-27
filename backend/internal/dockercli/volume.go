@@ -3,12 +3,12 @@ package dockercli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/volume"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"go.uber.org/zap"
 )
 
@@ -72,14 +72,13 @@ type VolumePruneResponse struct {
 
 // ListVolumes 获取Volume列表
 func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
-	volumeList, err := c.docker.VolumeList(ctx, volume.ListOptions{})
+	volListRes, err := c.docker.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list volumes: %w", err)
 	}
 
-	// 使用 ContainerList 统计 Volume 引用计数（性能更好）
 	startTime := time.Now()
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{All: true})
+	ctrListRes, err := c.docker.ContainerList(ctx, client.ContainerListOptions{All: true})
 	elapsed := time.Since(startTime)
 
 	if err != nil {
@@ -88,31 +87,29 @@ func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
 			zap.Error(err))
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
-	logger.Logger.Info("ContainerList API 调用成功",
+	containers := ctrListRes.Items
+	logger.Logger.Debug("ContainerList API 调用成功",
 		zap.Duration("elapsed", elapsed),
 		zap.Int("containerCount", len(containers)))
 
-	// 构建 Volume 名称到引用计数的映射
 	volumeRefCount := make(map[string]int)
 	for _, ctr := range containers {
-		for _, mount := range ctr.Mounts {
-			if mount.Type == "volume" && mount.Name != "" {
-				volumeRefCount[mount.Name]++
+		for _, m := range ctr.Mounts {
+			if volName := ResolveMountVolumeName(m); volName != "" {
+				volumeRefCount[volName]++
 			}
 		}
 	}
 
-	var volumes []VolumeInfo
+	volumes := make([]VolumeInfo, 0, len(volListRes.Items))
 	var totalSize int64
 	var usedCount, unusedCount int
 
-	for _, vol := range volumeList.Volumes {
-		// 从 volumeRefCount 中获取引用计数
+	for _, vol := range volListRes.Items {
 		refCount := volumeRefCount[vol.Name]
 
-		// 获取 Volume 大小（如果可用）
 		var size int64
-		if vol.UsageData != nil {
+		if vol.UsageData != nil && vol.UsageData.Size > 0 {
 			size = vol.UsageData.Size
 		}
 		totalSize += size
@@ -134,7 +131,6 @@ func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
 			Status:     vol.Status,
 		}
 
-		// 添加使用数据
 		if size > 0 || refCount > 0 {
 			volumeInfo.UsageData = &VolumeUsageData{
 				Size:     size,
@@ -145,33 +141,30 @@ func (c *Client) ListVolumes(ctx context.Context) (*VolumeListResponse, error) {
 		volumes = append(volumes, volumeInfo)
 	}
 
-	response := &VolumeListResponse{
+	return &VolumeListResponse{
 		Volumes:     volumes,
 		TotalCount:  len(volumes),
 		TotalSize:   totalSize,
 		UsedCount:   usedCount,
 		UnusedCount: unusedCount,
-	}
-
-	return response, nil
+	}, nil
 }
 
 // GetVolume 获取Volume详情
 func (c *Client) GetVolume(ctx context.Context, name string) (*VolumeDetailResponse, error) {
-	vol, err := c.docker.VolumeInspect(ctx, name)
+	volRes, err := c.docker.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect volume: %w", err)
 	}
+	vol := volRes.Volume
 
-	// 获取使用该Volume的容器
 	containers, err := c.GetVolumeContainers(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get volume containers: %w", err)
 	}
 
-	// 计算大小和引用计数
 	var size int64
-	if vol.UsageData != nil {
+	if vol.UsageData != nil && vol.UsageData.Size > 0 {
 		size = vol.UsageData.Size
 	}
 
@@ -186,51 +179,43 @@ func (c *Client) GetVolume(ctx context.Context, name string) (*VolumeDetailRespo
 		Status:     vol.Status,
 	}
 
-	if vol.UsageData != nil || len(containers) > 0 {
+	if size > 0 || len(containers) > 0 {
 		volumeInfo.UsageData = &VolumeUsageData{
 			Size:     size,
 			RefCount: len(containers),
 		}
 	}
 
-	response := &VolumeDetailResponse{
+	return &VolumeDetailResponse{
 		Volume:     volumeInfo,
 		Containers: containers,
-	}
-
-	return response, nil
+	}, nil
 }
 
 // GetVolumeContainers 获取使用该Volume的容器列表
 func (c *Client) GetVolumeContainers(ctx context.Context, volumeName string) ([]ContainerRef, error) {
-	// 使用 Docker API 直接获取容器列表（包含 Mounts 信息）
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{All: true})
+	ctrListRes, err := c.docker.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 
 	var refs []ContainerRef
-	for _, ctr := range containers {
-		for _, mount := range ctr.Mounts {
-			if mount.Type == "volume" && mount.Name == volumeName {
-				// 处理容器名称（去掉前缀 "/"）
+	for _, ctr := range ctrListRes.Items {
+		for _, m := range ctr.Mounts {
+			if ResolveMountVolumeName(m) == volumeName {
 				containerName := ""
 				if len(ctr.Names) > 0 {
-					containerName = ctr.Names[0]
-					if len(containerName) > 0 && containerName[0] == '/' {
-						containerName = containerName[1:]
-					}
+					containerName = strings.TrimPrefix(ctr.Names[0], "/")
 				}
 
-				ref := ContainerRef{
-					ID:          ctr.ID[:12], // 短ID
+				refs = append(refs, ContainerRef{
+					ID:          shortID(ctr.ID),
 					Name:        containerName,
 					Image:       ctr.Image,
-					Running:     ctr.State == "running",
-					Destination: mount.Destination,
-					Mode:        mount.Mode,
-				}
-				refs = append(refs, ref)
+					Running:     ctr.State == container.StateRunning,
+					Destination: m.Destination,
+					Mode:        m.Mode,
+				})
 			}
 		}
 	}
@@ -240,19 +225,20 @@ func (c *Client) GetVolumeContainers(ctx context.Context, volumeName string) ([]
 
 // CreateVolume 创建Volume
 func (c *Client) CreateVolume(ctx context.Context, req *VolumeCreateRequest) (*VolumeInfo, error) {
-	options := volume.CreateOptions{
+	options := client.VolumeCreateOptions{
 		Name:       req.Name,
 		Driver:     req.Driver,
 		DriverOpts: req.DriverOpts,
 		Labels:     req.Labels,
 	}
 
-	vol, err := c.docker.VolumeCreate(ctx, options)
+	volRes, err := c.docker.VolumeCreate(ctx, options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create volume: %w", err)
 	}
+	vol := volRes.Volume
 
-	volumeInfo := &VolumeInfo{
+	return &VolumeInfo{
 		Name:       vol.Name,
 		Driver:     vol.Driver,
 		Mountpoint: vol.Mountpoint,
@@ -265,14 +251,12 @@ func (c *Client) CreateVolume(ctx context.Context, req *VolumeCreateRequest) (*V
 			Size:     0,
 			RefCount: 0,
 		},
-	}
-
-	return volumeInfo, nil
+	}, nil
 }
 
 // RemoveVolume 删除Volume
 func (c *Client) RemoveVolume(ctx context.Context, name string, force bool) error {
-	err := c.docker.VolumeRemove(ctx, name, force)
+	_, err := c.docker.VolumeRemove(ctx, name, client.VolumeRemoveOptions{Force: force})
 	if err != nil {
 		return fmt.Errorf("failed to remove volume: %w", err)
 	}
@@ -281,15 +265,13 @@ func (c *Client) RemoveVolume(ctx context.Context, name string, force bool) erro
 
 // PruneVolumes 清理未使用的Volume
 func (c *Client) PruneVolumes(ctx context.Context) (*VolumePruneResponse, error) {
-	report, err := c.docker.VolumesPrune(ctx, filters.Args{})
+	res, err := c.docker.VolumePrune(ctx, client.VolumePruneOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to prune volumes: %w", err)
 	}
 
-	response := &VolumePruneResponse{
-		VolumesDeleted: report.VolumesDeleted,
-		SpaceReclaimed: int64(report.SpaceReclaimed),
-	}
-
-	return response, nil
+	return &VolumePruneResponse{
+		VolumesDeleted: res.Report.VolumesDeleted,
+		SpaceReclaimed: int64(res.Report.SpaceReclaimed),
+	}, nil
 }
