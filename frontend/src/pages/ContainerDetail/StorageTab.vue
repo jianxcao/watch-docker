@@ -2,7 +2,7 @@
   <div class="tab-content storage-tab">
     <div class="detail-container">
       <n-card title="挂载点" class="info-card" size="small">
-        <div v-if="containerDetail.Mounts.length === 0" class="empty-container">
+        <div v-if="!containerDetail?.Mounts?.length" class="empty-container">
           <n-empty description="没有挂载点" />
         </div>
         <div v-else class="mount-list">

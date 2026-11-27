@@ -4,7 +4,7 @@
     <n-spin :show="loading" class="h-[300px] flex items-center justify-center" v-if="loading">
     </n-spin>
     <template v-else>
-      <div v-if="!containerDetail" class="empty-state">
+      <div v-if="!isCurrentContainerDetail || !containerDetail" class="empty-state">
         <n-empty description="容器不存在">
           <template #extra>
             <n-button @click="handleBack">返回列表</n-button>
@@ -61,7 +61,7 @@
         </n-tab-pane>
 
         <!-- Tab 4: Shell -->
-        <n-tab-pane name="shell" tab="Shell">
+        <n-tab-pane v-if="settingStore.systemInfo?.isOpenDockerShell" name="shell" tab="Shell">
           <template #tab>
             <div class="flex items-center gap-2">
               <n-icon size="18">
@@ -134,7 +134,7 @@
 
     <!-- Teleport 到页面头部 -->
     <Teleport to="#header" defer>
-      <div class="page-header" v-if="containerDetail">
+      <div class="page-header" v-if="isCurrentContainerDetail && containerDetail">
         <div class="flex items-center gap-3">
           <n-button text circle @click="handleBack">
             <template #icon>
@@ -169,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, useThemeVars, type DropdownOption } from 'naive-ui'
 import {
@@ -191,10 +191,16 @@ import NetworkIcon from '@/assets/svg/networkIO.svg?component'
 import VolumeIcon from '@/assets/svg/volume.svg?component'
 import { useContainerStore } from '@/store/container'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 import { useContainer } from '@/hooks/useContainer'
 import { renderIcon } from '@/common/utils'
+import {
+  buildContainerListQuery,
+  canNavigateBackInApp,
+  parseContainerListQuery,
+} from '@/pages/listQuery'
 import statsEmitter from '@/evt/containerStats'
-import type { ContainerStats } from '@/common/types'
+import { createContainerDetailController } from './containerDetailController'
 
 // 导入 Tab 组件
 import OverviewTab from './OverviewTab.vue'
@@ -211,26 +217,33 @@ const router = useRouter()
 const message = useMessage()
 const containerStore = useContainerStore()
 const settingStore = useSettingStore()
+const authStore = useAuthStore()
 const { handleStart, handleStop, handleRestart, handleUpdate, handleDelete } = useContainer()
 const theme = useThemeVars()
-// 状态
-const containerId = ref(route.params.id as string)
-const containerDetail = ref<any>(null)
-const containerStats = ref<ContainerStats | null>(null)
-const loading = ref(false)
+// 状态（使用 computed 响应路由参数变化，避免更新容器产生新 ID 后停留在旧 ID）
+const containerId = computed(() => route.params.id as string)
 const activeTab = defineModel<string>('activeTab', { default: 'overview' })
-
-// 容器名称
-const containerName = computed(() => {
-  if (!containerDetail.value) {
-    return ''
-  }
-  return containerDetail.value.Name.replace(/^\//, '')
+const {
+  containerDetail,
+  containerStats,
+  loading,
+  isCurrentContainerDetail,
+  canOperateMenu,
+  containerName,
+  loadContainerDetail,
+  resolveActionContainer,
+} = createContainerDetailController({
+  getContainerId: () => containerId.value,
+  fetchContainerDetail: (id) => containerStore.getContainerDetail(id),
+  onLoadError: (error: any) => {
+    console.error('加载容器详情失败:', error)
+    message.error('加载容器详情失败: ' + (error?.message || '未知错误'))
+  },
 })
 
 // 下拉菜单选项
 const dropdownOptions = computed<DropdownOption[]>(() => {
-  if (!containerDetail.value) {
+  if (!canOperateMenu.value || !containerDetail.value) {
     return []
   }
 
@@ -293,31 +306,22 @@ const tabHeight = computed(() => {
   return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value + settingStore.contentSafeBottom}px)`
 })
 
-// 日志 WebSocket URL
+// 日志 WebSocket URL（未开启认证时允许不带 token 连接）
 const logsSocketUrl = computed(() => {
-  if (!containerDetail.value) {
+  if (!isCurrentContainerDetail.value || !containerDetail.value) {
     return ''
   }
 
   const token = settingStore.getToken()
+  if (authStore.authEnabled && !token) {
+    return ''
+  }
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1/containers/logs/${containerId.value}/ws?token=${token}&projectName=${encodeURIComponent(containerName.value)}`
+  const base = `${protocol}//${host}/api/v1/containers/logs/${encodeURIComponent(containerId.value)}/ws?projectName=${encodeURIComponent(containerName.value)}`
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base
 })
-
-// 加载容器详情
-const loadContainerDetail = async () => {
-  loading.value = true
-  try {
-    const detail = await containerStore.getContainerDetail(containerId.value)
-    containerDetail.value = detail
-  } catch (error: any) {
-    console.error('加载容器详情失败:', error)
-    message.error('加载容器详情失败: ' + (error.message || '未知错误'))
-  } finally {
-    loading.value = false
-  }
-}
 
 // 处理统计数据更新
 const handleStatsUpdate = (containers: any[]) => {
@@ -329,44 +333,98 @@ const handleStatsUpdate = (containers: any[]) => {
 
 // 操作菜单处理
 const handleMenuSelect = async (key: string) => {
-  if (!containerDetail.value) {
-    return
-  }
-
-  // 从容器列表中找到对应的容器对象
-  const container = containerStore.findContainerById(containerId.value)
+  const container = resolveActionContainer((id) => containerStore.findContainerById(id))
   if (!container) {
-    message.error('找不到容器信息')
     return
   }
+  const actionTargetId = container.id
 
   switch (key) {
     case 'start':
       await handleStart(container)
-      await loadContainerDetail()
+      if (containerId.value === actionTargetId) {
+        await loadContainerDetail()
+      }
       break
     case 'stop':
       await handleStop(container)
-      await loadContainerDetail()
+      if (containerId.value === actionTargetId) {
+        await loadContainerDetail()
+      }
       break
     case 'restart':
       await handleRestart(container)
-      await loadContainerDetail()
+      if (containerId.value === actionTargetId) {
+        await loadContainerDetail()
+      }
       break
-    case 'update':
-      await handleUpdate(container)
-      await loadContainerDetail()
+    case 'update': {
+      const newContainerId = await handleUpdate(container)
+      if (containerId.value !== actionTargetId) {
+        break
+      }
+      if (newContainerId && newContainerId !== containerId.value) {
+        await router.replace({
+          name: 'container-detail',
+          params: { id: newContainerId },
+          query: route.query,
+        })
+      } else {
+        await loadContainerDetail()
+      }
       break
-    case 'delete':
-      await handleDelete(container)
-      handleBack()
+    }
+    case 'delete': {
+      const deleted = await handleDelete(container)
+      if (deleted && containerId.value === actionTargetId) {
+        const back = typeof window !== 'undefined' ? window.history.state?.back : null
+        if (
+          typeof back === 'string' &&
+          (back.startsWith('/compose/') ||
+            back.startsWith('/networks/') ||
+            back.startsWith('/volumes/'))
+        ) {
+          router.back()
+        } else {
+          void router.replace({
+            name: 'containers',
+            query: buildContainerListQuery({}, parseContainerListQuery(route.query)),
+          })
+        }
+      }
       break
+    }
   }
 }
 
+// 监听路由参数变化（容器更新产生新 ID 或切换容器时自动刷新）
+watch(containerId, (newId, oldId) => {
+  if (newId && newId !== oldId) {
+    void loadContainerDetail()
+  }
+})
+
+// 若系统关闭容器终端功能且当前位于 Shell Tab，则切回概览
+watch(
+  () => settingStore.systemInfo?.isOpenDockerShell,
+  (enabled) => {
+    if (!enabled && activeTab.value === 'shell') {
+      activeTab.value = 'overview'
+    }
+  },
+  { immediate: true },
+)
+
 // 返回
 const handleBack = () => {
-  router.push({ path: '/containers' })
+  if (canNavigateBackInApp()) {
+    router.back()
+    return
+  }
+  void router.push({
+    name: 'containers',
+    query: buildContainerListQuery({}, parseContainerListQuery(route.query)),
+  })
 }
 
 // 处理 Volume 点击

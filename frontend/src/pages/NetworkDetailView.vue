@@ -1,7 +1,7 @@
 <template>
   <div class="network-detail-page">
     <n-spin :show="loading">
-      <div v-if="networkDetail" class="detail-container">
+      <div v-if="isCurrentNetworkDetail && networkDetail" class="detail-container">
         <!-- 基本信息 -->
         <n-card title="基本信息" class="info-card">
           <div class="info-grid">
@@ -272,7 +272,8 @@
           </n-button>
           <!-- 删除按钮 -->
           <n-button
-            v-if="!isBuiltInNetwork"
+            v-if="isCurrentNetworkDetail && !isBuiltInNetwork"
+            :disabled="!canOperate"
             @click="handleDelete"
             circle
             size="tiny"
@@ -292,10 +293,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { networkApi } from '@/common/api'
-import type { NetworkDetailResponse, NetworkContainer } from '@/common/types'
+import type { NetworkContainer } from '@/common/types'
+import {
+  buildNetworkListQuery,
+  canNavigateBackInApp,
+  parseNetworkListQuery,
+} from './listQuery'
+import { createNetworkDetailController } from './networkDetailController'
 import NetworkIcon from '@/assets/svg/network.svg?component'
 import HashtagIcon from '@/assets/svg/hashtag.svg?component'
 import RouterIcon from '@/assets/svg/router.svg?component'
@@ -317,38 +324,60 @@ const router = useRouter()
 const dialog = useDialog()
 const message = useMessage()
 
-const loading = ref(false)
-const networkDetail = ref<NetworkDetailResponse | null>(null)
+const networkName = computed(() => (route.params.id as string) || '')
 
-const networkName = computed(() => route.params.id as string)
+const fallbackNetworksLocation = () => ({
+  name: 'networks',
+  query: buildNetworkListQuery({}, parseNetworkListQuery(route.query)),
+})
 
-// 是否是内置网络
-const isBuiltInNetwork = computed(() => {
-  if (!networkDetail.value) {
-    return false
-  }
-  const builtInNames = ['bridge', 'host', 'none']
-  return builtInNames.includes(networkDetail.value.network.name)
+const {
+  networkDetail,
+  loading,
+  isCurrentNetworkDetail,
+  canOperate,
+  isBuiltInNetwork,
+  fetchNetworkDetail,
+  handleRouteChange,
+  handleDelete,
+  dispose,
+} = createNetworkDetailController({
+  getNetworkId: () => networkName.value,
+  fetchNetwork: (id) => networkApi.getNetwork(id),
+  deleteNetwork: (id) => networkApi.deleteNetwork(id),
+  openWarningDialog: (options) => dialog.warning(options),
+  onSuccess: (msg) => message.success(msg),
+  onError: (msg) => message.error(msg),
+  navigateToList: () => {
+    void router.replace(fallbackNetworksLocation())
+  },
 })
 
 const hasLabels = computed(() => {
-  return networkDetail.value && Object.keys(networkDetail.value.network.labels || {}).length > 0
+  return (
+    isCurrentNetworkDetail.value &&
+    Boolean(networkDetail.value && Object.keys(networkDetail.value.network.labels || {}).length > 0)
+  )
 })
 
 const hasOptions = computed(() => {
-  return networkDetail.value && Object.keys(networkDetail.value.network.options || {}).length > 0
+  return (
+    isCurrentNetworkDetail.value &&
+    Boolean(networkDetail.value && Object.keys(networkDetail.value.network.options || {}).length > 0)
+  )
 })
 
 const hasIPAMConfig = computed(() => {
-  return networkDetail.value && networkDetail.value.network.ipam
+  return isCurrentNetworkDetail.value && Boolean(networkDetail.value?.network.ipam)
 })
 
 // 格式化创建时间
 const formatCreatedTime = (created: string): string => {
-  if (!created) {
+  if (!created || created.startsWith('0001-01-01')) {
     return '-'
   }
-  return dayjs(created).format('YYYY-MM-DD HH:mm:ss')
+  const d = dayjs(created)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
 // 获取驱动类型标签类型
@@ -373,28 +402,13 @@ const getScopeLabel = (scope: string): string => {
   return labelMap[scope] || scope
 }
 
-// 获取网络详情
-const fetchNetworkDetail = async () => {
-  loading.value = true
-  try {
-    const response = await networkApi.getNetwork(networkName.value)
-    if (response.code === 0) {
-      networkDetail.value = response.data
-    } else {
-      message.error(`获取网络详情失败：${response.msg}`)
-      router.push('/networks')
-    }
-  } catch (error: any) {
-    message.error(`获取网络详情失败：${error.message || '未知错误'}`)
-    router.push('/networks')
-  } finally {
-    loading.value = false
-  }
-}
-
 // 处理返回
 const handleBack = () => {
-  router.push('/networks')
+  if (canNavigateBackInApp()) {
+    router.back()
+    return
+  }
+  void router.push(fallbackNetworksLocation())
 }
 
 // 处理刷新
@@ -402,50 +416,23 @@ const handleRefresh = async () => {
   await fetchNetworkDetail()
 }
 
-// 处理删除
-const handleDelete = () => {
-  if (!networkDetail.value) {
-    return
-  }
-
-  if (networkDetail.value.network.containerCount > 0) {
-    dialog.warning({
-      title: '无法删除',
-      content: `此网络正在被 ${networkDetail.value.network.containerCount} 个容器使用，无法删除。请先断开所有容器的连接。`,
-      positiveText: '知道了',
-    })
-    return
-  }
-
-  dialog.warning({
-    title: '确认删除',
-    content: `确定要删除网络 "${networkDetail.value.network.name}" 吗？此操作不可恢复。`,
-    positiveText: '删除',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        const response = await networkApi.deleteNetwork(networkName.value)
-        if (response.code === 0) {
-          message.success('网络删除成功')
-          router.push('/networks')
-        } else {
-          message.error(`删除失败：${response.msg}`)
-        }
-      } catch (error: any) {
-        message.error(`删除失败：${error.message || '未知错误'}`)
-      }
-    },
-  })
-}
-
 // 处理容器点击
 const handleContainerClick = (container: NetworkContainer) => {
   router.push(`/containers/${container.id}`)
 }
 
+// 监听路由参数变化
+watch(networkName, (newName, oldName) => {
+  handleRouteChange(newName, oldName)
+})
+
 // 页面初始化
 onMounted(async () => {
   await fetchNetworkDetail()
+})
+
+onUnmounted(() => {
+  dispose()
 })
 </script>
 
@@ -472,7 +459,7 @@ onMounted(async () => {
 
     .info-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 24px 32px;
       .info-item {
         display: flex;

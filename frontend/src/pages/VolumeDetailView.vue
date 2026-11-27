@@ -1,7 +1,7 @@
 <template>
   <div class="volume-detail-page">
     <n-spin :show="loading">
-      <div v-if="volumeDetail" class="detail-container">
+      <div v-if="isCurrentVolumeDetail && volumeDetail" class="detail-container">
         <!-- 基本信息 -->
         <n-card title="基本信息" class="info-card">
           <div class="info-grid">
@@ -168,7 +168,14 @@
             </template>
           </n-button>
           <!-- 删除按钮 -->
-          <n-button @click="handleDelete" circle size="tiny" tertiary type="error">
+          <n-button
+            :disabled="!canOperate"
+            @click="handleDelete"
+            circle
+            size="tiny"
+            tertiary
+            type="error"
+          >
             <template #icon>
               <n-icon>
                 <TrashOutline />
@@ -182,11 +189,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { volumeApi } from '@/common/api'
-import type { VolumeDetailResponse, ContainerRef } from '@/common/types'
+import type { ContainerRef } from '@/common/types'
 import { formatBytes } from '@/common/utils'
+import { createVolumeDetailController } from './volumeDetailController'
 import volumeIcon from '@/assets/svg/volume.svg?component'
 import diskIcon from '@/assets/svg/disk.svg?component'
 import {
@@ -208,40 +216,43 @@ const router = useRouter()
 const dialog = useDialog()
 const message = useMessage()
 
-const loading = ref(false)
-const volumeDetail = ref<VolumeDetailResponse | null>(null)
+const volumeName = computed(() => (route.params.name as string) || '')
 
-const volumeName = computed(() => route.params.name as string)
+const {
+  volumeDetail,
+  loading,
+  isCurrentVolumeDetail,
+  canOperate,
+  fetchVolumeDetail,
+  handleRouteChange,
+  handleDelete,
+  dispose,
+} = createVolumeDetailController({
+  getVolumeName: () => volumeName.value,
+  fetchVolume: (name) => volumeApi.getVolume(name),
+  deleteVolume: (name, force) => volumeApi.deleteVolume(name, force),
+  openWarningDialog: (options) => dialog.warning(options),
+  onSuccess: (msg) => message.success(msg),
+  onError: (msg) => message.error(msg),
+  navigateToList: () => {
+    void router.push('/volumes')
+  },
+})
 
 const hasLabels = computed(() => {
-  return volumeDetail.value && Object.keys(volumeDetail.value.volume.labels || {}).length > 0
+  return (
+    isCurrentVolumeDetail.value &&
+    Boolean(volumeDetail.value && Object.keys(volumeDetail.value.volume.labels || {}).length > 0)
+  )
 })
 
 // 格式化创建时间
 const formatCreatedTime = (createdAt: string): string => {
-  if (!createdAt) {
+  if (!createdAt || createdAt.startsWith('0001-01-01')) {
     return '-'
   }
-  return dayjs(createdAt).format('YYYY-MM-DD HH:mm:ss')
-}
-
-// 获取Volume详情
-const fetchVolumeDetail = async () => {
-  loading.value = true
-  try {
-    const response = await volumeApi.getVolume(volumeName.value)
-    if (response.code === 0) {
-      volumeDetail.value = response.data
-    } else {
-      message.error(`获取 Volume 详情失败：${response.msg}`)
-      router.push('/volumes')
-    }
-  } catch (error: any) {
-    message.error(`获取 Volume 详情失败：${error.message || '未知错误'}`)
-    router.push('/volumes')
-  } finally {
-    loading.value = false
-  }
+  const d = dayjs(createdAt)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
 // 处理返回
@@ -254,55 +265,23 @@ const handleRefresh = async () => {
   await fetchVolumeDetail()
 }
 
-// 处理删除
-const handleDelete = () => {
-  if (!volumeDetail.value) {
-    return
-  }
-
-  const refCount = volumeDetail.value.volume.usageData?.refCount || 0
-
-  if (refCount > 0) {
-    dialog.warning({
-      title: '无法删除',
-      content: `此 Volume 正在被 ${refCount} 个容器使用，无法删除。请先停止或删除使用该 Volume 的容器。`,
-      positiveText: '知道了',
-    })
-    return
-  }
-
-  const d = dialog.warning({
-    title: '确认删除',
-    content: `确定要删除 Volume "${volumeName.value}" 吗？此操作不可恢复。`,
-    positiveText: '删除',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        d.loading = true
-        const response = await volumeApi.deleteVolume(volumeName.value, false)
-        if (response.code === 0) {
-          message.success('Volume 删除成功')
-          router.push('/volumes')
-        } else {
-          message.error(`删除失败：${response.msg}`)
-        }
-      } catch (error: any) {
-        message.error(`删除失败：${error.message || '未知错误'}`)
-      } finally {
-        d.loading = false
-      }
-    },
-  })
-}
-
 // 处理容器点击
 const handleContainerClick = (container: ContainerRef) => {
   router.push(`/containers/${container.id}`)
 }
 
+// 监听路由参数变化
+watch(volumeName, (newName, oldName) => {
+  handleRouteChange(newName, oldName)
+})
+
 // 页面初始化
 onMounted(async () => {
   await fetchVolumeDetail()
+})
+
+onUnmounted(() => {
+  dispose()
 })
 </script>
 
@@ -329,7 +308,7 @@ onMounted(async () => {
 
     .info-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 24px 32px;
       .info-item {
         display: flex;

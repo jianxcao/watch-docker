@@ -1,5 +1,6 @@
 import dayjs from 'dayjs'
 import { h } from 'vue'
+import { LineCounter, isSeq, parseDocument } from 'yaml'
 import { NIcon, type IconProps, type MessageApi } from 'naive-ui'
 
 export const sleep = (ms: number) => {
@@ -18,8 +19,8 @@ export const renderIcon = (icon: any, props?: IconProps) => {
  * @param duration 显示时长（毫秒），默认 5000
  */
 export const showErrorWithNewlines = (message: MessageApi, msg: string, duration = 5000) => {
-  // 将 \n 分割成多行
-  const lines = msg.split('\\n')
+  // 兼容真实换行与字面量 \n
+  const lines = msg.split(/\r?\n|\\n/)
   message.error(
     () =>
       h(
@@ -38,7 +39,7 @@ export const showErrorWithNewlines = (message: MessageApi, msg: string, duration
  * @param duration 显示时长（毫秒），默认 5000
  */
 export const showWarningWithNewlines = (message: MessageApi, msg: string, duration = 5000) => {
-  const lines = msg.split('\\n')
+  const lines = msg.split(/\r?\n|\\n/)
   message.warning(
     () =>
       h(
@@ -55,33 +56,39 @@ export const formatPercent = (value: number): string => {
   return `${value.toFixed(2)}%`
 }
 
-// 格式化字节数
+// 格式化字节数（防止 0 < bytes < 1 或 >= PB 时数组越界导致 undefined）
 export const formatBytes = (bytes: number): string => {
-  if (bytes === 0) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
     return '0 B'
   }
   const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  const i = Math.min(Math.max(Math.floor(Math.log(bytes) / Math.log(k)), 0), sizes.length - 1)
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`
 }
 
 // 格式化网速（字节每秒）
 export const formatBytesPerSecond = (bytesPerSecond: number): string => {
-  if (bytesPerSecond === 0) {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
     return '0 B/s'
   }
   const k = 1024
-  const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s']
-  const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k))
+  const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s', 'PB/s']
+  const i = Math.min(
+    Math.max(Math.floor(Math.log(bytesPerSecond) / Math.log(k)), 0),
+    sizes.length - 1,
+  )
   return `${(bytesPerSecond / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`
 }
 
 export const formatTime = (startedAt: string): string => {
-  if (!startedAt) {
+  if (!startedAt || startedAt.startsWith('0001-01-01')) {
     return '-'
   }
   const start = dayjs(startedAt)
+  if (!start.isValid()) {
+    return '-'
+  }
   const now = dayjs()
   const diffMs = now.diff(start)
 
@@ -216,51 +223,75 @@ export interface YamlValidationResult {
 }
 
 /**
- * 校验 Docker Compose YAML 配置
+ * 校验 Docker Compose YAML 配置（兼容 Compose v2+ 无需 version 字段的写法）
  * @param yamlContent YAML 内容
  * @returns 校验结果，包含 isValid 和 errorMessage
  */
 export const validateComposeYaml = (yamlContent: string): YamlValidationResult => {
   try {
-    const yaml = yamlContent.trim()
-
-    // 检查是否为空
-    if (!yaml) {
+    if (!yamlContent || !yamlContent.trim()) {
       return {
         isValid: false,
         errorMessage: '请输入 YAML 配置',
       }
     }
 
-    // 检查是否包含 services 配置
-    if (!yaml.includes('services:')) {
+    const lineCounter = new LineCounter()
+    const doc = parseDocument(yamlContent, {
+      lineCounter,
+      merge: true,
+      prettyErrors: false,
+    })
+
+    if (doc.errors.length > 0) {
+      const firstErr = doc.errors[0]
+      const pos =
+        firstErr.linePos?.[0] ?? (firstErr.pos ? lineCounter.linePos(firstErr.pos[0]) : undefined)
+      const loc = pos ? `（第 ${pos.line} 行，第 ${pos.col} 列）` : ''
+      const detail = firstErr.message.split('\n')[0] || '语法无效'
       return {
         isValid: false,
-        errorMessage: '缺少 services 配置',
+        errorMessage: `YAML 语法错误${loc}：${detail}`,
       }
     }
 
-    // 检查缩进和基本语法
-    const lines = yaml.split('\n')
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-      // 跳过空行和注释行
-      if (!line.trim() || line.trim().startsWith('#')) {
-        continue
-      }
-
-      // 检查引号是否闭合
-      const singleQuotes = (line.match(/'/g) || []).length
-      const doubleQuotes = (line.match(/"/g) || []).length
-      if (singleQuotes % 2 !== 0 || doubleQuotes % 2 !== 0) {
-        return {
-          isValid: false,
-          errorMessage: `第 ${i + 1} 行：引号未闭合`,
-        }
+    if (doc.contents === null || doc.contents === undefined) {
+      return {
+        isValid: false,
+        errorMessage: '缺少顶层 services 配置',
       }
     }
 
-    // 校验通过
+    if (isSeq(doc.contents)) {
+      return {
+        isValid: false,
+        errorMessage: 'Compose 配置根节点必须为映射',
+      }
+    }
+
+    const root = doc.toJS({ mapAsMap: true, maxAliasCount: 100 })
+    if (!(root instanceof Map)) {
+      return {
+        isValid: false,
+        errorMessage: 'Compose 配置根节点必须为映射',
+      }
+    }
+
+    if (!root.has('services')) {
+      return {
+        isValid: false,
+        errorMessage: '缺少顶层 services 配置',
+      }
+    }
+
+    const services = root.get('services')
+    if (!(services instanceof Map)) {
+      return {
+        isValid: false,
+        errorMessage: '顶层 services 必须为映射',
+      }
+    }
+
     return {
       isValid: true,
       errorMessage: '',
@@ -268,7 +299,7 @@ export const validateComposeYaml = (yamlContent: string): YamlValidationResult =
   } catch (error) {
     return {
       isValid: false,
-      errorMessage: `YAML 格式错误: ${(error as Error).message}`,
+      errorMessage: `YAML 解析失败：${(error as Error).message}`,
     }
   }
 }
