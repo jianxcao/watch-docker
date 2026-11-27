@@ -189,13 +189,18 @@ checksum:
 # Changelog
 changelog:
   sort: asc
+  groups:
+    - title: "✨ 功能与优化"
+      regexp: '^\s*feat(\([[:word:]./-]+\))?!?:.+$'
+      order: 0
+    - title: "🐛 问题修复"
+      regexp: '^\s*fix(\([[:word:]./-]+\))?!?:.+$'
+      order: 1
+    - title: "📦 其他变更"
+      order: 999
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^ci:"
-      - "^build:"
+      - '^\s*(docs|test|chore|ci|build)(\([^)]+\))?!?:'
       - "Merge pull request"
       - "Merge branch"
 
