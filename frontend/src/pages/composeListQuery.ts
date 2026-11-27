@@ -43,10 +43,18 @@ export const buildComposeListQuery = (
   delete query.sort
   delete query.order
 
-  if (state.search) query.search = state.search
-  if (state.statusFilter) query.status = state.statusFilter
-  if (state.sortBy !== 'name') query.sort = state.sortBy
-  if (state.sortOrder !== 'asc') query.order = state.sortOrder
+  if (state.search) {
+    query.search = state.search
+  }
+  if (state.statusFilter) {
+    query.status = state.statusFilter
+  }
+  if (state.sortBy !== 'name') {
+    query.sort = state.sortBy
+  }
+  if (state.sortOrder !== 'asc') {
+    query.order = state.sortOrder
+  }
 
   return query
 }

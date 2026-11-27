@@ -2,9 +2,12 @@ package wsstream
 
 import (
 	"context"
+	"io"
+	"sync"
 
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"go.uber.org/zap"
 )
 
@@ -14,7 +17,10 @@ type ContainerLogsSource struct {
 	containerName string
 	dockerClient  *dockercli.Client
 	key           string
-	reader        *ByteStreamReader
+
+	mu        sync.Mutex
+	reader    *ByteStreamReader
+	rawStream io.ReadCloser
 }
 
 // ContainerLogsSourceOptions 容器日志数据源选项
@@ -31,26 +37,29 @@ func NewContainerLogsSource(opts ContainerLogsSourceOptions) *ContainerLogsSourc
 		containerID:   opts.ContainerID,
 		containerName: opts.ContainerName,
 		dockerClient:  opts.DockerClient,
-		key:           opts.Key, // 使用 containerID 作为唯一标识
+		key:           opts.Key,
 	}
 }
 
-// Start 启动容器日志流
+// Start 启动容器日志流，自动判断容器 TTY 模式并在非 TTY 时使用 stdcopy 剥离 8 字节复用流头部
 func (s *ContainerLogsSource) Start(ctx context.Context) (StreamReader[[]byte], error) {
 	logger.Logger.Info("启动容器日志流",
 		zap.String("containerID", s.containerID),
 		zap.String("containerName", s.containerName))
 
-	// 获取容器日志流
+	isTTY := false
+	if info, err := s.dockerClient.InspectContainer(ctx, s.containerID); err == nil && info.Config != nil {
+		isTTY = info.Config.Tty
+	}
+
 	logReader, err := s.dockerClient.ContainerLogs(
 		ctx,
 		s.containerID,
-		"",    // since: 从开始获取
-		true,  // timestamps: 显示时间戳
-		"500", // tail: 最后500行
-		true,  // follow: 持续跟踪
+		"",
+		true,
+		"500",
+		true,
 	)
-
 	if err != nil {
 		logger.Logger.Error("启动容器日志流失败",
 			zap.String("containerID", s.containerID),
@@ -59,8 +68,29 @@ func (s *ContainerLogsSource) Start(ctx context.Context) (StreamReader[[]byte], 
 		return nil, err
 	}
 
-	// 使用 ByteStreamReader 直接流式传输日志
-	s.reader = NewByteStreamReader(logReader)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rawStream = logReader
+
+	if isTTY {
+		s.reader = NewByteStreamReader(logReader)
+		return s.reader, nil
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer func() {
+			_ = pw.Close()
+			_ = logReader.Close()
+		}()
+		if _, err := stdcopy.StdCopy(pw, pw, logReader); err != nil && ctx.Err() == nil && err != io.EOF {
+			logger.Logger.Debug("解复用容器日志流结束",
+				zap.String("containerID", s.containerID),
+				zap.Error(err))
+		}
+	}()
+
+	s.reader = NewByteStreamReader(pr)
 	return s.reader, nil
 }
 
@@ -70,9 +100,18 @@ func (s *ContainerLogsSource) Stop() error {
 		zap.String("containerID", s.containerID),
 		zap.String("containerName", s.containerName))
 
-	if s.reader != nil {
-		s.reader.Close()
-		s.reader = nil
+	s.mu.Lock()
+	reader := s.reader
+	raw := s.rawStream
+	s.reader = nil
+	s.rawStream = nil
+	s.mu.Unlock()
+
+	if raw != nil {
+		_ = raw.Close()
+	}
+	if reader != nil {
+		_ = reader.Close()
 	}
 	return nil
 }
