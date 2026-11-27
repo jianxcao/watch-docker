@@ -1,0 +1,98 @@
+<!-- filename: docker-modified-transparent-512.svg -->
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Modified Docker-style icon with transparent background">
+  <defs>
+    <!-- Whale body gradient -->
+    <linearGradient id="whaleGrad" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#63d2ff"/>
+      <stop offset="1" stop-color="#107fbf"/>
+    </linearGradient>
+
+    <!-- Container color set (slightly varied blues) -->
+    <linearGradient id="c1" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#9ff3ff"/>
+      <stop offset="1" stop-color="#36c9f0"/>
+    </linearGradient>
+    <linearGradient id="c2" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#6fe0ff"/>
+      <stop offset="1" stop-color="#19b2e6"/>
+    </linearGradient>
+    <linearGradient id="c3" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#49c9f3"/>
+      <stop offset="1" stop-color="#0aa1d6"/>
+    </linearGradient>
+
+    <!-- Soft shadow under whale -->
+    <filter id="drop" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.18"/>
+    </filter>
+
+    <!-- subtle highlight overlay -->
+    <radialGradient id="gloss" cx="30%" cy="20%" r="60%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Centering group -->
+  <g transform="translate(0,18)">
+    <!-- Soft shadow -->
+    <ellipse cx="256" cy="382" rx="140" ry="28" fill="#000" opacity="0.12"/>
+
+    <!-- Whale group (scaled and centered) -->
+    <g transform="translate(56,96)" filter="url(#drop)">
+      <!-- whale main body (stylized, different from official) -->
+      <path d="M200 88
+               C 320 88 360 160 340 196
+               C 320 232 220 260 140 260
+               C 60 260 16 220 8 180
+               C 0 140 40 88 120 72
+               C 160 64 200 68 200 88 Z"
+            fill="url(#whaleGrad)"/>
+
+      <!-- whale mouth / belly highlight -->
+      <path d="M132 188
+               C 182 208 270 208 300 188
+               C 280 220 210 236 140 236
+               C 100 236 80 224 132 188 Z"
+            fill="#ffffff" opacity="0.06"/>
+
+      <!-- tail (distinct shape) -->
+      <path d="M344 126
+               C 380 116 400 144 372 162
+               C 400 178 380 204 344 190
+               C 360 160 344 140 344 126 Z"
+            fill="#0aa1d6" opacity="0.98"/>
+
+      <!-- eye -->
+      <circle cx="176" cy="112" r="6" fill="#062232" opacity="0.95"/>
+
+      <!-- subtle gloss -->
+      <path d="M92 84 C 132 60 220 60 268 84 C 260 76 148 60 92 84 Z"
+            fill="url(#gloss)" opacity="0.8"/>
+    </g>
+
+    <!-- Containers stack positioned above whale -->
+    <g transform="translate(88,18)">
+      <!-- Back row (lower) -->
+      <rect x="0"   y="88" width="68" height="44" rx="6" ry="6" fill="url(#c3)"/>
+      <rect x="78"  y="72" width="68" height="44" rx="6" ry="6" fill="url(#c2)"/>
+      <rect x="156" y="64" width="68" height="44" rx="6" ry="6" fill="url(#c1)"/>
+      <!-- Front row (overlapping) -->
+      <rect x="40"  y="128" width="68" height="44" rx="6" ry="6" fill="url(#c1)"/>
+      <rect x="118" y="116" width="68" height="44" rx="6" ry="6" fill="url(#c2)"/>
+      <!-- small top container to create stacked feel -->
+      <rect x="92"  y="48"  width="48" height="34" rx="5" ry="5" fill="#14d7ff" opacity="0.95"/>
+
+      <!-- thin divider lines on containers for "shipping container" feel -->
+      <g fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="2">
+        <line x1="8"  y1="110" x2="60"  y2="110"/>
+        <line x1="86" y1="94"  x2="138" y2="94"/>
+        <line x1="164" y1="86"  x2="212" y2="86"/>
+        <line x1="48" y1="150" x2="112" y2="150"/>
+        <line x1="126" y1="138" x2="182" y2="138"/>
+        <line x1="100" y1="66"  x2="136" y2="66" opacity="0.18"/>
+      </g>
+    </g>
+  </g>
+</svg>
