@@ -481,7 +481,7 @@ func (c *Client) resolveManagedCustomRuntimeTarget(ctx context.Context, projectN
 	if err != nil {
 		return "", nil, err
 	}
-	cand, err := c.lookupRuntimeCandidate(ctx, projectName, projectDir, cleanFile)
+	cand, err := c.lookupRuntimeCandidate(ctx, projectName, projectDir, cleanFile, draftSelectionExplicit)
 	if err != nil {
 		return "", nil, err
 	}
@@ -947,7 +947,22 @@ func rawCandidateProjectNames(cands []rawRuntimeCandidate) []string {
 	return names
 }
 
-func (c *Client) lookupRuntimeCandidate(ctx context.Context, name, projectPath, cleanExplicitFile string) (*runtimeCandidate, error) {
+func canAdoptRuntimeFromScannedPrimaryCard(reqName, projectPath, runtimeName, cleanExplicitFile string, source draftSelectionSource) bool {
+	if source != draftSelectionCard || cleanExplicitFile == "" {
+		return false
+	}
+	if !isPrimaryComposeFileName(filepath.Base(cleanExplicitFile)) {
+		return false
+	}
+	dirName := strings.TrimSpace(filepath.Base(projectPath))
+	if dirName == "" || !strings.EqualFold(strings.TrimSpace(reqName), dirName) || !strings.EqualFold(strings.TrimSpace(runtimeName), dirName) {
+		return false
+	}
+	primaries, err := collectExistingComposeCandidates(projectPath, primaryComposeFiles)
+	return err == nil && len(primaries) == 1 && primaries[0] == cleanExplicitFile
+}
+
+func (c *Client) lookupRuntimeCandidate(ctx context.Context, name, projectPath, cleanExplicitFile string, source draftSelectionSource) (*runtimeCandidate, error) {
 	runtimeList, err := c.listRuntimeProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("查询运行时 Compose 项目失败: %w", err)
@@ -1008,10 +1023,15 @@ func (c *Client) lookupRuntimeCandidate(ctx context.Context, name, projectPath, 
 	}
 
 	var chosen rawRuntimeCandidate
+	matchedViaScannedPrimary := false
 	if len(rawDirCandidates) == 1 {
 		cand := rawDirCandidates[0]
 		if cleanExplicitFile != "" && !slices.Contains(cand.normalizedFiles, cleanExplicitFile) {
-			return nil, fmt.Errorf("目标配置文件 %s 与运行时项目 %s 的配置文件列表 [%s] 冲突", cleanExplicitFile, cand.name, strings.Join(cand.normalizedFiles, ", "))
+			if canAdoptRuntimeFromScannedPrimaryCard(name, projectPath, cand.name, cleanExplicitFile, source) {
+				matchedViaScannedPrimary = true
+			} else {
+				return nil, fmt.Errorf("目标配置文件 %s 与运行时项目 %s 的配置文件列表 [%s] 冲突", cleanExplicitFile, cand.name, strings.Join(cand.normalizedFiles, ", "))
+			}
 		}
 		chosen = cand
 	} else {
@@ -1067,7 +1087,7 @@ func (c *Client) lookupRuntimeCandidate(ctx context.Context, name, projectPath, 
 	if len(files) == 0 {
 		return nil, fmt.Errorf("运行时项目 %s 缺少有效的配置文件", chosen.name)
 	}
-	if cleanExplicitFile != "" && !slices.Contains(files, cleanExplicitFile) {
+	if cleanExplicitFile != "" && !matchedViaScannedPrimary && !slices.Contains(files, cleanExplicitFile) {
 		return nil, fmt.Errorf("目标配置文件 %s 与运行时项目 %s 的配置文件列表 [%s] 冲突", cleanExplicitFile, chosen.name, strings.Join(files, ", "))
 	}
 	return &runtimeCandidate{
@@ -1237,7 +1257,7 @@ func (c *Client) resolveDeployPlan(ctx context.Context, name, composeFile string
 	}
 
 	// Tier 1: 查询运行时项目列表（查询失败直接报错，绝不静默降级为草稿）
-	runtimeCand, err := c.lookupRuntimeCandidate(ctx, name, projectPath, cleanExplicitFile)
+	runtimeCand, err := c.lookupRuntimeCandidate(ctx, name, projectPath, cleanExplicitFile, draftSelectionExplicit)
 	if err != nil {
 		return DeployProjectPlan{}, false, err
 	}
@@ -1444,7 +1464,11 @@ func (c *Client) ResolveManagedCardPlan(ctx context.Context, projectName, compos
 	}
 
 	dirName := filepath.Base(projectDir)
-	cand, err := c.lookupRuntimeCandidate(ctx, trimmedName, projectDir, selectedFiles[0])
+	cardSource := draftSelectionExplicit
+	if len(selectedFiles) == 1 {
+		cardSource = draftSelectionCard
+	}
+	cand, err := c.lookupRuntimeCandidate(ctx, trimmedName, projectDir, selectedFiles[0], cardSource)
 	if err != nil {
 		return DeployProjectPlan{}, err
 	}

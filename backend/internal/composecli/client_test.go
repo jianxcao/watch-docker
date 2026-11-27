@@ -1640,3 +1640,224 @@ func TestDraftComposeFilePresence(t *testing.T) {
 		}
 	})
 }
+
+func TestManagedCardAfterDraftDeployment(t *testing.T) {
+	clearDotEnvTestProcessVars(t)
+	ctx := context.Background()
+
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	siteDir := filepath.Join(resolvedAppDir, "site")
+	otherDir := filepath.Join(resolvedAppDir, "other")
+	for _, d := range []string{siteDir, otherDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	composeFile := filepath.Join(siteDir, "compose.yaml")
+	prodFile := filepath.Join(siteDir, "prod.yaml")
+	overrideFile := filepath.Join(siteDir, "override.yaml")
+	envFile := filepath.Join(siteDir, ".env")
+	otherProdFile := filepath.Join(otherDir, "prod.yaml")
+	symFile := filepath.Join(siteDir, "sym.yaml")
+
+	origCompose := "services:\n  web:\n    image: nginx:1.25\n"
+	for _, item := range []struct {
+		path    string
+		content string
+	}{
+		{path: composeFile, content: origCompose},
+		{path: prodFile, content: "services:\n  production:\n    image: nginx:1.26\n"},
+		{path: overrideFile, content: "services:\n  production:\n    restart: always\n"},
+		{path: otherProdFile, content: "services:\n  other:\n    image: alpine:3.20\n"},
+	} {
+		if err := os.WriteFile(item.path, []byte(item.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(envFile, []byte("COMPOSE_FILE=prod.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(prodFile, symFile); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var runtimeList []ListOutput
+	var listerCalls atomic.Int32
+	setRuntime := func(items []ListOutput) {
+		mu.Lock()
+		runtimeList = append([]ListOutput(nil), items...)
+		mu.Unlock()
+	}
+
+	cli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			listerCalls.Add(1)
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]ListOutput(nil), runtimeList...), nil
+		},
+	}
+
+	findSiteCard := func(t *testing.T) ComposeProject {
+		t.Helper()
+		cards, lerr := cli.ListProjects(ctx)
+		if lerr != nil {
+			t.Fatalf("ListProjects failed: %v", lerr)
+		}
+		for _, card := range cards {
+			if card.Name == "site" {
+				return card
+			}
+		}
+		t.Fatalf("site card missing from ListProjects: %#v", cards)
+		return ComposeProject{}
+	}
+
+	// 1. 部署前（草稿状态）：ListProjects 返回 compose.yaml，ResolveManagedCardPlan 解析为 -f prod.yaml
+	setRuntime(nil)
+	draftCard := findSiteCard(t)
+	if draftCard.Status != StatusDraft || draftCard.ComposeFile != composeFile {
+		t.Fatalf("unexpected draft card: %#v (want ComposeFile=%q)", draftCard, composeFile)
+	}
+	draftPlan, err := cli.ResolveManagedCardPlan(ctx, draftCard.Name, draftCard.ComposeFile)
+	if err != nil {
+		t.Fatalf("draft ResolveManagedCardPlan failed: %v", err)
+	}
+	wantDraft := []string{"-f", prodFile}
+	if got := draftPlan.ComposeArgsPrefix(); !slices.Equal(got, wantDraft) {
+		t.Fatalf("draft ComposeArgsPrefix() = %v, want %v", got, wantDraft)
+	}
+
+	// 2. 首次部署后（运行态按项目名合并）：ListProjects 仍保留扫描的 compose.yaml，但卡片重建/拉取应识别运行时 ConfigFiles=prod.yaml
+	setRuntime([]ListOutput{{
+		Name:        "site",
+		Status:      "running(1)",
+		ConfigFiles: prodFile,
+	}})
+	runningCard := findSiteCard(t)
+	if runningCard.Status != StatusRunning || runningCard.ComposeFile != composeFile {
+		t.Fatalf("unexpected merged running card: %#v (want ComposeFile=%q)", runningCard, composeFile)
+	}
+
+	listerCalls.Store(0)
+	runningPlan, err := cli.ResolveManagedCardPlan(ctx, runningCard.Name, runningCard.ComposeFile)
+	if err != nil {
+		t.Fatalf("running ResolveManagedCardPlan failed: %v", err)
+	}
+	if calls := listerCalls.Load(); calls != 1 {
+		t.Fatalf("expected 1 runtime query during ResolveManagedCardPlan, got %d", calls)
+	}
+	wantRunning := []string{"-p", "site", "-f", prodFile}
+	if got := runningPlan.ComposeArgsPrefix(); !slices.Equal(got, wantRunning) {
+		t.Fatalf("running ComposeArgsPrefix() = %v, want %v", got, wantRunning)
+	}
+
+	// 2b. 运行后修改或删除 .env 仍以 Docker 运行时 ConfigFiles 为准
+	if err := os.WriteFile(envFile, []byte("COMPOSE_FILE=missing-after-deploy.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runningPlanAfterEnvEdit, err := cli.ResolveManagedCardPlan(ctx, runningCard.Name, runningCard.ComposeFile)
+	if err != nil || !slices.Equal(runningPlanAfterEnvEdit.ComposeArgsPrefix(), wantRunning) {
+		t.Fatalf("running card should follow ConfigFiles even after .env edit: plan=%#v err=%v", runningPlanAfterEnvEdit, err)
+	}
+	if err := os.Remove(envFile); err != nil {
+		t.Fatal(err)
+	}
+	runningPlanAfterEnvDel, err := cli.ResolveManagedCardPlan(ctx, runningCard.Name, runningCard.ComposeFile)
+	if err != nil || !slices.Equal(runningPlanAfterEnvDel.ComposeArgsPrefix(), wantRunning) {
+		t.Fatalf("running card should follow ConfigFiles after .env removal: plan=%#v err=%v", runningPlanAfterEnvDel, err)
+	}
+
+	// 3. 显式编辑/保存 compose.yaml 仍报错成员冲突，且不得修改磁盘文件
+	if _, err := cli.ResolveDeployPlan(ctx, "site", composeFile); err == nil {
+		t.Fatal("expected explicit ResolveDeployPlan on compose.yaml to conflict with runtime ConfigFiles")
+	}
+	if _, err := cli.SaveProjectPlanForDeploy(ctx, "site", composeFile, "services:\n  mutated:\n    image: busybox\n", true); err == nil {
+		t.Fatal("expected SaveProjectPlanForDeploy on compose.yaml to conflict with runtime ConfigFiles")
+	}
+	if got, rerr := os.ReadFile(composeFile); rerr != nil || string(got) != origCompose {
+		t.Fatalf("compose.yaml modified on explicit save conflict: err=%v content=%q", rerr, string(got))
+	}
+
+	// 4. 各种边界与负例均必须严格拒绝，文件成员精准匹配仍须通过
+	// 4a. 同名但位于其他目录的运行时项目必须拒绝，绝不误用或放行跨目录同名记录
+	if err := os.WriteFile(envFile, []byte("COMPOSE_FILE=prod.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setRuntime([]ListOutput{{
+		Name:        "site",
+		Status:      "running(1)",
+		ConfigFiles: otherProdFile,
+	}})
+	if _, err := cli.ResolveManagedCardPlan(ctx, "site", composeFile); err == nil {
+		t.Fatal("expected rejection when same-name runtime project lives in another directory")
+	}
+
+	// 4b. 同目录存在多个运行时候选时，扫描主文件 compose.yaml 无法消歧必须报错；但直接传成员 prod.yaml 可唯一定位
+	setRuntime([]ListOutput{
+		{Name: "site", Status: "running(1)", ConfigFiles: prodFile},
+		{Name: "canary", Status: "running(1)", ConfigFiles: overrideFile},
+	})
+	if _, err := cli.ResolveManagedCardPlan(ctx, "site", composeFile); err == nil {
+		t.Fatal("expected ambiguity error when site directory has multiple runtime projects")
+	}
+	memberPlan, err := cli.ResolveManagedCardPlan(ctx, "site", prodFile)
+	if err != nil || !slices.Equal(memberPlan.ComposeArgsPrefix(), wantRunning) {
+		t.Fatalf("exact member match prodFile should succeed: plan=%#v err=%v", memberPlan, err)
+	}
+
+	// 4c. 传非成员自定义文件（overrideFile）必须报错
+	setRuntime([]ListOutput{{Name: "site", Status: "running(1)", ConfigFiles: prodFile}})
+	if _, err := cli.ResolveManagedCardPlan(ctx, "site", overrideFile); err == nil {
+		t.Fatal("expected custom non-member file override.yaml to fail")
+	}
+
+	// 4d. 运行时记录包含符号链接时必须报错 ErrSymlinkPath
+	setRuntime([]ListOutput{{Name: "site", Status: "running(1)", ConfigFiles: symFile}})
+	if _, err := cli.ResolveManagedCardPlan(ctx, "site", composeFile); !errors.Is(err, ErrSymlinkPath) {
+		t.Fatalf("expected ErrSymlinkPath for symlinked ConfigFiles, got %v", err)
+	}
+
+	// 4e. 运行时名与目录名不一致（如 blue）时，scanned composeFile 不恢复 blue；但显式传 prodFile 可以定位
+	setRuntime([]ListOutput{{Name: "blue", Status: "running(1)", ConfigFiles: prodFile + "," + overrideFile}})
+	if _, err := cli.ResolveManagedCardPlan(ctx, "site", composeFile); err == nil {
+		t.Fatal("expected conflict when runtime name blue != dir name site for scanned compose.yaml")
+	}
+	blueMemberPlan, err := cli.ResolveManagedCardPlan(ctx, "site", prodFile)
+	if err != nil || !slices.Equal(blueMemberPlan.ComposeArgsPrefix(), []string{"-p", "blue", "-f", prodFile, "-f", overrideFile}) {
+		t.Fatalf("member match for runtime blue failed: plan=%#v err=%v", blueMemberPlan, err)
+	}
+
+	// 4f. 手工传入逆序多文件列表必须报错
+	setRuntime([]ListOutput{{Name: "site", Status: "running(1)", ConfigFiles: prodFile + "," + overrideFile}})
+	if _, err := cli.ResolveManagedCardPlan(ctx, "site", overrideFile+","+prodFile); err == nil {
+		t.Fatal("expected out-of-order manual multi-file list to fail")
+	}
+
+	// 4g. 目录存在多个标准主文件（compose.yaml + docker-compose.yml）时，scanned card 不应猜中唯一主文件
+	setRuntime([]ListOutput{{Name: "site", Status: "running(1)", ConfigFiles: prodFile}})
+	secondPrimary := filepath.Join(siteDir, "docker-compose.yml")
+	if err := os.WriteFile(secondPrimary, []byte("services:\n  alt:\n    image: nginx:1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.ResolveManagedCardPlan(ctx, "site", composeFile); err == nil {
+		t.Fatal("expected failure when directory has multiple scanned primary compose files")
+	}
+}

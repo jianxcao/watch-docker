@@ -342,6 +342,122 @@ func TestManagedComposeCardWebSockets(t *testing.T) {
 		}
 	})
 
+	t.Run("running custom COMPOSE_FILE card merged by name drives up, ps, and pull", func(t *testing.T) {
+		subAppRaw := filepath.Join(t.TempDir(), "apps")
+		if err := os.MkdirAll(subAppRaw, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		subAppResolved, err := filepath.EvalSymlinks(subAppRaw)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		subSiteDir := filepath.Join(subAppResolved, "site")
+		if err := os.MkdirAll(subSiteDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		subCompose := filepath.Join(subSiteDir, "compose.yaml")
+		subProd := filepath.Join(subSiteDir, "prod.yaml")
+		subOv := filepath.Join(subSiteDir, "override.yaml")
+		origSubCompose := "services:\n  web:\n    image: nginx:1.25\n"
+		if err := os.WriteFile(subCompose, []byte(origSubCompose), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(subProd, []byte("services:\n  production:\n    image: nginx:1.26\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(subOv, []byte("services:\n  production:\n    restart: always\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		savedAppPath := conf.EnvCfg.APP_PATH
+		conf.EnvCfg.APP_PATH = subAppResolved
+		defer func() { conf.EnvCfg.APP_PATH = savedAppPath }()
+
+		prevLister := cli.RuntimeProjectsLister
+		cli.RuntimeProjectsLister = func(ctx context.Context) ([]composecli.ListOutput, error) {
+			return []composecli.ListOutput{{
+				Name:        "site",
+				Status:      "running(2)",
+				ConfigFiles: subProd + "," + subOv,
+			}}, nil
+		}
+		defer func() { cli.RuntimeProjectsLister = prevLister }()
+
+		cards, lerr := cli.ListProjects(context.Background())
+		if lerr != nil || len(cards) != 1 {
+			t.Fatalf("ListProjects() = %#v, %v", cards, lerr)
+		}
+		card := cards[0]
+		if card.Name != "site" || card.Status != composecli.StatusRunning || card.ComposeFile != subCompose {
+			t.Fatalf("expected merged running card pointing to %q, got %#v", subCompose, card)
+		}
+
+		mergedPrefix := []string{"-p", "site", "-f", subProd, "-f", subOv}
+		wantMergedUpArgs := append(append([]string{"compose"}, mergedPrefix...), "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate")
+		wantMergedPsArgs := append(append([]string{"compose"}, mergedPrefix...), "ps")
+		wantMergedPullArgs := append(append([]string{"compose"}, mergedPrefix...), "--ansi", "always", "pull")
+
+		upLog := filepath.Join(t.TempDir(), "merged-up.log")
+		installFakeDockerForCardTest(t, upLog)
+		uUp := wsBase + "/api/v1/compose/up/" + url.PathEscape(card.Name) + "/ws?composeFile=" + url.QueryEscape(card.ComposeFile)
+		upConn, _, derr := websocket.DefaultDialer.Dial(uUp, nil)
+		if derr != nil {
+			t.Fatalf("dial merged up ws failed: %v", derr)
+		}
+		_ = upConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var upFrames []string
+		for {
+			_, msg, rerr := upConn.ReadMessage()
+			if len(msg) > 0 {
+				upFrames = append(upFrames, string(msg))
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		_ = upConn.Close()
+
+		upCalls := readRecordedDockerCalls(t, upLog)
+		if len(upCalls) != 2 {
+			t.Fatalf("expected 2 docker calls (up + ps) for merged running card, got %d: %#v (frames=%q)", len(upCalls), upCalls, strings.Join(upFrames, ""))
+		}
+		if upCalls[0].pwd != subSiteDir || !slices.Equal(upCalls[0].args, wantMergedUpArgs) {
+			t.Fatalf("merged up call mismatch: got=(pwd=%q args=%#v) want=(pwd=%q args=%#v)", upCalls[0].pwd, upCalls[0].args, subSiteDir, wantMergedUpArgs)
+		}
+		if upCalls[1].pwd != subSiteDir || !slices.Equal(upCalls[1].args, wantMergedPsArgs) {
+			t.Fatalf("merged ps call mismatch: got=(pwd=%q args=%#v) want=(pwd=%q args=%#v)", upCalls[1].pwd, upCalls[1].args, subSiteDir, wantMergedPsArgs)
+		}
+
+		pullLog := filepath.Join(t.TempDir(), "merged-pull.log")
+		installFakeDockerForCardTest(t, pullLog)
+		uPull := wsBase + "/api/v1/compose/pull/" + url.PathEscape(card.Name) + "/ws?composeFile=" + url.QueryEscape(card.ComposeFile)
+		pullConn, _, derr := websocket.DefaultDialer.Dial(uPull, nil)
+		if derr != nil {
+			t.Fatalf("dial merged pull ws failed: %v", derr)
+		}
+		_ = pullConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var pullFrames []string
+		for {
+			_, msg, rerr := pullConn.ReadMessage()
+			if len(msg) > 0 {
+				pullFrames = append(pullFrames, string(msg))
+			}
+			if calls := readRecordedDockerCalls(t, pullLog); len(calls) > 0 {
+				_ = pullConn.Close()
+				break
+			}
+			if rerr != nil {
+				_ = pullConn.Close()
+				break
+			}
+		}
+		pullCalls := readRecordedDockerCalls(t, pullLog)
+		if len(pullCalls) != 1 || pullCalls[0].pwd != subSiteDir || !slices.Equal(pullCalls[0].args, wantMergedPullArgs) {
+			t.Fatalf("merged pull call mismatch: calls=%#v want=(pwd=%q args=%#v) frames=%q", pullCalls, subSiteDir, wantMergedPullArgs, strings.Join(pullFrames, ""))
+		}
+	})
+
 	t.Run("failed card requests execute zero docker commands", func(t *testing.T) {
 		prevLister := cli.RuntimeProjectsLister
 		defer func() { cli.RuntimeProjectsLister = prevLister }()
