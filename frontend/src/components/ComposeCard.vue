@@ -28,7 +28,12 @@
           <!-- 标题和菜单 -->
           <div class="project-title-row">
             <div class="project-name">{{ project.name }}</div>
-            <n-dropdown :options="dropdownOptions" @select="handleMenuSelect" trigger="click">
+            <n-dropdown
+              :options="dropdownOptions"
+              :render-option="renderComposeDropdownOption"
+              @select="handleMenuSelect"
+              trigger="click"
+            >
               <n-button quaternary circle size="small" class="menu-btn" @click.stop>
                 <template #icon>
                   <n-icon>
@@ -109,24 +114,35 @@
           </template>
           重启
         </n-button>
-        <n-button
+        <n-tooltip
           v-if="
             project.status === 'unknown' ||
             project.status === 'exited' ||
             project.status === 'draft'
           "
-          text
-          class="action-btn"
-          :disabled="isOperating"
-          @click="handleMenuSelect('create')"
+          :disabled="!cardActionState.createTooltip"
+          trigger="hover"
         >
-          <template #icon>
-            <n-icon>
-              <RefreshOutline />
-            </n-icon>
+          <template #trigger>
+            <span class="action-btn-wrapper">
+              <n-button
+                text
+                class="action-btn"
+                :title="cardActionState.createTooltip"
+                :disabled="!cardActionState.canCreate"
+                @click="handleMenuSelect('create')"
+              >
+                <template #icon>
+                  <n-icon>
+                    <RefreshOutline />
+                  </n-icon>
+                </template>
+                创建
+              </n-button>
+            </span>
           </template>
-          创建
-        </n-button>
+          {{ cardActionState.createTooltip }}
+        </n-tooltip>
         <n-button text class="action-btn" @click="handleMenuSelect('view-logs')">
           <template #icon>
             <n-icon>
@@ -158,7 +174,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NIcon, type DropdownOption } from 'naive-ui'
+import { useMessage } from 'naive-ui'
 import { useSettingStore } from '@/store/setting'
 import { useComposeStore } from '@/store/compose'
 import type { ComposeProject, ComposeOperationState } from '@/common/types'
@@ -170,19 +186,22 @@ import {
   StopOutline,
   RefreshOutline,
   ReloadOutline,
-  TrashOutline,
-  CloudDownloadOutline,
 } from '@vicons/ionicons5'
 import LogIcon from '@/assets/svg/log.svg?component'
 import MenuIcon from '@/assets/svg/overflowMenuVertical.svg?component'
 import { useCompose } from '@/hooks/useCompose'
-import { renderIcon } from '@/common/utils'
 import ComposePullLogsModal from '@/components/ComposePullLogsModal.vue'
 import ComposeCreateLogsModal from '@/components/ComposeCreateLogsModal.vue'
+import {
+  buildComposeCardActionState,
+  dispatchComposeCardAction,
+  renderComposeDropdownOption,
+} from './composeActionMenus'
 
 const { handleStart, handleStop, handleRestart, handleDelete } = useCompose()
 const route = useRoute()
 const router = useRouter()
+const message = useMessage()
 const showPullLogs = ref(false)
 const showCreateLogs = ref(false)
 const composeStore = useComposeStore()
@@ -235,81 +254,11 @@ const getStatusText = (status: string) => {
   return statusMap[status] || '未知'
 }
 
-// 下拉菜单选项
-const dropdownOptions = computed<DropdownOption[]>(() => {
-  const disabled = isOperating.value
-  const options: DropdownOption[] = []
-  const project = props.project
-
-  if (project.status === 'exited' || project.status === 'partial') {
-    options.push({
-      label: '启动',
-      key: 'start',
-      icon: renderIcon(PlayOutline),
-      disabled,
-    })
-  }
-
-  if (project.status === 'running' || project.status === 'partial') {
-    options.push(
-      {
-        label: '停止',
-        key: 'stop',
-        icon: renderIcon(StopOutline),
-        disabled,
-      },
-      {
-        label: '重启',
-        key: 'restart',
-        icon: renderIcon(ReloadOutline),
-        disabled,
-      },
-    )
-  }
-
-  options.push(
-    {
-      label: '创建',
-      key: 'create',
-      icon: renderIcon(RefreshOutline),
-      disabled,
-    },
-    {
-      type: 'divider',
-      key: 'divider1',
-    },
-    {
-      label: '拉取镜像',
-      key: 'pull',
-      icon: renderIcon(CloudDownloadOutline),
-    },
-    {
-      label: '日志',
-      key: 'logs',
-      icon: renderIcon(LogIcon),
-    },
-  )
-  let label = '删除应用'
-  if (project.status === 'draft' || project.status === 'created_stack') {
-    label = '删除配置'
-  }
-  options.push(
-    {
-      type: 'divider',
-      key: 'divider2',
-    },
-    {
-      label: label,
-      key: 'delete',
-      icon: renderIcon(TrashOutline),
-      props: {
-        style: 'color: #ff4d4f',
-      },
-    },
-  )
-
-  return options
-})
+// 卡片操作能力与下拉菜单选项
+const cardActionState = computed(() =>
+  buildComposeCardActionState(props.project, isOperating.value, LogIcon),
+)
+const dropdownOptions = computed(() => cardActionState.value.dropdownOptions)
 
 // 处理卡片点击，跳转到详情页
 const handleCardClick = () => {
@@ -324,31 +273,23 @@ const handleCardClick = () => {
 
 // 处理菜单选择
 const handleMenuSelect = (key: string) => {
-  switch (key) {
-    case 'start':
-      handleStart(props.project)
-      break
-    case 'stop':
-      handleStop(props.project)
-      break
-    case 'restart':
-      handleRestart(props.project)
-      break
-    case 'delete':
-      handleDelete(props.project)
-      break
-    case 'view-logs':
-    case 'logs':
-      emit('log')
-      break
-    case 'create':
+  dispatchComposeCardAction(key, props.project, {
+    onStart: handleStart,
+    onStop: handleStop,
+    onRestart: handleRestart,
+    onDelete: handleDelete,
+    onLogs: () => emit('log'),
+    onCreate: () => {
       showCreateLogs.value = true
-      break
-    case 'pull':
-      composeStore.setOperationState(props.project.name, { type: 'pulling' })
+    },
+    onPull: (project) => {
+      composeStore.setOperationState(project.name, { type: 'pulling' })
       showPullLogs.value = true
-      break
-  }
+    },
+    onUnsupported: (msg) => {
+      message.warning(msg)
+    },
+  })
 }
 </script>
 
@@ -672,8 +613,14 @@ const handleMenuSelect = (key: string) => {
     padding: 0 20px;
     gap: 4px;
 
+    .action-btn-wrapper {
+      flex: 1;
+      display: flex;
+    }
+
     .action-btn {
       flex: 1;
+      width: 100%;
       height: 56px;
       border-radius: 8px;
       color: #90a1b9;

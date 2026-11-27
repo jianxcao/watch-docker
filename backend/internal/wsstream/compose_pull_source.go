@@ -3,6 +3,8 @@ package wsstream
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sync"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -13,16 +15,27 @@ import (
 type ComposePullSource struct {
 	projectPath string
 	projectName string
+	argsPrefix  []string
 	key         string
+	mu          sync.Mutex
 	reader      *ByteStreamReader
 }
 
 // NewComposePullSource 创建新的 Compose 拉取镜像数据源
-func NewComposePullSource(projectPath, projectName string) *ComposePullSource {
+func NewComposePullSource(projectPath, projectName string, argsPrefix ...string) *ComposePullSource {
+	return NewComposePullSourceWithKey("", projectPath, projectName, argsPrefix...)
+}
+
+// NewComposePullSourceWithKey 创建带自定义流标识的 Compose 拉取镜像数据源
+func NewComposePullSourceWithKey(key, projectPath, projectName string, argsPrefix ...string) *ComposePullSource {
+	if key == "" {
+		key = fmt.Sprintf("compose-pull-%s", projectName)
+	}
 	return &ComposePullSource{
 		projectPath: projectPath,
 		projectName: projectName,
-		key:         fmt.Sprintf("compose-pull-%s", projectName),
+		argsPrefix:  slices.Clone(argsPrefix),
+		key:         key,
 	}
 }
 
@@ -33,9 +46,10 @@ func (s *ComposePullSource) Start(ctx context.Context) (StreamReader[[]byte], er
 		zap.String("projectName", s.projectName))
 
 	// 执行 docker compose pull 命令
+	pullArgs := append(slices.Clone(s.argsPrefix), "--ansi", "always", "pull")
 	result := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      s.projectPath,
-		Args:          []string{"--ansi", "always", "pull"},
+		Args:          pullArgs,
 		OperationName: "compose pull",
 	})
 
@@ -46,8 +60,11 @@ func (s *ComposePullSource) Start(ctx context.Context) (StreamReader[[]byte], er
 		return nil, result.Error
 	}
 	// 使用 ByteStreamReader 直接流式传输日志
-	s.reader = NewByteStreamReader(result.Reader)
-	return s.reader, nil
+	reader := NewByteStreamReader(result.Reader)
+	s.mu.Lock()
+	s.reader = reader
+	s.mu.Unlock()
+	return reader, nil
 }
 
 // Stop 停止 Compose 拉取镜像流
@@ -55,9 +72,13 @@ func (s *ComposePullSource) Stop() error {
 	logger.Logger.Info("停止 Compose 拉取镜像流",
 		zap.String("projectName", s.projectName))
 
-	if s.reader != nil {
-		s.reader.Close()
-		s.reader = nil
+	s.mu.Lock()
+	reader := s.reader
+	s.reader = nil
+	s.mu.Unlock()
+
+	if reader != nil {
+		reader.Close()
 	}
 	return nil
 }

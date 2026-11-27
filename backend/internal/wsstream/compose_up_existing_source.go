@@ -4,28 +4,74 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"go.uber.org/zap"
 )
 
+// ComposeUpExistingSourceOptions configures a ComposeUpExistingSource.
+type ComposeUpExistingSourceOptions struct {
+	Key         string
+	ProjectPath string
+	ProjectName string
+	ArgsPrefix  []string
+	OnDone      func()
+}
+
 // ComposeUpExistingSource 对已有 Compose 项目执行 docker compose up -d 并流式输出
 type ComposeUpExistingSource struct {
 	projectPath string
 	projectName string
+	argsPrefix  []string
 	key         string
+	onDone      func()
+	doneOnce    sync.Once
+	started     atomic.Bool
 }
 
-func NewComposeUpExistingSource(projectPath, projectName string) *ComposeUpExistingSource {
+func NewComposeUpExistingSource(projectPath, projectName string, argsPrefix ...string) *ComposeUpExistingSource {
+	return NewComposeUpExistingSourceWithKey("", projectPath, projectName, argsPrefix...)
+}
+
+// NewComposeUpExistingSourceWithKey 创建带自定义流标识的已有 Compose 项目部署数据源
+func NewComposeUpExistingSourceWithKey(key, projectPath, projectName string, argsPrefix ...string) *ComposeUpExistingSource {
+	return NewComposeUpExistingSourceWithOptions(ComposeUpExistingSourceOptions{
+		Key:         key,
+		ProjectPath: projectPath,
+		ProjectName: projectName,
+		ArgsPrefix:  argsPrefix,
+	})
+}
+
+// NewComposeUpExistingSourceWithOptions creates a ComposeUpExistingSource with full lifecycle hooks.
+func NewComposeUpExistingSourceWithOptions(opts ComposeUpExistingSourceOptions) *ComposeUpExistingSource {
+	key := opts.Key
+	if key == "" {
+		key = fmt.Sprintf("compose-up-existing:%s", opts.ProjectName)
+	}
 	return &ComposeUpExistingSource{
-		projectPath: projectPath,
-		projectName: projectName,
-		key:         fmt.Sprintf("compose-up-existing-%s", projectName),
+		projectPath: opts.ProjectPath,
+		projectName: opts.ProjectName,
+		argsPrefix:  slices.Clone(opts.ArgsPrefix),
+		key:         key,
+		onDone:      opts.OnDone,
 	}
 }
 
+func (s *ComposeUpExistingSource) fireDone() {
+	s.doneOnce.Do(func() {
+		if s.onDone != nil {
+			s.onDone()
+		}
+	})
+}
+
 func (s *ComposeUpExistingSource) Start(ctx context.Context) (StreamReader[[]byte], error) {
+	s.started.Store(true)
 	logger.Logger.Info("启动 Compose Up 流（已有项目）",
 		zap.String("projectPath", s.projectPath),
 		zap.String("projectName", s.projectName))
@@ -37,6 +83,7 @@ func (s *ComposeUpExistingSource) Start(ctx context.Context) (StreamReader[[]byt
 
 func (s *ComposeUpExistingSource) processFlow(ctx context.Context, writer *io.PipeWriter) {
 	defer writer.Close()
+	defer s.fireDone()
 
 	const (
 		colorReset   = "\x1b[0m"
@@ -61,9 +108,10 @@ func (s *ComposeUpExistingSource) processFlow(ctx context.Context, writer *io.Pi
 
 	writeInfo(fmt.Sprintf("正在创建/重建项目 %s...\r\n", s.projectName))
 
+	upArgs := append(slices.Clone(s.argsPrefix), "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate")
 	result := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      s.projectPath,
-		Args:          []string{"--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate"},
+		Args:          upArgs,
 		OperationName: "compose up (existing)",
 	})
 
@@ -72,7 +120,13 @@ func (s *ComposeUpExistingSource) processFlow(ctx context.Context, writer *io.Pi
 		writeStatus("error", result.Error.Error())
 		return
 	}
-	defer result.Reader.Close()
+	exitConsumed := false
+	defer func() {
+		_ = result.Reader.Close()
+		if !exitConsumed && result.ExitCode != nil {
+			<-result.ExitCode
+		}
+	}()
 
 	buf := make([]byte, 4096)
 	for {
@@ -99,6 +153,7 @@ afterUp:
 	var hasError bool
 	select {
 	case exitCode, ok := <-result.ExitCode:
+		exitConsumed = true
 		if !ok || exitCode != 0 {
 			hasError = true
 		}
@@ -114,23 +169,31 @@ afterUp:
 	}
 
 	writeInfo("\r\n正在获取项目状态...\r\n")
+	psArgs := append(slices.Clone(s.argsPrefix), "ps")
 	statusResult := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
 		ExecPath:      s.projectPath,
-		Args:          []string{"ps"},
+		Args:          psArgs,
 		OperationName: "compose ps",
 	})
 	if statusResult.Error == nil && statusResult.Reader != nil {
-		defer statusResult.Reader.Close()
-		statusBuf := make([]byte, 4096)
-		for {
-			n, err := statusResult.Reader.Read(statusBuf)
-			if n > 0 {
-				writer.Write(statusBuf[:n])
+		func() {
+			defer func() {
+				_ = statusResult.Reader.Close()
+				if statusResult.ExitCode != nil {
+					<-statusResult.ExitCode
+				}
+			}()
+			statusBuf := make([]byte, 4096)
+			for {
+				n, err := statusResult.Reader.Read(statusBuf)
+				if n > 0 {
+					writer.Write(statusBuf[:n])
+				}
+				if err != nil {
+					break
+				}
 			}
-			if err != nil {
-				break
-			}
-		}
+		}()
 	}
 
 	writeSuccess(fmt.Sprintf("\r\n✓ 项目创建/重建完成: %s\r\n", s.projectName))
@@ -138,6 +201,9 @@ afterUp:
 }
 
 func (s *ComposeUpExistingSource) Stop() error {
+	if !s.started.Load() {
+		s.fireDone()
+	}
 	return nil
 }
 

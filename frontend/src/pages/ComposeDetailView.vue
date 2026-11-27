@@ -21,7 +21,12 @@
             <span class="status-text">{{ getStatusText(currentProject.status) }}</span>
           </div>
         </div>
-        <n-dropdown :options="dropdownOptions" @select="handleMenuSelect" trigger="click">
+        <n-dropdown
+          :options="dropdownOptions"
+          :render-option="renderComposeDropdownOption"
+          @select="handleMenuSelect"
+          trigger="click"
+        >
           <n-button text circle>
             <template #icon>
               <n-icon size="18">
@@ -48,12 +53,11 @@
       <!-- Tabs 内容 -->
       <n-tabs
         v-else
+        v-model:value="activeTab"
         type="line"
         animated
         pane-class="compose-detail-pane"
         :pane-style="{ height: tabHeight }"
-        :default-value="activeTab"
-        @update:value="handleTabChange"
       >
         <!-- Tab 1: 容器列表 -->
         <n-tab-pane name="containers" tab="容器">
@@ -134,7 +138,7 @@
                 <n-button
                   type="primary"
                   size="small"
-                  :disabled="!isYamlValid || deployLoading"
+                  :disabled="!canSubmitYamlDeploy"
                   :loading="deployLoading"
                   @click="handleDeploy"
                 >
@@ -178,9 +182,10 @@
     <!-- 重新部署进度组件 -->
     <ComposeCreateProgress
       ref="createProgressRef"
-      :show="showProgress"
-      :project-name="projectName"
-      :yaml-content="yamlContent"
+      v-model:show="showProgress"
+      :project-name="deployTargetProjectName"
+      :compose-file="deployTargetComposeFile"
+      :yaml-content="deployTargetYamlContent"
       :force="true"
       @success="handleDeploySuccess"
       @error="handleDeployError"
@@ -192,36 +197,40 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useDialog, useMessage, useThemeVars, type DropdownOption } from 'naive-ui'
+import { useDialog, useMessage, useThemeVars } from 'naive-ui'
 import {
   ArrowBackOutline,
   LayersOutline,
   DocumentTextOutline,
   RefreshOutline,
-  ReloadOutline,
-  TrashOutline,
-  PlayOutline,
-  StopOutline,
   EllipsisHorizontal,
-  CloudDownloadOutline,
 } from '@vicons/ionicons5'
 import DocumentIcon from '@/assets/svg/log.svg?component'
 import { useComposeStore } from '@/store/compose'
 import { useContainerStore } from '@/store/container'
 import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
 import { useResponsive } from '@/hooks/useResponsive'
 import { useContainer } from '@/hooks/useContainer'
 import type { ComposeProject, ContainerStatus } from '@/common/types'
-import { renderIcon, validateComposeYaml } from '@/common/utils'
+import { validateComposeYaml } from '@/common/utils'
 import ContainerCard from '@/components/ContainerCard.vue'
 import ContainerLogsModal from '@/components/ContainerLogsModal.vue'
 import LogsStreamView from '@/components/LogsStreamView.vue'
 import YamlEditor from '@/components/YamlEditor/index.vue'
 import ComposeCreateProgress from '@/components/ComposeCreateProgress.vue'
 import ComposePullLogsModal from '@/components/ComposePullLogsModal.vue'
+import {
+  buildComposeDetailDropdownOptions,
+  dispatchComposeDetailAction,
+  renderComposeDropdownOption,
+} from '@/components/composeActionMenus'
 import { useCompose } from '@/hooks/useCompose'
+import { buildComposeListQuery, parseComposeListQuery } from './composeListQuery'
+import { createComposeDetailYamlController } from './composeDetailYaml'
+import { canNavigateBackInApp } from './listQuery'
 
 const route = useRoute()
 const router = useRouter()
@@ -231,6 +240,7 @@ const theme = useThemeVars()
 const composeStore = useComposeStore()
 const containerStore = useContainerStore()
 const settingStore = useSettingStore()
+const authStore = useAuthStore()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 const { handleStart, handleStop, handleRestart, handleUpdate, handleDelete, handleExport } = useContainer()
 const {
@@ -241,173 +251,18 @@ const {
 } = useCompose()
 
 // 状态
-const projectName = ref(route.params.projectName as string)
-const activeTab = ref('containers')
 const loading = ref(false)
-const yamlLoading = ref(false)
-const deployLoading = ref(false)
-const yamlContent = ref('')
-const originalYamlContent = ref('')
-const yamlValidationMessage = ref('')
-const isYamlValid = ref(true)
 const showContainerLogsModal = ref(false)
 const currentContainer = ref<ContainerStatus | null>(null)
 const yamlEditorContainerRef = ref<HTMLElement | null>(null)
 const createProgressRef = ref<InstanceType<typeof ComposeCreateProgress>>()
-const showProgress = ref(false)
 const showPullLogs = ref(false)
-
-// 下拉菜单选项
-const dropdownOptions = computed<DropdownOption[]>(() => {
-  const options: DropdownOption[] = []
-  const status = currentProject.value?.status
-  // 根据项目状态显示不同的操作选项
-  if (status === 'exited' || status === 'partial') {
-    options.push({
-      label: '启动',
-      key: 'start',
-      icon: renderIcon(PlayOutline),
-    })
-  }
-
-  if (status === 'running' || status === 'partial') {
-    options.push(
-      {
-        label: '停止',
-        key: 'stop',
-        icon: renderIcon(StopOutline),
-      },
-      {
-        label: '重启',
-        key: 'restart',
-        icon: renderIcon(ReloadOutline),
-      },
-    )
-  }
-
-  options.push(
-    {
-      label: '重新部署',
-      key: 'deploy',
-      icon: renderIcon(RefreshOutline),
-    },
-    {
-      type: 'divider',
-      key: 'divider1',
-    },
-    {
-      label: '拉取镜像',
-      key: 'pull',
-      icon: renderIcon(CloudDownloadOutline),
-    },
-  )
-  if (status !== 'unknown') {
-    let label = '删除应用'
-    if (status === 'draft' || status === 'created_stack') {
-      label = '删除配置'
-    }
-    options.push(
-      {
-        type: 'divider',
-        key: 'divider2',
-      },
-      {
-        label: label,
-        key: 'delete',
-        icon: renderIcon(TrashOutline),
-        props: {
-          style: `color: ${theme.value.errorColor}`,
-        },
-      },
-    )
-  }
-  return options
-})
-
-const handleMenuSelect = async (key: string) => {
-  if (!currentProject.value) {
-    return
-  }
-  switch (key) {
-    case 'deploy':
-      handleDeploy()
-      break
-    case 'start':
-      await handleComposeStart(currentProject.value)
-      await containerStore.fetchContainers(true, false)
-      break
-    case 'stop':
-      await handleComposeStop(currentProject.value)
-      await containerStore.fetchContainers(true, false)
-      break
-    case 'restart':
-      await handleComposeRestart(currentProject.value)
-      await containerStore.fetchContainers(true, false)
-      break
-    case 'delete':
-      handleComposeDelete(currentProject.value).then(() => {
-        handleBack()
-      })
-      break
-    case 'pull':
-      showPullLogs.value = true
-      break
-  }
-}
-// 计算属性
-const currentProject = computed<ComposeProject | undefined>(() => {
-  return composeStore.projects.find((p) => p.name === projectName.value)
-})
-
-const projectContainers = computed(() => {
-  return containerStore.getProjectContainers(projectName.value).value
-})
-
-const isYamlModified = computed(() => {
-  return yamlContent.value !== originalYamlContent.value
-})
-
-const tabTitleHeight = computed(() => {
-  return 42
-})
-const yamlEditorOptHeight = computed(() => {
-  return 42
-})
-
-const tabHeight = computed(() => {
-  return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value + settingStore.contentSafeBottom}px)`
-})
-
-const yamlEditorMinHeight = computed(() => {
-  return `${document.documentElement.clientHeight - settingStore.contentSafeTop - tabTitleHeight.value - yamlEditorOptHeight.value - settingStore.contentSafeBottom}px`
-})
-
-const logsSocketUrl = computed(() => {
-  if (!currentProject.value) {
-    return undefined
-  }
-  const token = settingStore.getToken()
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  return `${protocol}//${host}/api/v1/compose/logs/${currentProject.value.name}/ws?token=${token}&composeFile=${encodeURIComponent(currentProject.value.composeFile)}&projectName=${encodeURIComponent(currentProject.value.name)}`
-})
-
-// 获取状态文本
-const getStatusText = (status: string) => {
-  const statusMap: Record<string, string> = {
-    running: '运行中',
-    partial: '部分运行',
-    exited: '已停止',
-    paused: '暂停',
-    draft: '草稿',
-    created_stack: '创建中',
-    unknown: '未知',
-  }
-  return statusMap[status] || '未知'
-}
 
 // 加载项目数据
 const loadProjectData = async () => {
+  if (settingStore.systemInfo?.isComposeEnabled === false) {
+    return
+  }
   try {
     // 加载项目列表
     await composeStore.fetchProjects(true)
@@ -437,59 +292,146 @@ const Init = async () => {
   }
 }
 
-// 加载 YAML 内容
-const loadYamlContent = async () => {
-  if (!currentProject.value) {
-    return
-  }
+const {
+  projectName,
+  activeTab,
+  yamlLoading,
+  deployLoading,
+  showProgress,
+  yamlContent,
+  yamlValidationMessage,
+  isYamlModified,
+  canSubmitYamlDeploy,
+  canDeploy,
+  deployTargetProjectName,
+  deployTargetComposeFile,
+  deployTargetYamlContent,
+  cancelDeployConfirmation,
+  handleYamlChange,
+  loadYamlContent,
+  handleDeploy,
+  switchProject,
+  handleDeploySuccess: markYamlDeployed,
+} = createComposeDetailYamlController({
+  initialProjectName: route.params.projectName as string,
+  getCurrentProject: () => currentProject.value,
+  getProjectYaml: (name, composeFile) => composeStore.getProjectYaml(name, composeFile),
+  validateYaml: validateComposeYaml,
+  initProjectData: Init,
+  openConfirmDialog: ({ content, onConfirm }) => {
+    const inst = dialog.warning({
+      title: '确认重新部署',
+      content,
+      positiveText: '确认',
+      negativeText: '取消',
+      onPositiveClick: onConfirm,
+    })
+    return {
+      destroy: () => {
+        inst.destroy()
+      },
+    }
+  },
+  startDeployProgress: () => {
+    createProgressRef.value?.start()
+  },
+})
 
-  yamlLoading.value = true
-  try {
-    const content = await composeStore.getProjectYaml(
-      currentProject.value.name,
-      currentProject.value.composeFile,
-    )
-    yamlContent.value = content
-    originalYamlContent.value = content
-    handleYamlChange()
-  } catch (error) {
-    console.error('加载 YAML 内容失败:', error)
-  } finally {
-    yamlLoading.value = false
-  }
-}
+// 下拉菜单选项
+const dropdownOptions = computed(() =>
+  buildComposeDetailDropdownOptions({
+    project: currentProject.value,
+    canDeploy: canDeploy.value,
+    errorColor: theme.value.errorColor,
+  }),
+)
 
-// YAML 变化时验证
-const handleYamlChange = () => {
-  const result = validateComposeYaml(yamlContent.value)
-  isYamlValid.value = result.isValid
-  yamlValidationMessage.value = result.errorMessage
-}
-
-// 重新部署
-const handleDeploy = () => {
-  const content = isYamlModified.value
-    ? '保存 YAML 配置后将重新创建并启动所有服务，这可能会导致服务短暂中断。是否继续？'
-    : '将重新创建并启动所有服务，这可能会导致服务短暂中断。是否继续？'
-
-  dialog.warning({
-    title: '确认重新部署',
-    content,
-    positiveText: '确认',
-    negativeText: '取消',
-    onPositiveClick: () => {
-      deployLoading.value = true
-      showProgress.value = true
-      createProgressRef.value?.start()
+const handleMenuSelect = async (key: string) => {
+  await dispatchComposeDetailAction(key, currentProject.value, {
+    onDeploy: () => handleDeploy(),
+    onStart: async (project) => {
+      await handleComposeStart(project)
+      await containerStore.fetchContainers(true, false)
+    },
+    onStop: async (project) => {
+      await handleComposeStop(project)
+      await containerStore.fetchContainers(true, false)
+    },
+    onRestart: async (project) => {
+      await handleComposeRestart(project)
+      await containerStore.fetchContainers(true, false)
+    },
+    onDelete: async (project) => {
+      const deleted = await handleComposeDelete(project)
+      if (deleted) {
+        handleBack()
+      }
+    },
+    onPull: () => {
+      showPullLogs.value = true
+    },
+    onUnsupported: (msg) => {
+      message.warning(msg)
     },
   })
+}
+// 计算属性
+const currentProject = computed<ComposeProject | undefined>(() => {
+  return composeStore.projects.find((p) => p.name === projectName.value)
+})
+
+const projectContainers = computed(() => {
+  return containerStore.getProjectContainers(projectName.value).value
+})
+
+const tabTitleHeight = computed(() => {
+  return 42
+})
+const yamlEditorOptHeight = computed(() => {
+  return 42
+})
+
+const tabHeight = computed(() => {
+  return `calc(100vh - ${settingStore.contentSafeTop + tabTitleHeight.value + settingStore.contentSafeBottom}px)`
+})
+
+const yamlEditorMinHeight = computed(() => {
+  return `${document.documentElement.clientHeight - settingStore.contentSafeTop - tabTitleHeight.value - yamlEditorOptHeight.value - settingStore.contentSafeBottom}px`
+})
+
+const logsSocketUrl = computed(() => {
+  if (!currentProject.value) {
+    return undefined
+  }
+  const token = settingStore.getToken()
+  if (authStore.authEnabled && !token) {
+    return undefined
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = window.location.host
+  const base = `${protocol}//${host}/api/v1/compose/logs/${encodeURIComponent(currentProject.value.name)}/ws?composeFile=${encodeURIComponent(currentProject.value.composeFile)}&projectName=${encodeURIComponent(currentProject.value.name)}`
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base
+})
+
+// 获取状态文本
+const getStatusText = (status: string) => {
+  const statusMap: Record<string, string> = {
+    running: '运行中',
+    partial: '部分运行',
+    exited: '已停止',
+    paused: '暂停',
+    draft: '草稿',
+    created_stack: '创建中',
+    unknown: '未知',
+  }
+  return statusMap[status] || '未知'
 }
 
 // 部署成功
 const handleDeploySuccess = () => {
   const msg = isYamlModified.value ? '保存并重新部署成功' : '重新部署成功'
   message.success(msg)
-  originalYamlContent.value = yamlContent.value
+  markYamlDeployed()
 }
 
 // 部署失败
@@ -499,24 +441,27 @@ const handleDeployError = (errorMessage: string) => {
   deployLoading.value = false
 }
 
+let deployRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
 // 部署完成
 const handleDeployComplete = () => {
   deployLoading.value = false
+  if (deployRefreshTimer) {
+    clearTimeout(deployRefreshTimer)
+  }
   // 延迟刷新数据
-  setTimeout(() => {
+  deployRefreshTimer = setTimeout(() => {
+    deployRefreshTimer = null
     loadProjectData()
   }, 1000)
 }
 
-// Tab 切换
-const handleTabChange = (value: string) => {
-  activeTab.value = value
-
+watch(activeTab, (value) => {
   // 切换到 YAML tab 时加载内容
   if (value === 'yaml' && !yamlContent.value) {
-    loadYamlContent()
+    void loadYamlContent()
   }
-}
+})
 
 // 容器操作
 const handleStartContainer = async (container: ContainerStatus) => {
@@ -559,16 +504,22 @@ const handleViewContainerLogs = (container: ContainerStatus) => {
 
 // 返回
 const handleBack = () => {
-  router.push({ name: 'compose', query: route.query })
+  if (canNavigateBackInApp()) {
+    router.back()
+    return
+  }
+  void router.push({
+    name: 'compose',
+    query: buildComposeListQuery({}, parseComposeListQuery(route.query)),
+  })
 }
 
 // 监听项目名称变化
 watch(
   () => route.params.projectName,
-  (newName) => {
+  async (newName) => {
     if (newName && typeof newName === 'string') {
-      projectName.value = newName
-      Init()
+      await switchProject(newName)
     }
   },
 )
@@ -576,6 +527,14 @@ watch(
 // 初始化
 onMounted(async () => {
   Init()
+})
+
+onUnmounted(() => {
+  cancelDeployConfirmation()
+  if (deployRefreshTimer) {
+    clearTimeout(deployRefreshTimer)
+    deployRefreshTimer = null
+  }
 })
 </script>
 
@@ -699,19 +658,19 @@ onMounted(async () => {
     gap: 12px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

@@ -13,10 +13,11 @@ var (
 
 // ComposeProject Docker Compose 项目信息
 type ComposeProject struct {
-	Name         string      `json:"name"`
-	ComposeFile  string      `json:"composeFile"`
-	Status       StackStatus `json:"status"`
-	RunningCount int         `json:"runningCount"`
-	ExitedCount  int         `json:"exitedCount"`
-	CreatedCount int         `json:"createdCount"`
+	Name          string      `json:"name"`
+	ComposeFile   string      `json:"composeFile"`
+	Status        StackStatus `json:"status"`
+	RunningCount  int         `json:"runningCount"`
+	ExitedCount   int         `json:"exitedCount"`
+	CreatedCount  int         `json:"createdCount"`
+	ManagedConfig bool        `json:"managedConfig"`
 }

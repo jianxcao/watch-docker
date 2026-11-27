@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -15,46 +18,82 @@ import (
 type ComposeCreateUpSource struct {
 	projectName string
 	yamlContent string
+	composeFile string
 	force       bool
 	composeDir  string
 	key         string
 
 	// 依赖项
 	composeClient interface {
-		SaveNewProject(ctx context.Context, name, yamlContent string, force bool) (string, error)
+		PrepareSaveProjectPlanForDeploy(ctx context.Context, name, composeFile string, force bool) (composecli.DeployProjectPlan, error)
+		WritePreparedProjectPlan(plan composecli.DeployProjectPlan, yamlContent string) error
+		ResolveDeployPlan(ctx context.Context, name, composeFile string) (composecli.DeployProjectPlan, error)
 	}
+	streamExecutor func(ctx context.Context, options composecli.ExecDockerComposeStreamOptions) *composecli.ExecDockerComposeStreamResult
 
+	onPlanResolved func(plan composecli.DeployProjectPlan) error
 	// 用于提前返回错误或完成消息的函数
 	onComplete func(composeDir string)
+	onDone     func()
+	doneOnce   sync.Once
+	started    atomic.Bool
 }
 
 // ComposeCreateUpSourceOptions 选项
 type ComposeCreateUpSourceOptions struct {
+	Key           string
 	ProjectName   string
 	YamlContent   string
+	ComposeFile   string
 	Force         bool
 	ComposeDir    string
 	ComposeClient interface {
-		SaveNewProject(ctx context.Context, name, yamlContent string, force bool) (string, error)
+		PrepareSaveProjectPlanForDeploy(ctx context.Context, name, composeFile string, force bool) (composecli.DeployProjectPlan, error)
+		WritePreparedProjectPlan(plan composecli.DeployProjectPlan, yamlContent string) error
+		ResolveDeployPlan(ctx context.Context, name, composeFile string) (composecli.DeployProjectPlan, error)
 	}
-	OnComplete func(composeDir string) // 完成回调
+	StreamExecutor func(ctx context.Context, options composecli.ExecDockerComposeStreamOptions) *composecli.ExecDockerComposeStreamResult
+	OnPlanResolved func(plan composecli.DeployProjectPlan) error
+	OnComplete     func(composeDir string) // 完成回调
+	OnDone         func()                  // 流完全结束或未启动即销毁时释放登记槽位
 }
 
 // NewComposeCreateUpSource 创建新的数据源
 func NewComposeCreateUpSource(opts ComposeCreateUpSourceOptions) *ComposeCreateUpSource {
-	return &ComposeCreateUpSource{
-		projectName:   opts.ProjectName,
-		yamlContent:   opts.YamlContent,
-		force:         opts.Force,
-		composeDir:    opts.ComposeDir,
-		key:           fmt.Sprintf("compose-up-%s", opts.ProjectName),
-		composeClient: opts.ComposeClient,
-		onComplete:    opts.OnComplete,
+	executor := opts.StreamExecutor
+	if executor == nil {
+		executor = composecli.ExecuteDockerComposeCommandStream
 	}
+	key := opts.Key
+	if key == "" {
+		key = fmt.Sprintf("compose-create-up:%s", opts.ProjectName)
+	}
+	return &ComposeCreateUpSource{
+		projectName:    opts.ProjectName,
+		yamlContent:    opts.YamlContent,
+		composeFile:    opts.ComposeFile,
+		force:          opts.Force,
+		composeDir:     opts.ComposeDir,
+		key:            key,
+		composeClient:  opts.ComposeClient,
+		streamExecutor: executor,
+		onPlanResolved: opts.OnPlanResolved,
+		onComplete:     opts.OnComplete,
+		onDone:         opts.OnDone,
+	}
+}
+
+func (s *ComposeCreateUpSource) fireDone() {
+	s.doneOnce.Do(func() {
+		if s.onDone != nil {
+			s.onDone()
+		}
+	})
 }
 
 // Start 启动流，完全控制流的内容
 func (s *ComposeCreateUpSource) Start(ctx context.Context) (StreamReader[[]byte], error) {
+	s.started.Store(true)
 	logger.Logger.Info("启动 Compose Create and Up 流",
 		zap.String("projectName", s.projectName),
 		zap.String("composeDir", s.composeDir))
@@ -72,6 +111,7 @@ func (s *ComposeCreateUpSource) Start(ctx context.Context) (StreamReader[[]byte]
 // processFlow 处理完整的创建和启动流程
 func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.PipeWriter) {
 	defer writer.Close()
+	defer s.fireDone()
 
 	// ANSI 颜色代码
 	const (
@@ -111,7 +151,10 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 		return err
 	}
 
-	// 1. 如果有 yaml 内容，先创建项目文件
+	var plan composecli.DeployProjectPlan
+	execDir := s.composeDir
+
+	// 1. 先解析完整部署方案并校验跨目录部署冲突，确认无冲突后再实际写入 YAML
 	if s.yamlContent != "" {
 		// 发送信息：正在创建项目
 		if err := writeInfo(fmt.Sprintf("正在创建或更新项目 %s...\r\n", s.projectName)); err != nil {
@@ -119,25 +162,70 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 			return
 		}
 
-		// 创建项目
-		_, err := s.composeClient.SaveNewProject(ctx, s.projectName, s.yamlContent, s.force)
+		var err error
+		plan, err = s.composeClient.PrepareSaveProjectPlanForDeploy(ctx, s.projectName, s.composeFile, s.force)
 		if err != nil {
-			// 创建失败，写入错误并结束
+			// 解析失败，写入错误并结束
 			errMsg := fmt.Sprintf("创建或更新项目文件失败: %s\r\n", err.Error())
 			if err := writeError(errMsg); err != nil {
 				logger.Logger.Error("写入错误消息失败", zap.Error(err))
 			}
 			logger.Logger.Error("创建项目失败", zap.Error(err))
 			// 发送失败状态
-			writeStatus("error", "创建项目失败: "+err.Error())
+			_ = writeStatus("error", "创建项目失败: "+err.Error())
 			return // 直接结束，不执行后续命令
 		}
 
+		if s.onPlanResolved != nil {
+			if err := s.onPlanResolved(plan); err != nil {
+				errMsg := err.Error()
+				_ = writeError(errMsg + "\r\n")
+				_ = writeStatus("error", errMsg)
+				return
+			}
+		}
+
+		if err := s.composeClient.WritePreparedProjectPlan(plan, s.yamlContent); err != nil {
+			errMsg := fmt.Sprintf("创建或更新项目文件失败: %s\r\n", err.Error())
+			if err := writeError(errMsg); err != nil {
+				logger.Logger.Error("写入错误消息失败", zap.Error(err))
+			}
+			logger.Logger.Error("写入项目文件失败", zap.Error(err))
+			_ = writeStatus("error", "创建项目失败: "+err.Error())
+			return
+		}
+
+		if plan.SavedFile != "" {
+			execDir = filepath.Dir(plan.SavedFile)
+		} else if plan.ProjectDir != "" {
+			execDir = plan.ProjectDir
+		}
+
 		// 创建成功
-		successMsg := fmt.Sprintf("✓ 项目文件创建或更新成功: %s\r\n", s.composeDir)
+		successMsg := fmt.Sprintf("✓ 项目文件创建或更新成功: %s\r\n", plan.SavedFile)
 		if err := writeSuccess(successMsg); err != nil {
 			logger.Logger.Error("写入成功消息失败", zap.Error(err))
 			return
+		}
+	} else if s.composeClient != nil {
+		var err error
+		plan, err = s.composeClient.ResolveDeployPlan(ctx, s.projectName, s.composeFile)
+		if err != nil {
+			errMsg := fmt.Sprintf("校验 Compose 文件列表失败: %s\r\n", err.Error())
+			_ = writeError(errMsg)
+			_ = writeStatus("error", "创建项目失败: "+err.Error())
+			return
+		}
+		if s.onPlanResolved != nil {
+			if err := s.onPlanResolved(plan); err != nil {
+				errMsg := err.Error()
+				_ = writeError(errMsg + "\r\n")
+				_ = writeStatus("error", errMsg)
+				return
+			}
+		}
+		if plan.ProjectDir != "" {
+			execDir = plan.ProjectDir
 		}
 	}
 
@@ -147,23 +235,34 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 		return
 	}
 
-	// 3. 执行 docker compose up 命令
-	result := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
-		ExecPath:      s.composeDir,
-		Args:          []string{"--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate"},
+	// 3. 执行 docker compose up 命令（up 与后续 ps 共用同一组 -p <runtimeName> 与有序 -f 文件参数）
+	prefixArgs := plan.ComposeArgsPrefix()
+	upArgs := make([]string, 0, len(prefixArgs)+6)
+	upArgs = append(upArgs, prefixArgs...)
+	upArgs = append(upArgs, "--ansi", "always", "up", "-d", "--remove-orphans", "--force-recreate")
+	result := s.streamExecutor(ctx, composecli.ExecDockerComposeStreamOptions{
+		ExecPath:      execDir,
+		Args:          upArgs,
 		OperationName: "compose up",
 	})
 
 	if result.Error != nil {
-		errMsg := fmt.Sprintf("启动项目命令执行失败: %s\r\n", result.Error.Error())
-		if err := writeError(errMsg); err != nil {
+		errMsg := fmt.Sprintf("启动项目命令执行失败: %s", result.Error.Error())
+		if err := writeError(errMsg + "\r\n"); err != nil {
 			logger.Logger.Error("写入错误消息失败", zap.Error(err))
 		}
+		_ = writeStatus("error", errMsg)
 		logger.Logger.Error("启动命令失败", zap.Error(result.Error))
 		return
 	}
 
-	defer result.Reader.Close()
+	exitConsumed := false
+	defer func() {
+		_ = result.Reader.Close()
+		if !exitConsumed && result.ExitCode != nil {
+			<-result.ExitCode
+		}
+	}()
 
 	// 4. 读取 docker compose up 的输出并直接转发到我们的管道
 	buffer := make([]byte, 4096)
@@ -189,7 +288,9 @@ func (s *ComposeCreateUpSource) processFlow(ctx context.Context, writer *io.Pipe
 					goto afterUpCommand
 				}
 				logger.Logger.Error("读取 compose up 输出失败", zap.Error(err))
-				writeError(fmt.Sprintf("读取输出失败: %s\r\n", err.Error()))
+				errMsg := fmt.Sprintf("读取输出失败: %s", err.Error())
+				_ = writeError(errMsg + "\r\n")
+				_ = writeStatus("error", errMsg)
 				return
 			}
 		}
@@ -200,6 +301,7 @@ afterUpCommand:
 	var hasError bool
 	select {
 	case exitCode, ok := <-result.ExitCode:
+		exitConsumed = true
 		if !ok {
 			logger.Logger.Error("退出码通道异常关闭")
 			hasError = true
@@ -223,38 +325,48 @@ afterUpCommand:
 		return
 	}
 
-	// 6. 获取项目状态
+	// 6. 获取项目状态（与 up 共用同一组 -p 与有序 -f 参数）
 	writeInfo("\r\n正在获取项目状态...\r\n")
 
-	statusResult := composecli.ExecuteDockerComposeCommandStream(ctx, composecli.ExecDockerComposeStreamOptions{
-		ExecPath:      s.composeDir,
-		Args:          []string{"ps"},
+	psArgs := make([]string, 0, len(prefixArgs)+1)
+	psArgs = append(psArgs, prefixArgs...)
+	psArgs = append(psArgs, "ps")
+	statusResult := s.streamExecutor(ctx, composecli.ExecDockerComposeStreamOptions{
+		ExecPath:      execDir,
+		Args:          psArgs,
 		OperationName: "compose ps",
 	})
 
 	if statusResult.Error == nil && statusResult.Reader != nil {
-		defer statusResult.Reader.Close()
-		statusBuffer := make([]byte, 4096)
-		for {
-			n, err := statusResult.Reader.Read(statusBuffer)
-			if n > 0 {
-				writeRaw(statusBuffer[:n])
+		func() {
+			defer func() {
+				_ = statusResult.Reader.Close()
+				if statusResult.ExitCode != nil {
+					<-statusResult.ExitCode
+				}
+			}()
+			statusBuffer := make([]byte, 4096)
+			for {
+				n, err := statusResult.Reader.Read(statusBuffer)
+				if n > 0 {
+					writeRaw(statusBuffer[:n])
+				}
+				if err != nil {
+					break
+				}
 			}
-			if err != nil {
-				break
-			}
-		}
+		}()
 	}
 
 	// 7. 发送完成消息
-	writeSuccess(fmt.Sprintf("\r\n✓ 项目启动完成: %s\r\n", s.composeDir))
+	writeSuccess(fmt.Sprintf("\r\n✓ 项目启动完成: %s\r\n", execDir))
 
 	// 发送成功状态（让前端知道操作成功）
-	writeStatus("success", s.composeDir)
+	writeStatus("success", execDir)
 
 	// 调用完成回调
 	if s.onComplete != nil {
-		s.onComplete(s.composeDir)
+		s.onComplete(execDir)
 	}
 }
 
@@ -284,6 +396,9 @@ func escapeJSON(s string) string {
 func (s *ComposeCreateUpSource) Stop() error {
 	logger.Logger.Info("停止 Compose Create and Up 流",
 		zap.String("projectName", s.projectName))
+	if !s.started.Load() {
+		s.fireDone()
+	}
 	// 由于我们使用的是 pipe，关闭 reader 会触发 writer 停止
 	return nil
 }

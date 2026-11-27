@@ -17,7 +17,7 @@
     :closable="true"
     @after-leave="handleClose"
   >
-    <logs-stream-view ref="logsStreamViewRef" :project="project" :socket-url="socketUrl" />
+    <logs-stream-view ref="logsStreamViewRef" :socket-url="socketUrl" />
     <template #action>
       <n-space justify="end">
         <n-button @click="handleReconnect" :disabled="isConnecting || isConnected">
@@ -51,6 +51,7 @@ import { useSettingStore } from '@/store/setting'
 import { RefreshOutline, TrashOutline } from '@vicons/ionicons5'
 import { useThemeVars } from 'naive-ui'
 import { computed } from 'vue'
+import { buildComposeManagedActionSocketUrl } from './composeActionMenus'
 
 interface Props {
   project: ComposeProject | null
@@ -79,13 +80,7 @@ const getIcon = () => {
 }
 
 const socketUrl = computed(() => {
-  if (!props.project) {
-    return undefined
-  }
-  const token = settingStore.getToken()
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  return `${protocol}//${host}/api/v1/compose/pull/${props.project.name}/ws?token=${token}&composeFile=${encodeURIComponent(props.project.composeFile)}&projectName=${encodeURIComponent(props.project.name)}`
+  return buildComposeManagedActionSocketUrl('pull', props.project, settingStore.getToken())
 })
 
 const handleClose = () => {

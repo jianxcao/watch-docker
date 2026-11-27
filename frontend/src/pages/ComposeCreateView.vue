@@ -98,7 +98,7 @@
     <!-- 创建进度组件 -->
     <ComposeCreateProgress
       ref="createProgressRef"
-      :show="showProgress"
+      v-model:show="showProgress"
       :project-name="formData.name"
       :yaml-content="formData.yaml"
       :force="true"
@@ -124,7 +124,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useThemeVars, type FormInst, type FormRules } from 'naive-ui'
 import { ArrowBackOutline, FolderOpenOutline, CloudUploadOutline } from '@vicons/ionicons5'
@@ -285,10 +285,21 @@ const handleCreateError = (errorMessage: string) => {
 }
 
 // 创建完成（无论成功失败）
+let completeRedirectTimer: ReturnType<typeof setTimeout> | null = null
+
+const clearRedirectTimer = () => {
+  if (completeRedirectTimer) {
+    clearTimeout(completeRedirectTimer)
+    completeRedirectTimer = null
+  }
+}
+
 const handleCreateComplete = () => {
   submitting.value = false
+  clearRedirectTimer()
   // 延迟跳转，让用户看到完成信息
-  setTimeout(() => {
+  completeRedirectTimer = setTimeout(() => {
+    completeRedirectTimer = null
     // 刷新 compose
     composeStore.fetchProjects(true)
     router.push({ name: 'compose' })
@@ -297,20 +308,32 @@ const handleCreateComplete = () => {
 
 // 返回
 const handleBack = () => {
+  clearRedirectTimer()
   router.back()
 }
 
 // 取消
 const handleCancel = () => {
+  clearRedirectTimer()
   router.push({ name: 'compose' })
 }
+
+watch(appPath, () => {
+  if (formData.value.name.trim()) {
+    handleNameChange()
+  }
+})
 
 // 初始化
 onMounted(() => {
   // 加载系统信息
-  if (!settingStore.systemInfo) {
+  if (!settingStore.systemInfo?.appPath) {
     settingStore.fetchSystemInfo()
   }
+})
+
+onUnmounted(() => {
+  clearRedirectTimer()
 })
 </script>
 

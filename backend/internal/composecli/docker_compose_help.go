@@ -174,7 +174,9 @@ func ExecuteDockerComposeCommand(ctx context.Context, options ExecDockerComposeO
 	fullArgs := append([]string{"compose"}, options.Args...)
 	logger.Logger.Info("ExecuteDockerComposeCommand", zap.String("execPath", options.ExecPath), zap.Strings("args", fullArgs))
 	cmd := exec.CommandContext(ctx, "docker", fullArgs...)
-	cmd.Dir = options.ExecPath
+	if options.ExecPath != "" {
+		cmd.Dir = options.ExecPath
+	}
 	result := &ExecDockerComposeResult{}
 	if options.NeedOutput {
 		result.Output, result.Error = cmd.CombinedOutput()
@@ -190,7 +192,9 @@ func ExecuteDockerComposeCommandStream(ctx context.Context, options ExecDockerCo
 
 	fullArgs := append([]string{"compose"}, options.Args...)
 	cmd := exec.CommandContext(cmdCtx, "docker", fullArgs...)
-	cmd.Dir = options.ExecPath
+	if options.ExecPath != "" {
+		cmd.Dir = options.ExecPath
+	}
 	logger.Logger.Info("ExecuteDockerComposeCommandStream", zap.String("args", strings.Join(fullArgs, " ")))
 
 	result := &ExecDockerComposeStreamResult{
