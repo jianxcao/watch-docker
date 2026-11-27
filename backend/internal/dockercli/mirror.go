@@ -1,6 +1,7 @@
 package dockercli
 
 import (
+	"net"
 	"net/url"
 	"strings"
 
@@ -24,6 +25,59 @@ func (e MirrorEndpoint) HostWithPrefix() string {
 		return e.Host + "/" + e.PathPrefix
 	}
 	return e.Host
+}
+
+// EngineHostWithPrefix 返回适合传给 Docker Engine 镜像引用的 mirror host(+prefix)。
+// 当主机名为不含点号且非 localhost 的单段名称（如 "registry"）且未显式带端口时，
+// 按端点协议补齐默认端口（https->443, http->80），避免被 reference 解析为 docker.io 命名空间。
+func (e MirrorEndpoint) EngineHostWithPrefix() (string, bool) {
+	u, err := url.Parse(e.BaseURL())
+	if err != nil || u == nil || u.User != nil || u.Hostname() == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(strings.TrimSpace(e.Scheme))
+	var defaultPort string
+	switch scheme {
+	case "https":
+		defaultPort = "443"
+	case "http":
+		defaultPort = "80"
+	default:
+		return "", false
+	}
+
+	hostname := strings.ToLower(u.Hostname())
+	rawPort := u.Port()
+	var authority string
+	switch {
+	case rawPort != "":
+		authority = net.JoinHostPort(hostname, rawPort)
+	case strings.Contains(hostname, ":"):
+		authority = "[" + hostname + "]"
+	case hostname == "localhost" || strings.Contains(hostname, "."):
+		authority = hostname
+	default:
+		authority = net.JoinHostPort(hostname, defaultPort)
+	}
+
+	prefix := strings.Trim(e.PathPrefix, "/")
+	if prefix != "" {
+		return authority + "/" + prefix, true
+	}
+	return authority, true
+}
+
+// RewriteRefToMirrorEndpoint 将 Docker Hub 引用改写为指向特定 MirrorEndpoint 的 Engine 镜像引用。
+func RewriteRefToMirrorEndpoint(ref string, ep MirrorEndpoint) (string, bool) {
+	engineHost, ok := ep.EngineHostWithPrefix()
+	if !ok {
+		return "", false
+	}
+	rewritten := RewriteRefToMirror(ref, engineHost)
+	if rewritten == ref || strings.TrimSpace(rewritten) == "" {
+		return "", false
+	}
+	return rewritten, true
 }
 
 func (e MirrorEndpoint) RepoPath(repo string) string {

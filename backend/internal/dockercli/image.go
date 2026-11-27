@@ -250,6 +250,23 @@ func isDigestedImageRef(ref string) bool {
 	return ok
 }
 
+func mirrorRefMatchesEndpoint(mirrorRef string, ep MirrorEndpoint) bool {
+	epOrigin, ok := parseAuthEndpointOrigin(ep.BaseURL(), false)
+	if !ok {
+		return false
+	}
+	named, err := reference.ParseNormalizedNamed(strings.TrimSpace(mirrorRef))
+	if err != nil {
+		return false
+	}
+	domain := strings.TrimSpace(reference.Domain(named))
+	if domain == "" {
+		return false
+	}
+	refOrigin, rok := parseAuthEndpointOrigin(epOrigin.scheme+"://"+domain, false)
+	return rok && refOrigin == epOrigin
+}
+
 // pullWithMirrorFallback 核心拉取逻辑：mirror 顺序尝试 + 官方 fallback + 自动 retag。
 func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
 	ref = strings.TrimSpace(ref)
@@ -262,9 +279,12 @@ func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platfor
 
 	var lastErr error
 	for _, ep := range mirrors {
-		host := ep.HostWithPrefix()
-		mirrorRef := RewriteRefToMirror(ref, host)
-		if mirrorRef == ref {
+		mirrorRef, ok := RewriteRefToMirrorEndpoint(ref, ep)
+		if !ok || !mirrorRefMatchesEndpoint(mirrorRef, ep) {
+			logger.Logger.Warn("mirror 目标引用解析与配置端点不匹配，跳过该 mirror",
+				zap.String("originalRef", ref),
+				zap.String("mirror", ep.BaseURL()),
+				zap.String("mirrorRef", mirrorRef))
 			continue
 		}
 		mirrorAuth := registryAuthForMirrorEndpoint(ep)
@@ -299,7 +319,7 @@ func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platfor
 				Source: mirrorRef,
 				Target: retagTarget,
 			}); err != nil {
-				lastErr = fmt.Errorf("mirror %s retag 失败: %w", host, err)
+				lastErr = fmt.Errorf("mirror %s retag 失败: %w", ep.BaseURL(), err)
 				logger.Logger.Warn("mirror 拉取成功但 retag 失败，尝试下一个或回退",
 					zap.String("mirrorRef", mirrorRef),
 					zap.String("targetRef", retagTarget),
@@ -313,7 +333,7 @@ func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platfor
 		c.InvalidateImageCache()
 		logger.Logger.Info("通过 mirror 拉取镜像成功",
 			zap.String("originalRef", ref),
-			zap.String("mirror", host))
+			zap.String("mirror", ep.BaseURL()))
 		return nil
 	}
 

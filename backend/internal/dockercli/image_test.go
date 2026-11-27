@@ -478,4 +478,205 @@ func TestImagePullMirrorCredentialOrigin(t *testing.T) {
 			t.Fatalf("expected anonymous auth when explicit http:// entry clears/owns direct origin, got %#v", pulls)
 		}
 	})
+
+	// 6. 单段主机名 mirror 补全默认端口避免被解析为 docker.io；既有 localhost/域名/显式端口/IPv6 形式保持不变；失败回退 Docker Hub 用其自身账号
+	t.Run("single-label mirror hostnames, existing authority forms, and fallback", func(t *testing.T) {
+		cases := []struct {
+			name          string
+			yamlCfg       string
+			wantFromImage string
+			wantUser      string
+			wantPass      string
+		}{
+			{
+				name: "https single-label host with cache prefix",
+				yamlCfg: `registry:
+  auth:
+    - host: https://registry
+      username: reg-user
+      token: reg-secret
+  mirrors:
+    - name: m-reg-cache
+      url: https://registry/cache
+      enabled: true
+`,
+				wantFromImage: "registry:443/cache/library/busybox",
+				wantUser:      "reg-user",
+				wantPass:      "reg-secret",
+			},
+			{
+				name: "https single-label host without prefix",
+				yamlCfg: `registry:
+  auth:
+    - host: https://registry
+      username: reg-user
+      token: reg-secret
+  mirrors:
+    - name: m-reg
+      url: https://registry
+      enabled: true
+`,
+				wantFromImage: "registry:443/library/busybox",
+				wantUser:      "reg-user",
+				wantPass:      "reg-secret",
+			},
+			{
+				name: "http single-label host with cache prefix keeps http cred only",
+				yamlCfg: `registry:
+  auth:
+    - host: https://registry
+      username: https-reg-user
+      token: https-reg-secret
+    - host: http://registry
+      username: http-reg-user
+      token: http-reg-secret
+  mirrors:
+    - name: m-http-reg
+      url: http://registry/cache
+      enabled: true
+`,
+				wantFromImage: "registry:80/cache/library/busybox",
+				wantUser:      "http-reg-user",
+				wantPass:      "http-reg-secret",
+			},
+			{
+				name: "localhost authority stays unannotated",
+				yamlCfg: `registry:
+  auth:
+    - host: https://localhost
+      username: local-user
+      token: local-secret
+  mirrors:
+    - name: m-local
+      url: https://localhost/cache
+      enabled: true
+`,
+				wantFromImage: "localhost/cache/library/busybox",
+				wantUser:      "local-user",
+				wantPass:      "local-secret",
+			},
+			{
+				name: "dotted domain stays unannotated",
+				yamlCfg: `registry:
+  auth:
+    - host: https://mirror.example.com
+      username: fqdn-user
+      token: fqdn-secret
+  mirrors:
+    - name: m-fqdn
+      url: https://mirror.example.com/cache
+      enabled: true
+`,
+				wantFromImage: "mirror.example.com/cache/library/busybox",
+				wantUser:      "fqdn-user",
+				wantPass:      "fqdn-secret",
+			},
+			{
+				name: "explicit port on single-label host stays exact",
+				yamlCfg: `registry:
+  auth:
+    - host: https://registry:5000
+      username: port5000-user
+      token: port5000-secret
+  mirrors:
+    - name: m-port
+      url: https://registry:5000/cache
+      enabled: true
+`,
+				wantFromImage: "registry:5000/cache/library/busybox",
+				wantUser:      "port5000-user",
+				wantPass:      "port5000-secret",
+			},
+			{
+				name: "bracketed IPv6 with port stays exact",
+				yamlCfg: `registry:
+  auth:
+    - host: https://[::1]:5000
+      username: v6port-user
+      token: v6port-secret
+  mirrors:
+    - name: m-v6port
+      url: https://[::1]:5000/cache
+      enabled: true
+`,
+				wantFromImage: "[::1]:5000/cache/library/busybox",
+				wantUser:      "v6port-user",
+				wantPass:      "v6port-secret",
+			},
+			{
+				name: "bracketed IPv6 without explicit port stays exact",
+				yamlCfg: `registry:
+  auth:
+    - host: https://[::1]
+      username: v6def-user
+      token: v6def-secret
+  mirrors:
+    - name: m-v6def
+      url: https://[::1]/cache
+      enabled: true
+`,
+				wantFromImage: "[::1]/cache/library/busybox",
+				wantUser:      "v6def-user",
+				wantPass:      "v6def-secret",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				loadPullCfg(t, tc.yamlCfg)
+				cli, snapshot, _ := setupFakeEngine(t, nil)
+				if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+					t.Fatalf("ImagePullWithPlatform failed: %v", err)
+				}
+				pulls := snapshot()
+				if len(pulls) != 1 {
+					t.Fatalf("expected 1 pull call, got %#v", pulls)
+				}
+				if pulls[0].fromImage != tc.wantFromImage || pulls[0].tag != "latest" {
+					t.Fatalf("target mismatch: got=(fromImage=%q tag=%q) want=(%q, latest)", pulls[0].fromImage, pulls[0].tag, tc.wantFromImage)
+				}
+				if pulls[0].auth.Username != tc.wantUser || pulls[0].auth.Password != tc.wantPass {
+					t.Fatalf("auth mismatch: got=%#v want=(%s, %s)", pulls[0].auth, tc.wantUser, tc.wantPass)
+				}
+			})
+		}
+
+		t.Run("single-label mirror error falls back to docker hub with hub credentials", func(t *testing.T) {
+			loadPullCfg(t, `registry:
+  auth:
+    - host: https://registry
+      username: reg-user
+      token: reg-secret
+    - host: docker.io
+      username: hub-user
+      token: hub-secret
+  mirrors:
+    - name: m-reg
+      url: https://registry/cache
+      enabled: true
+`)
+			cli, snapshot, _ := setupFakeEngine(t, func(fromImage string) bool {
+				return strings.HasPrefix(fromImage, "registry:443/")
+			})
+			if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+				t.Fatalf("expected fallback to docker hub to succeed, got %v", err)
+			}
+			pulls := snapshot()
+			if len(pulls) != 2 {
+				t.Fatalf("expected 2 pull calls (mirror + hub fallback), got %#v", pulls)
+			}
+			if pulls[0].fromImage != "registry:443/cache/library/busybox" || pulls[0].tag != "latest" {
+				t.Fatalf("first attempt mismatch: %#v", pulls[0])
+			}
+			if pulls[0].auth.Username != "reg-user" || pulls[0].auth.Password != "reg-secret" {
+				t.Fatalf("first attempt auth mismatch: %#v", pulls[0].auth)
+			}
+			if !strings.Contains(pulls[1].fromImage, "busybox") || strings.HasPrefix(pulls[1].fromImage, "registry") {
+				t.Fatalf("second attempt should target docker hub, got %#v", pulls[1])
+			}
+			if pulls[1].auth.Username != "hub-user" || pulls[1].auth.Password != "hub-secret" || pulls[1].auth.ServerAddress != "https://index.docker.io/v1/" {
+				t.Fatalf("second attempt hub auth mismatch: %#v", pulls[1].auth)
+			}
+		})
+	})
 }
