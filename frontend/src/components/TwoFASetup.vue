@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, nextTick, useTemplateRef } from 'vue'
 import { useMessage } from 'naive-ui'
 import QRCode from 'qrcode'
 import { startRegistration } from '@simplewebauthn/browser'
@@ -118,14 +118,18 @@ const handleOTPInit = async () => {
     if (res.code === 0) {
       otpSecret.value = res.data.secret
       const qrCodeURL = res.data.qrCodeURL
-      nextTick(() => {
-        if (qrCanvas.value) {
-          QRCode.toCanvas(qrCanvas.value, qrCodeURL, {
+      loading.value = false
+      await nextTick()
+      if (qrCanvas.value) {
+        try {
+          await QRCode.toCanvas(qrCanvas.value, qrCodeURL, {
             width: 256,
             margin: 2,
           })
+        } catch (qrErr: any) {
+          message.error(qrErr?.message || '生成二维码失败')
         }
-      })
+      }
     } else {
       message.error(res.msg || '初始化失败')
     }
@@ -159,10 +163,39 @@ const handleOTPVerify = async () => {
   }
 }
 
-// 复制密钥
-const copySecret = () => {
-  navigator.clipboard.writeText(otpSecret.value)
-  message.success('已复制到剪贴板')
+// 复制密钥（兼容 HTTP 非安全上下文的剪贴板回退方案）
+const copySecret = async () => {
+  const secret = otpSecret.value
+  if (!secret) {
+    return
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(secret)
+      message.success('已复制到剪贴板')
+      return
+    }
+  } catch {
+    // 剪贴板 API 不可用或被拒绝时使用回退方案
+  }
+  try {
+    const textarea = document.createElement('textarea')
+    textarea.value = secret
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(textarea)
+    if (ok) {
+      message.success('已复制到剪贴板')
+    } else {
+      message.warning('复制失败，请手动选中密钥复制')
+    }
+  } catch {
+    message.warning('复制失败，请手动选中密钥复制')
+  }
 }
 
 // WebAuthn 设置

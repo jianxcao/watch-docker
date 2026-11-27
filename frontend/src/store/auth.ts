@@ -17,6 +17,7 @@ export const useAuthStore = defineStore('auth', () => {
   // 二次验证状态
   const twoFARequired = ref(false)
   const twoFASetupRequired = ref(false)
+  const twoFAAccountSetup = ref(false)
   const tempToken = ref('')
   const twoFAMethod = ref('')
 
@@ -25,6 +26,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   // 检查认证状态加载中
   const checkingAuth = ref(false)
+  let initPromise: Promise<void> | null = null
 
   // 计算属性：是否需要登录
   const requiresAuth = computed(() => {
@@ -36,33 +38,49 @@ export const useAuthStore = defineStore('auth', () => {
     return settingStore.currentUsername
   })
 
-  // 初始化：从setting store恢复token
-  const initAuth = async () => {
-    checkingAuth.value = true
-    try {
-      // 检查是否启用身份验证
-      const authStatusRes = await authApi.checkAuthStatus()
-      authEnabled.value = authStatusRes.data.authEnabled
+  const setAuthStatus = (enabled: boolean) => {
+    authEnabled.value = enabled
+  }
 
-      // 如果启用了身份验证，检查当前token状态
-      if (authEnabled.value) {
-        const savedToken = settingStore.getToken()
-        if (savedToken) {
-          isLoggedIn.value = true
-          // 这里可以添加验证token有效性的逻辑
-        }
-      } else {
-        // 如果未启用身份验证，自动设为已登录状态
-        isLoggedIn.value = true
-      }
-    } catch (error) {
-      console.error('Failed to check auth status:', error)
-      // 如果无法检查状态，默认不启用认证
-      authEnabled.value = false
-      isLoggedIn.value = true
-    } finally {
-      checkingAuth.value = false
+  // 初始化：从setting store恢复token（不将 tempToken 视作完整登录态）
+  const initAuth = () => {
+    if (initPromise) {
+      return initPromise
     }
+    checkingAuth.value = true
+    initPromise = (async () => {
+      try {
+        const authStatusRes = await authApi.checkAuthStatus()
+        if (authStatusRes.code !== 0 || authStatusRes.data?.authEnabled === undefined) {
+          throw new Error(authStatusRes.msg || '检查认证状态失败')
+        }
+        authEnabled.value = authStatusRes.data.authEnabled
+
+        if (authEnabled.value) {
+          const savedToken = settingStore.getToken()
+          isLoggedIn.value = Boolean(savedToken)
+        } else {
+          isLoggedIn.value = true
+        }
+      } catch (error: any) {
+        console.error('Failed to check auth status:', error)
+        if (error?.code === 401 || error?.response?.status === 401) {
+          authEnabled.value = true
+          isLoggedIn.value = false
+        } else {
+          const hasSavedToken = Boolean(settingStore.getToken())
+          authEnabled.value = hasSavedToken
+          isLoggedIn.value = hasSavedToken
+        }
+      } finally {
+        checkingAuth.value = false
+      }
+    })()
+    return initPromise
+  }
+
+  const waitForInit = async () => {
+    await (initPromise ?? initAuth())
   }
 
   // 登录
@@ -70,11 +88,16 @@ export const useAuthStore = defineStore('auth', () => {
     loginLoading.value = true
     try {
       const res = await authApi.login(loginUsername, password)
+      if (res.code !== 0) {
+        return { success: false, message: res.msg || '登录失败' }
+      }
 
       // 检查是否需要二次验证
       if (res.data?.needTwoFA) {
+        settingStore.setToken('')
         twoFARequired.value = true
         twoFASetupRequired.value = !res.data.isSetup
+        twoFAAccountSetup.value = Boolean(res.data.isAccountSetup)
         tempToken.value = res.data.tempToken || ''
         twoFAMethod.value = res.data.method || ''
         // 保存临时 token 到 setting store
@@ -85,23 +108,28 @@ export const useAuthStore = defineStore('auth', () => {
           success: true,
           needTwoFA: true,
           isSetup: res.data.isSetup,
+          isAccountSetup: res.data.isAccountSetup,
           method: res.data.method,
         }
       }
 
       // 不需要二次验证，直接登录
       if (res.data?.token) {
+        settingStore.setTmpToken('')
         settingStore.setToken(res.data.token)
         settingStore.setCurrentUsername(res.data.username || loginUsername)
         isLoggedIn.value = true
         twoFARequired.value = false
+        twoFASetupRequired.value = false
+        twoFAAccountSetup.value = false
+        void settingStore.fetchSystemInfo(true)
         return { success: true }
       } else {
-        return { success: false, message: '登录失败' }
+        return { success: false, message: res.msg || '登录失败' }
       }
     } catch (error: any) {
       console.error('Login failed:', error)
-      const message = error.response?.data?.msg || error.message || '登录失败'
+      const message = error.response?.data?.msg || error.msg || error.message || '登录失败'
       return { success: false, message }
     } finally {
       loginLoading.value = false
@@ -122,6 +150,11 @@ export const useAuthStore = defineStore('auth', () => {
       settingStore.clearToken()
       settingStore.clearCurrentUsername()
       isLoggedIn.value = false
+      twoFARequired.value = false
+      twoFASetupRequired.value = false
+      twoFAAccountSetup.value = false
+      tempToken.value = ''
+      twoFAMethod.value = ''
       navigateTo('/login')
     }
   }
@@ -134,6 +167,7 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn.value = false
     twoFARequired.value = false
     twoFASetupRequired.value = false
+    twoFAAccountSetup.value = false
     tempToken.value = ''
     twoFAMethod.value = ''
     if (authEnabled.value) {
@@ -141,13 +175,27 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  // 完成二次验证后设置完整 token
+  // 完成二次验证后设置完整 token，并清空临时 token
   const completeTwoFA = (fullToken: string) => {
+    settingStore.setTmpToken('')
     settingStore.setToken(fullToken)
     isLoggedIn.value = true
     twoFARequired.value = false
     twoFASetupRequired.value = false
+    twoFAAccountSetup.value = false
     tempToken.value = ''
+    twoFAMethod.value = ''
+    void settingStore.fetchSystemInfo(true)
+  }
+
+  // 取消二次验证流程，返回用户名密码登录界面
+  const cancelTwoFA = () => {
+    twoFARequired.value = false
+    twoFASetupRequired.value = false
+    twoFAAccountSetup.value = false
+    tempToken.value = ''
+    twoFAMethod.value = ''
+    settingStore.setTmpToken('')
   }
 
   return {
@@ -159,6 +207,7 @@ export const useAuthStore = defineStore('auth', () => {
     checkingAuth,
     twoFARequired,
     twoFASetupRequired,
+    twoFAAccountSetup,
     tempToken,
     twoFAMethod,
 
@@ -167,9 +216,12 @@ export const useAuthStore = defineStore('auth', () => {
 
     // 方法
     initAuth,
+    waitForInit,
+    setAuthStatus,
     login,
     logout,
     forceLogout,
     completeTwoFA,
+    cancelTwoFA,
   }
 })

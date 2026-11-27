@@ -42,8 +42,8 @@ export const useAppStore = defineStore('app', () => {
 
   const checkHealth = async () => {
     try {
-      await healthApi.health()
-      setSystemHealth('healthy')
+      const res = await healthApi.health()
+      setSystemHealth(res.code === 0 ? 'healthy' : 'unhealthy')
     } catch (error) {
       setSystemHealth('unhealthy')
       console.error('健康检查失败:', error)

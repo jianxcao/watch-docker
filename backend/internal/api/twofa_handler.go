@@ -2,87 +2,216 @@ package api
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jianxcao/watch-docker/backend/internal/auth"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
-	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/jianxcao/watch-docker/backend/internal/twofa"
 	"go.uber.org/zap"
 )
 
-// extractRPIDAndOrigin 从请求中提取 RPID（域名）和 Origin
-// 返回值：rpid (不含端口的主机名), origin (完整的 origin URL)
-// 支持反向代理，优先从 X-Forwarded-Host 等代理头获取真实域名
-func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
-	// 从请求头获取前端的 origin（浏览器自动设置，通常是准确的）
-	origin = c.GetHeader("Origin")
-	if origin == "" {
-		// 回退方案：构造 origin
-		// 优先使用代理转发的真实主机名
-		host := c.GetHeader("X-Forwarded-Host")
-		if host == "" {
-			host = c.GetHeader("X-Original-Host")
-		}
-		if host == "" {
-			host = c.Request.Host
-		}
+type webauthnSessionEntry struct {
+	Username  string
+	Flow      string // "register" | "login"
+	RPID      string
+	Session   webauthn.SessionData
+	ExpiresAt time.Time
+}
 
-		// 判断协议（优先使用代理转发的协议）
-		scheme := c.GetHeader("X-Forwarded-Proto")
-		if scheme == "" {
-			scheme = "https" // 默认使用 https
-		}
+type otpSetupEntry struct {
+	Username  string
+	Secret    string
+	ExpiresAt time.Time
+}
 
-		origin = scheme + "://" + host
+var (
+	twofaSessionsMu  sync.Mutex
+	webauthnSessions = make(map[string]webauthnSessionEntry)
+	otpSetupSessions = make(map[string]otpSetupEntry)
+)
+
+func randomSessionID() string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return ""
 	}
+	return hex.EncodeToString(b)
+}
 
-	// 提取主机名作为 RPID（去掉端口）
-	// 优先从代理头获取真实主机名
-	host := c.GetHeader("X-Forwarded-Host")
+func storeWebAuthnSession(username, flow, rpid string, session *webauthn.SessionData) string {
+	id := randomSessionID()
+	now := time.Now()
+	twofaSessionsMu.Lock()
+	for k, v := range webauthnSessions {
+		if now.After(v.ExpiresAt) {
+			delete(webauthnSessions, k)
+		}
+	}
+	webauthnSessions[id] = webauthnSessionEntry{
+		Username:  username,
+		Flow:      flow,
+		RPID:      rpid,
+		Session:   *session,
+		ExpiresAt: now.Add(5 * time.Minute),
+	}
+	twofaSessionsMu.Unlock()
+	return id
+}
+
+func consumeWebAuthnSession(id, username, flow, rpid string) (webauthn.SessionData, bool) {
+	now := time.Now()
+	twofaSessionsMu.Lock()
+	defer twofaSessionsMu.Unlock()
+
+	entry, ok := webauthnSessions[id]
+	if !ok {
+		return webauthn.SessionData{}, false
+	}
+	delete(webauthnSessions, id)
+	if now.After(entry.ExpiresAt) {
+		return webauthn.SessionData{}, false
+	}
+	if entry.Username != username || entry.Flow != flow || entry.RPID != rpid {
+		return webauthn.SessionData{}, false
+	}
+	return entry.Session, true
+}
+
+func storeOTPSetupSecret(username, secret string) {
+	now := time.Now()
+	twofaSessionsMu.Lock()
+	for k, v := range otpSetupSessions {
+		if now.After(v.ExpiresAt) {
+			delete(otpSetupSessions, k)
+		}
+	}
+	otpSetupSessions[username] = otpSetupEntry{
+		Username:  username,
+		Secret:    secret,
+		ExpiresAt: now.Add(10 * time.Minute),
+	}
+	twofaSessionsMu.Unlock()
+}
+
+func consumeOTPSetupSecret(username, secret string) bool {
+	now := time.Now()
+	twofaSessionsMu.Lock()
+	defer twofaSessionsMu.Unlock()
+
+	entry, ok := otpSetupSessions[username]
+	if !ok {
+		// 若直接传入未初始化过的密钥，仅允许在服务端已有匹配会话时通过
+		return false
+	}
+	if now.After(entry.ExpiresAt) || entry.Secret != secret {
+		return false
+	}
+	delete(otpSetupSessions, username)
+	return true
+}
+
+func extractHostNameOnly(host string) string {
+	host = strings.TrimSpace(host)
 	if host == "" {
-		host = c.GetHeader("X-Original-Host")
+		return ""
 	}
-	if host == "" {
-		host = c.Request.Host
-	}
-	host = strings.TrimPrefix(host, "http://")
-	host = strings.TrimPrefix(host, "https://")
-
-	logger.Logger.Info("host", zap.String("host", host))
-
-	// 去掉端口号
 	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+		return h
 	}
-	rpid = host
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		return host[1 : len(host)-1]
+	}
+	return host
+}
 
+// extractValidatedRPIDAndOrigin 从请求提取并校验 RPID 和 Origin，防止子域 Origin 绕过、端口越界或未受信任反代 Host 伪造。
+func extractValidatedRPIDAndOrigin(c *gin.Context) (rpid string, origin string, ok bool) {
+	originHdr := strings.TrimSpace(c.GetHeader("Origin"))
+	host := auth.EffectiveRequestHost(c.Request)
+	reqHostOnly := extractHostNameOnly(host)
+	allowedDomains := strings.TrimSpace(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS)
+
+	if originHdr != "" {
+		u, err := url.Parse(originHdr)
+		if err != nil || u == nil || u.User != nil || u.Hostname() == "" || u.Host == "" {
+			return reqHostOnly, "", false
+		}
+		scheme := strings.ToLower(u.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return reqHostOnly, "", false
+		}
+		originHostOnly := u.Hostname()
+		normalizedOrigin := scheme + "://" + u.Host
+		if allowedDomains != "" {
+			if auth.MatchAllowedDomain(allowedDomains, u.Host, originHostOnly, scheme) {
+				return originHostOnly, normalizedOrigin, true
+			}
+			return reqHostOnly, "", false
+		}
+		if reqHostOnly != "" && strings.EqualFold(originHostOnly, reqHostOnly) {
+			return originHostOnly, normalizedOrigin, true
+		}
+		return reqHostOnly, "", false
+	}
+
+	if reqHostOnly == "" {
+		return "", "", false
+	}
+	scheme := auth.EffectiveRequestScheme(c.Request)
+	originHost := host
+	if _, _, err := net.SplitHostPort(host); err != nil && strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		originHost = "[" + host + "]"
+	}
+	if allowedDomains != "" && !auth.MatchAllowedDomain(allowedDomains, originHost, reqHostOnly, scheme) {
+		return reqHostOnly, "", false
+	}
+	return reqHostOnly, scheme + "://" + originHost, true
+}
+
+// extractRPIDAndOrigin 从请求提取 RPID 和 Origin；校验失败时仍返回安全的请求 Host 推导值供状态检查使用。
+func extractRPIDAndOrigin(c *gin.Context) (rpid string, origin string) {
+	rpid, origin, _ = extractValidatedRPIDAndOrigin(c)
 	return rpid, origin
 }
 
-// isAllowedDomain 检查域名是否在白名单中
 func isAllowedDomain(domain string) bool {
-	allowedDomainsStr := conf.EnvCfg.TWOFA_ALLOWED_DOMAINS
-	if allowedDomainsStr == "" {
-		return true // 空白名单表示允许所有域名
-	}
-
-	allowedDomains := strings.Split(allowedDomainsStr, ",")
-	for _, allowed := range allowedDomains {
-		if strings.TrimSpace(allowed) == domain {
-			return true
-		}
-	}
-	return false
+	return auth.MatchAllowedRPID(conf.EnvCfg.TWOFA_ALLOWED_DOMAINS, domain)
 }
 
-// handleTwoFAStatus 获取二次验证状态
+func upgradeTokenFromContext(c *gin.Context) (string, error) {
+	if raw, ok := c.Get("rawToken"); ok {
+		if tokenStr, ok := raw.(string); ok && tokenStr != "" {
+			return auth.UpgradeTempToken(tokenStr)
+		}
+	}
+	tokenStr, err := auth.ExtractTokenFromRequest(c)
+	if err != nil {
+		return "", err
+	}
+	return auth.UpgradeTempToken(tokenStr)
+}
+
+// isTempTokenBlockedForAlreadySetup 阻止已启用 2FA 的账户仅凭临时令牌重新绑定或覆盖密钥（防止 2FA 绕过）。
+func isTempTokenBlockedForAlreadySetup(c *gin.Context, username string) (bool, error) {
+	isTemp, _ := c.Get("isTempToken")
+	isTempBool, _ := isTemp.(bool)
+	if !isTempBool {
+		return false, nil
+	}
+	return twofa.IsUserSetup(username)
+}
+
 func (s *Server) handleTwoFAStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		username, exists := c.Get("username")
@@ -98,10 +227,7 @@ func (s *Server) handleTwoFAStatus() gin.HandlerFunc {
 			return
 		}
 
-		// 提取 RPID（用于 WebAuthn 检查）
 		rpid, _ := extractRPIDAndOrigin(c)
-
-		// 检查当前域名/方法是否已设置
 		isSetup, err := twofa.IsUserSetupForMethod(username.(string), userConfig.Method, rpid)
 		if err != nil {
 			s.logger.Error("check user setup status failed", zap.Error(err))
@@ -109,17 +235,23 @@ func (s *Server) handleTwoFAStatus() gin.HandlerFunc {
 			return
 		}
 
-		// 二次验证是否启用由 IS_SECONDARY_VERIFICATION 环境变量控制
+		isAccountSetup, err := twofa.IsUserSetup(username.(string))
+		if err != nil {
+			s.logger.Error("check user account setup status failed", zap.Error(err))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查设置状态失败"))
+			return
+		}
+
 		envCfg := conf.EnvCfg
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
-			"enabled": envCfg.IS_SECONDARY_VERIFICATION,
-			"isSetup": isSetup,
-			"method":  userConfig.Method,
+			"enabled":        envCfg.IS_SECONDARY_VERIFICATION,
+			"isSetup":        isSetup,
+			"isAccountSetup": isAccountSetup,
+			"method":         userConfig.Method,
 		}))
 	}
 }
 
-// handleOTPSetupInit 初始化 OTP 设置
 func (s *Server) handleOTPSetupInit() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		username, exists := c.Get("username")
@@ -127,8 +259,16 @@ func (s *Server) handleOTPSetupInit() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未登录"))
 			return
 		}
+		usernameStr := username.(string)
 
-		// 生成 OTP 密钥
+		if blocked, err := isTempTokenBlockedForAlreadySetup(c, usernameStr); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查 2FA 状态失败"))
+			return
+		} else if blocked {
+			c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "已启用二次验证，禁止使用临时令牌重置"))
+			return
+		}
+
 		secret, err := twofa.GenerateOTPSecret()
 		if err != nil {
 			s.logger.Error("generate otp secret failed", zap.Error(err))
@@ -136,16 +276,14 @@ func (s *Server) handleOTPSetupInit() gin.HandlerFunc {
 			return
 		}
 
-		// 生成二维码 URL
-		qrCodeURL, err := twofa.GenerateQRCodeURL(secret, username.(string), "Watch Docker")
+		qrCodeURL, err := twofa.GenerateQRCodeURL(secret, usernameStr, "Watch Docker")
 		if err != nil {
 			s.logger.Error("generate qr code url failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "生成二维码失败"))
 			return
 		}
 
-		// 将密钥临时存储到 session 中（使用 gin context）
-		c.Set("otp_secret", secret)
+		storeOTPSetupSecret(usernameStr, secret)
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"secret":    secret,
@@ -154,7 +292,6 @@ func (s *Server) handleOTPSetupInit() gin.HandlerFunc {
 	}
 }
 
-// handleOTPSetupVerify 验证并启用 OTP
 func (s *Server) handleOTPSetupVerify() gin.HandlerFunc {
 	type Request struct {
 		Code   string `json:"code" binding:"required"`
@@ -167,6 +304,16 @@ func (s *Server) handleOTPSetupVerify() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未登录"))
 			return
 		}
+		usernameStr := username.(string)
+
+		if blocked, err := isTempTokenBlockedForAlreadySetup(c, usernameStr); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查 2FA 状态失败"))
+			return
+		} else if blocked {
+			s.logger.Warn("blocked attempt to overwrite existing 2FA using temp token", zap.String("username", usernameStr))
+			c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "已启用二次验证，请先验证原有 2FA 后再修改"))
+			return
+		}
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -174,48 +321,56 @@ func (s *Server) handleOTPSetupVerify() gin.HandlerFunc {
 			return
 		}
 
-		// 验证 OTP 代码
+		if !consumeOTPSetupSecret(usernameStr, req.Secret) {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "OTP 初始化会话无效或已过期，请重新生成二维码"))
+			return
+		}
+
 		if !twofa.ValidateOTPCode(req.Secret, req.Code) {
+			// 允许重试时保留会话直到过期或成功
+			storeOTPSetupSecret(usernameStr, req.Secret)
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "验证码错误"))
 			return
 		}
 
-		// 保存配置
 		userConfig := &twofa.UserTwoFAConfig{
 			Method:    twofa.MethodOTP,
 			OTPSecret: req.Secret,
 			IsSetup:   true,
 		}
 
-		if err := twofa.SaveUserConfig(username.(string), userConfig); err != nil {
+		if err := twofa.SaveUserConfig(usernameStr, userConfig); err != nil {
 			s.logger.Error("save user twofa config failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "保存配置失败"))
 			return
 		}
 
-		// 升级临时 token 为完整 token
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未找到token"))
-			return
+		isTemp, _ := c.Get("isTempToken")
+		var fullToken string
+		if isTempBool, _ := isTemp.(bool); isTempBool {
+			var err error
+			fullToken, err = upgradeTokenFromContext(c)
+			if err != nil {
+				s.logger.Error("upgrade temp token failed", zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "升级token失败"))
+				return
+			}
+		} else {
+			var err error
+			fullToken, err = auth.GenerateToken(usernameStr)
+			if err != nil {
+				c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "生成token失败"))
+				return
+			}
 		}
 
-		tempToken := authHeader[7:] // 去掉 "Bearer "
-		fullToken, err := auth.UpgradeTempToken(tempToken)
-		if err != nil {
-			s.logger.Error("upgrade temp token failed", zap.Error(err))
-			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "升级token失败"))
-			return
-		}
-
-		s.logger.Info("user setup otp successfully", zap.String("username", username.(string)))
+		s.logger.Info("user setup otp successfully", zap.String("username", usernameStr))
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"token": fullToken,
 		}))
 	}
 }
 
-// handleVerifyOTP 验证 OTP
 func (s *Server) handleVerifyOTP() gin.HandlerFunc {
 	type Request struct {
 		Code string `json:"code" binding:"required"`
@@ -227,6 +382,15 @@ func (s *Server) handleVerifyOTP() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未登录"))
 			return
 		}
+		usernameStr := username.(string)
+
+		rateKey := c.ClientIP() + "|" + usernameStr
+		limiter := auth.GetOTPRateLimiter()
+		if limiter.IsBlocked(rateKey) {
+			s.logger.Warn("otp verification blocked due to rate limit", zap.String("username", usernameStr), zap.String("ip", c.ClientIP()))
+			c.JSON(http.StatusTooManyRequests, NewErrorResCode(CodeBadRequest, "验证码错误次数过多，请15分钟后再试"))
+			return
+		}
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -234,55 +398,48 @@ func (s *Server) handleVerifyOTP() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户配置
-		userConfig, err := twofa.GetUserConfig(username.(string))
+		userConfig, err := twofa.GetUserConfig(usernameStr)
 		if err != nil {
 			s.logger.Error("get user twofa config failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取配置失败"))
 			return
 		}
 
-		// 检查用户是否选择了 OTP 方法
 		if userConfig.Method != twofa.MethodOTP {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "未设置OTP"))
 			return
 		}
 
-		// 检查 OTP 密钥是否已设置
 		if userConfig.OTPSecret == "" {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "OTP密钥未设置"))
 			return
 		}
 
-		// 验证 OTP 代码
 		if !twofa.ValidateOTPCode(userConfig.OTPSecret, req.Code) {
-			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "验证码错误"))
+			blocked, _ := limiter.RecordFailure(rateKey)
+			if blocked {
+				c.JSON(http.StatusTooManyRequests, NewErrorResCode(CodeBadRequest, "验证码错误次数过多，请15分钟后再试"))
+			} else {
+				c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "验证码错误"))
+			}
 			return
 		}
+		limiter.RecordSuccess(rateKey)
 
-		// 升级临时 token 为完整 token
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未找到token"))
-			return
-		}
-
-		tempToken := authHeader[7:] // 去掉 "Bearer "
-		fullToken, err := auth.UpgradeTempToken(tempToken)
+		fullToken, err := upgradeTokenFromContext(c)
 		if err != nil {
 			s.logger.Error("upgrade temp token failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "升级token失败"))
 			return
 		}
 
-		s.logger.Info("user verify otp successfully", zap.String("username", username.(string)))
+		s.logger.Info("user verify otp successfully", zap.String("username", usernameStr))
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"token": fullToken,
 		}))
 	}
 }
 
-// handleWebAuthnRegisterBegin 开始 WebAuthn 注册
 func (s *Server) handleWebAuthnRegisterBegin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		username, exists := c.Get("username")
@@ -290,18 +447,28 @@ func (s *Server) handleWebAuthnRegisterBegin() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未登录"))
 			return
 		}
+		usernameStr := username.(string)
 
-		// 提取 RPID 和 Origin
-		rpid, origin := extractRPIDAndOrigin(c)
+		if blocked, err := isTempTokenBlockedForAlreadySetup(c, usernameStr); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查 2FA 状态失败"))
+			return
+		} else if blocked {
+			c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "已启用二次验证，禁止使用临时令牌添加凭据"))
+			return
+		}
 
-		// 检查域名白名单
+		rpid, origin, originOK := extractValidatedRPIDAndOrigin(c)
+		if !originOK {
+			s.logger.Warn("invalid webauthn origin or host", zap.String("host", c.Request.Host), zap.String("origin", c.GetHeader("Origin")))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "非法请求来源"))
+			return
+		}
 		if !isAllowedDomain(rpid) {
 			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
 			return
 		}
 
-		// 获取 WebAuthn 服务
 		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", rpid, origin)
 		if err != nil {
 			s.logger.Error("create webauthn service failed", zap.Error(err))
@@ -309,34 +476,29 @@ func (s *Server) handleWebAuthnRegisterBegin() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户在当前域名下的现有凭据
-		credentials, err := twofa.GetUserCredentialsForRPID(username.(string), rpid)
+		credentials, err := twofa.GetUserCredentialsForRPID(usernameStr, rpid)
 		if err != nil {
 			s.logger.Error("get user credentials for rpid failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取凭据失败"))
 			return
 		}
 
-		// 开始注册
-		options, session, err := webAuthnService.BeginRegistration(username.(string), credentials)
+		options, session, err := webAuthnService.BeginRegistration(usernameStr, credentials)
 		if err != nil {
 			s.logger.Error("begin webauthn registration failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "开始注册失败"))
 			return
 		}
 
-		// 将 session 数据存储到临时存储（这里使用内存，生产环境应使用 Redis）
-		sessionJSON, _ := json.Marshal(session)
-		c.Set("webauthn_session", string(sessionJSON))
+		sessionID := storeWebAuthnSession(usernameStr, "register", rpid, session)
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"options":     options,
-			"sessionData": string(sessionJSON),
+			"sessionData": sessionID,
 		}))
 	}
 }
 
-// handleWebAuthnRegisterFinish 完成 WebAuthn 注册
 func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 	type Request struct {
 		SessionData string          `json:"sessionData" binding:"required"`
@@ -349,6 +511,16 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未登录"))
 			return
 		}
+		usernameStr := username.(string)
+
+		if blocked, err := isTempTokenBlockedForAlreadySetup(c, usernameStr); err != nil {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "检查 2FA 状态失败"))
+			return
+		} else if blocked {
+			c.JSON(http.StatusUnauthorized, NewErrorResCode(CodeUnauthorized, "已启用二次验证，禁止使用临时令牌添加凭据"))
+			return
+		}
+
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
 			s.logger.Error("bind json failed", zap.Error(err))
@@ -356,17 +528,24 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 提取 RPID 和 Origin
-		rpid, origin := extractRPIDAndOrigin(c)
-
-		// 检查域名白名单
+		rpid, origin, originOK := extractValidatedRPIDAndOrigin(c)
+		if !originOK {
+			s.logger.Warn("invalid webauthn origin or host", zap.String("host", c.Request.Host), zap.String("origin", c.GetHeader("Origin")))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "非法请求来源"))
+			return
+		}
 		if !isAllowedDomain(rpid) {
 			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
 			return
 		}
 
-		// 获取 WebAuthn 服务
+		sessionData, ok := consumeWebAuthnSession(req.SessionData, usernameStr, "register", rpid)
+		if !ok {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "注册会话无效或已过期"))
+			return
+		}
+
 		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", rpid, origin)
 		if err != nil {
 			s.logger.Error("create webauthn service failed", zap.Error(err))
@@ -374,15 +553,6 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 解析 session 数据
-		var sessionData webauthn.SessionData
-		if err := json.Unmarshal([]byte(req.SessionData), &sessionData); err != nil {
-			s.logger.Error("unmarshal session data failed", zap.Error(err))
-			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "session数据错误"))
-			return
-		}
-
-		// 解析响应（使用已读取的 req.Response）
 		parsedResponse, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(req.Response))
 		if err != nil {
 			s.logger.Error("parse credential creation response failed", zap.Error(err))
@@ -390,31 +560,27 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户在当前域名下的现有凭据
-		credentials, err := twofa.GetUserCredentialsForRPID(username.(string), rpid)
+		credentials, err := twofa.GetUserCredentialsForRPID(usernameStr, rpid)
 		if err != nil {
 			s.logger.Error("get user credentials for rpid failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取凭据失败"))
 			return
 		}
 
-		// 完成注册
-		credential, err := webAuthnService.FinishRegistration(username.(string), credentials, sessionData, parsedResponse)
+		credential, err := webAuthnService.FinishRegistration(usernameStr, credentials, sessionData, parsedResponse)
 		if err != nil {
 			s.logger.Error("finish webauthn registration failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "完成注册失败"))
 			return
 		}
 
-		// 获取用户完整配置
-		userConfig, err := twofa.GetUserConfig(username.(string))
+		userConfig, err := twofa.GetUserConfig(usernameStr)
 		if err != nil {
 			s.logger.Error("get user twofa config failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取配置失败"))
 			return
 		}
 
-		// 保存凭据（包含 RPID）
 		userConfig.Method = twofa.MethodWebAuthn
 		userConfig.WebAuthnCredentials = append(userConfig.WebAuthnCredentials, twofa.WebAuthnCredentialWithRPID{
 			Credential: *credential,
@@ -422,35 +588,36 @@ func (s *Server) handleWebAuthnRegisterFinish() gin.HandlerFunc {
 		})
 		userConfig.IsSetup = true
 
-		if err := twofa.SaveUserConfig(username.(string), userConfig); err != nil {
+		if err := twofa.SaveUserConfig(usernameStr, userConfig); err != nil {
 			s.logger.Error("save user twofa config failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "保存配置失败"))
 			return
 		}
 
-		// 升级临时 token 为完整 token
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未找到token"))
-			return
+		isTemp, _ := c.Get("isTempToken")
+		var fullToken string
+		if isTempBool, _ := isTemp.(bool); isTempBool {
+			fullToken, err = upgradeTokenFromContext(c)
+			if err != nil {
+				s.logger.Error("upgrade temp token failed", zap.Error(err))
+				c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "升级token失败"))
+				return
+			}
+		} else {
+			fullToken, err = auth.GenerateToken(usernameStr)
+			if err != nil {
+				c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "生成token失败"))
+				return
+			}
 		}
 
-		tempToken := authHeader[7:] // 去掉 "Bearer "
-		fullToken, err := auth.UpgradeTempToken(tempToken)
-		if err != nil {
-			s.logger.Error("upgrade temp token failed", zap.Error(err))
-			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "升级token失败"))
-			return
-		}
-
-		s.logger.Info("user setup webauthn successfully", zap.String("username", username.(string)))
+		s.logger.Info("user setup webauthn successfully", zap.String("username", usernameStr))
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"token": fullToken,
 		}))
 	}
 }
 
-// handleWebAuthnLoginBegin 开始 WebAuthn 验证
 func (s *Server) handleWebAuthnLoginBegin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		username, exists := c.Get("username")
@@ -458,18 +625,20 @@ func (s *Server) handleWebAuthnLoginBegin() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未登录"))
 			return
 		}
+		usernameStr := username.(string)
 
-		// 提取 RPID 和 Origin
-		rpid, origin := extractRPIDAndOrigin(c)
-
-		// 检查域名白名单
+		rpid, origin, originOK := extractValidatedRPIDAndOrigin(c)
+		if !originOK {
+			s.logger.Warn("invalid webauthn origin or host", zap.String("host", c.Request.Host), zap.String("origin", c.GetHeader("Origin")))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "非法请求来源"))
+			return
+		}
 		if !isAllowedDomain(rpid) {
 			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
 			return
 		}
 
-		// 获取 WebAuthn 服务
 		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", rpid, origin)
 		if err != nil {
 			s.logger.Error("create webauthn service failed", zap.Error(err))
@@ -477,22 +646,19 @@ func (s *Server) handleWebAuthnLoginBegin() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户配置
-		userConfig, err := twofa.GetUserConfig(username.(string))
+		userConfig, err := twofa.GetUserConfig(usernameStr)
 		if err != nil {
 			s.logger.Error("get user twofa config failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取配置失败"))
 			return
 		}
 
-		// 检查用户是否选择了 WebAuthn 方法
 		if userConfig.Method != twofa.MethodWebAuthn {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "未设置WebAuthn"))
 			return
 		}
 
-		// 获取用户在当前域名下的凭据
-		credentials, err := twofa.GetUserCredentialsForRPID(username.(string), rpid)
+		credentials, err := twofa.GetUserCredentialsForRPID(usernameStr, rpid)
 		if err != nil {
 			s.logger.Error("get user credentials for rpid failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取凭据失败"))
@@ -504,25 +670,22 @@ func (s *Server) handleWebAuthnLoginBegin() gin.HandlerFunc {
 			return
 		}
 
-		// 开始验证
-		options, session, err := webAuthnService.BeginLogin(username.(string), credentials)
+		options, session, err := webAuthnService.BeginLogin(usernameStr, credentials)
 		if err != nil {
 			s.logger.Error("begin webauthn login failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "开始验证失败"))
 			return
 		}
 
-		// 将 session 数据存储到临时存储
-		sessionJSON, _ := json.Marshal(session)
+		sessionID := storeWebAuthnSession(usernameStr, "login", rpid, session)
 
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"options":     options,
-			"sessionData": string(sessionJSON),
+			"sessionData": sessionID,
 		}))
 	}
 }
 
-// handleWebAuthnLoginFinish 完成 WebAuthn 验证
 func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 	type Request struct {
 		SessionData string          `json:"sessionData" binding:"required"`
@@ -535,6 +698,7 @@ func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未登录"))
 			return
 		}
+		usernameStr := username.(string)
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -542,17 +706,24 @@ func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 提取 RPID 和 Origin
-		rpid, origin := extractRPIDAndOrigin(c)
-
-		// 检查域名白名单
+		rpid, origin, originOK := extractValidatedRPIDAndOrigin(c)
+		if !originOK {
+			s.logger.Warn("invalid webauthn origin or host", zap.String("host", c.Request.Host), zap.String("origin", c.GetHeader("Origin")))
+			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "非法请求来源"))
+			return
+		}
 		if !isAllowedDomain(rpid) {
 			s.logger.Warn("domain not in whitelist", zap.String("domain", rpid))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "域名不在白名单中"))
 			return
 		}
 
-		// 获取 WebAuthn 服务
+		sessionData, ok := consumeWebAuthnSession(req.SessionData, usernameStr, "login", rpid)
+		if !ok {
+			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "验证会话无效或已过期"))
+			return
+		}
+
 		webAuthnService, err := twofa.NewWebAuthnService("Watch Docker", rpid, origin)
 		if err != nil {
 			s.logger.Error("create webauthn service failed", zap.Error(err))
@@ -560,15 +731,6 @@ func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 解析 session 数据
-		var sessionData webauthn.SessionData
-		if err := json.Unmarshal([]byte(req.SessionData), &sessionData); err != nil {
-			s.logger.Error("unmarshal session data failed", zap.Error(err))
-			c.JSON(http.StatusOK, NewErrorResCode(CodeBadRequest, "session数据错误"))
-			return
-		}
-
-		// 解析响应（使用已读取的 req.Response）
 		parsedResponse, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(req.Response))
 		if err != nil {
 			s.logger.Error("parse credential request response failed", zap.Error(err))
@@ -576,8 +738,7 @@ func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户在当前域名下的凭据
-		credentials, err := twofa.GetUserCredentialsForRPID(username.(string), rpid)
+		credentials, err := twofa.GetUserCredentialsForRPID(usernameStr, rpid)
 		if err != nil {
 			s.logger.Error("get user credentials for rpid failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "获取凭据失败"))
@@ -589,37 +750,27 @@ func (s *Server) handleWebAuthnLoginFinish() gin.HandlerFunc {
 			return
 		}
 
-		// 完成验证
-		_, err = webAuthnService.FinishLogin(username.(string), credentials, sessionData, parsedResponse)
+		_, err = webAuthnService.FinishLogin(usernameStr, credentials, sessionData, parsedResponse)
 		if err != nil {
 			s.logger.Error("finish webauthn login failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "验证失败"))
 			return
 		}
 
-		// 升级临时 token 为完整 token
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "未找到token"))
-			return
-		}
-
-		tempToken := authHeader[7:] // 去掉 "Bearer "
-		fullToken, err := auth.UpgradeTempToken(tempToken)
+		fullToken, err := upgradeTokenFromContext(c)
 		if err != nil {
 			s.logger.Error("upgrade temp token failed", zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeInternalError, "升级token失败"))
 			return
 		}
 
-		s.logger.Info("user verify webauthn successfully", zap.String("username", username.(string)))
+		s.logger.Info("user verify webauthn successfully", zap.String("username", usernameStr))
 		c.JSON(http.StatusOK, NewSuccessRes(gin.H{
 			"token": fullToken,
 		}))
 	}
 }
 
-// handleDisableTwoFA 禁用二次验证
 func (s *Server) handleDisableTwoFA() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		username, exists := c.Get("username")
@@ -628,14 +779,12 @@ func (s *Server) handleDisableTwoFA() gin.HandlerFunc {
 			return
 		}
 
-		// 检查是否为临时 token
 		isTempToken, _ := c.Get("isTempToken")
-		if isTempToken.(bool) {
+		if isTemp, _ := isTempToken.(bool); isTemp {
 			c.JSON(http.StatusOK, NewErrorResCode(CodeUnauthorized, "需要完整验证"))
 			return
 		}
 
-		// 清除配置（将 IsSetup 设为 false，清空凭据）
 		userConfig := &twofa.UserTwoFAConfig{
 			IsSetup: false,
 		}

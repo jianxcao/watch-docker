@@ -10,19 +10,18 @@ import (
 
 // DownloadToken 下载令牌信息
 type DownloadToken struct {
-	Token       string    // 令牌
-	ContainerID string    // 容器ID
-	FilePath    string    // 文件路径
-	Username    string    // 用户名
-	CreatedAt   time.Time // 创建时间
-	ExpiresAt   time.Time // 过期时间
-	Used        bool      // 是否已使用
+	Token       string
+	ContainerID string
+	FilePath    string
+	Username    string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
 }
 
 // DownloadTokenManager 下载令牌管理器
 type DownloadTokenManager struct {
 	tokens map[string]*DownloadToken
-	mu     sync.RWMutex
+	mu     sync.Mutex
 }
 
 var downloadTokenManager = &DownloadTokenManager{
@@ -34,7 +33,6 @@ func GetDownloadTokenManager() *DownloadTokenManager {
 	return downloadTokenManager
 }
 
-// generateRandomToken 生成随机令牌
 func generateRandomToken() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -43,7 +41,7 @@ func generateRandomToken() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-// GenerateDownloadToken 生成下载令牌
+// GenerateDownloadToken 生成下载令牌（惰性清理过期条目，避免每次请求泄漏睡眠 goroutine）
 func (m *DownloadTokenManager) GenerateDownloadToken(containerID, filePath, username string, ttl time.Duration) (string, error) {
 	token, err := generateRandomToken()
 	if err != nil {
@@ -58,82 +56,51 @@ func (m *DownloadTokenManager) GenerateDownloadToken(containerID, filePath, user
 		Username:    username,
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(ttl),
-		Used:        false,
 	}
 
 	m.mu.Lock()
+	for k, existing := range m.tokens {
+		if now.After(existing.ExpiresAt) {
+			delete(m.tokens, k)
+		}
+	}
 	m.tokens[token] = downloadToken
 	m.mu.Unlock()
-
-	// 启动定时清理
-	go m.cleanupExpiredToken(token, ttl)
 
 	return token, nil
 }
 
-// ValidateDownloadToken 验证下载令牌
-func (m *DownloadTokenManager) ValidateDownloadToken(token, containerID, filePath string) error {
+// ConsumeDownloadToken 在单锁下原子校验并立即销毁下载令牌（用后即焚，消除并发重放 TOCTOU）
+func (m *DownloadTokenManager) ConsumeDownloadToken(token, containerID, filePath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	downloadToken, exists := m.tokens[token]
 	if !exists {
-		return fmt.Errorf("invalid token")
+		return fmt.Errorf("invalid or already used token")
 	}
 
-	// 检查是否已过期
 	if time.Now().After(downloadToken.ExpiresAt) {
 		delete(m.tokens, token)
 		return fmt.Errorf("token expired")
 	}
 
-	// 检查是否已使用
-	if downloadToken.Used {
-		return fmt.Errorf("token already used")
-	}
-
-	// 验证容器ID和文件路径
 	if downloadToken.ContainerID != containerID || downloadToken.FilePath != filePath {
 		return fmt.Errorf("token mismatch")
 	}
 
+	delete(m.tokens, token)
 	return nil
 }
 
-// MarkTokenUsed 标记令牌已使用（使令牌失效）
-func (m *DownloadTokenManager) MarkTokenUsed(token string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if downloadToken, exists := m.tokens[token]; exists {
-		downloadToken.Used = true
-		// 立即删除已使用的令牌
-		delete(m.tokens, token)
-	}
-}
-
-// cleanupExpiredToken 清理过期令牌
-func (m *DownloadTokenManager) cleanupExpiredToken(token string, ttl time.Duration) {
-	time.Sleep(ttl + 5*time.Second) // 多等待5秒确保过期
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if downloadToken, exists := m.tokens[token]; exists {
-		if time.Now().After(downloadToken.ExpiresAt) {
-			delete(m.tokens, token)
-		}
-	}
-}
-
-// CleanupAll 清理所有过期令牌（定期调用）
+// CleanupAll 清理所有过期令牌
 func (m *DownloadTokenManager) CleanupAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	now := time.Now()
 	for token, downloadToken := range m.tokens {
-		if now.After(downloadToken.ExpiresAt) || downloadToken.Used {
+		if now.After(downloadToken.ExpiresAt) {
 			delete(m.tokens, token)
 		}
 	}

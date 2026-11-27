@@ -28,6 +28,9 @@ var (
 
 func initJWTSecret() {
 	if envSecret := os.Getenv("JWT_SECRET"); envSecret != "" {
+		if len(envSecret) < 32 {
+			fmt.Println("警告: JWT_SECRET 长度建议至少 32 字节以保证签名强度")
+		}
 		jwtSecret = []byte(envSecret)
 		return
 	}
@@ -44,8 +47,13 @@ func initJWTSecret() {
 	}
 	jwtSecret = secret
 
-	_ = os.MkdirAll(conf.EnvCfg.CONFIG_PATH, 0700)
-	_ = os.WriteFile(secretFile, secret, 0600)
+	if err := os.MkdirAll(conf.EnvCfg.CONFIG_PATH, 0700); err != nil {
+		fmt.Printf("警告: 无法创建 JWT 密钥目录 %s: %v\n", conf.EnvCfg.CONFIG_PATH, err)
+		return
+	}
+	if err := os.WriteFile(secretFile, secret, 0600); err != nil {
+		fmt.Printf("警告: 无法持久化 JWT 密钥文件 %s: %v\n", secretFile, err)
+	}
 }
 
 func getJWTSecret() []byte {
@@ -55,19 +63,17 @@ func getJWTSecret() []byte {
 
 type Claims struct {
 	Username      string `json:"username"`
-	PasswordHash  string `json:"passwordHash"` // 密码的哈希值，用于验证密码是否被修改
+	PasswordHash  string `json:"passwordHash"`
 	TwoFAVerified bool   `json:"twoFAVerified"`
 	IsTempToken   bool   `json:"isTempToken"`
 	jwt.RegisteredClaims
 }
 
-// hashPassword 计算密码的 SHA256 哈希
 func hashPassword(password string) string {
 	hash := sha256.Sum256([]byte(password))
 	return hex.EncodeToString(hash[:])
 }
 
-// GenerateToken 生成JWT token
 func GenerateToken(username string) (string, error) {
 	envCfg := conf.EnvCfg
 	expirationTime := time.Now().Add(30 * 24 * time.Hour)
@@ -86,14 +92,12 @@ func GenerateToken(username string) (string, error) {
 	return token.SignedString(getJWTSecret())
 }
 
-// GenerateTempToken 生成临时 token（需要二次验证）
 func GenerateTempToken(username string) (string, error) {
 	envCfg := conf.EnvCfg
-	// 临时 token 有效期较短，15分钟
 	expirationTime := time.Now().Add(15 * time.Minute)
 	claims := &Claims{
 		Username:      username,
-		PasswordHash:  hashPassword(envCfg.USER_PASSWORD), // 存储密码哈希
+		PasswordHash:  hashPassword(envCfg.USER_PASSWORD),
 		TwoFAVerified: false,
 		IsTempToken:   true,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -106,22 +110,14 @@ func GenerateTempToken(username string) (string, error) {
 	return token.SignedString(getJWTSecret())
 }
 
-// UpgradeTempToken 将临时 token 升级为完整 token
 func UpgradeTempToken(tempToken string) (string, error) {
-	claims, err := ValidateToken(tempToken)
+	claims, err := ValidateTempToken(tempToken)
 	if err != nil {
 		return "", err
 	}
-
-	if !claims.IsTempToken {
-		return "", errors.New("not a temp token")
-	}
-
-	// 生成完整 token
 	return GenerateToken(claims.Username)
 }
 
-// ValidateTempToken 验证临时 token
 func ValidateTempToken(tokenString string) (*Claims, error) {
 	claims, err := ValidateToken(tokenString)
 	if err != nil {
@@ -135,7 +131,6 @@ func ValidateTempToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
-// ValidateToken 验证JWT token
 func ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
@@ -159,80 +154,74 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
-// AuthMiddleware 授权中间件
+// ExtractTokenFromRequest 从 query 参数 (?token=) 或 Authorization Bearer 头安全提取 JWT
+func ExtractTokenFromRequest(c *gin.Context) (string, error) {
+	if token := strings.TrimSpace(c.Query("token")); token != "" {
+		return token, nil
+	}
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		return "", errors.New("需要登录")
+	}
+	tokenParts := strings.SplitN(authHeader, " ", 2)
+	if len(tokenParts) != 2 || !strings.EqualFold(tokenParts[0], "Bearer") || strings.TrimSpace(tokenParts[1]) == "" {
+		return "", errors.New("无效的token格式")
+	}
+	return strings.TrimSpace(tokenParts[1]), nil
+}
+
+// ValidateFullAccessClaims 校验完整访问令牌（禁止 tempToken、校验用户名与密码哈希）
+func ValidateFullAccessClaims(tokenString string) (*Claims, error) {
+	envCfg := conf.EnvCfg
+	claims, err := ValidateToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	if claims.IsTempToken {
+		return nil, errors.New("需要完成二次验证")
+	}
+	if claims.Username != envCfg.USER_NAME {
+		return nil, ErrInvalidToken
+	}
+	if claims.PasswordHash != hashPassword(envCfg.USER_PASSWORD) {
+		return nil, errors.New("token已失效，请重新登录")
+	}
+	return claims, nil
+}
+
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 检查是否配置了用户名和密码，如果没有配置则跳过验证
 		envCfg := conf.EnvCfg
 		if envCfg.USER_NAME == "" || envCfg.USER_PASSWORD == "" {
 			c.Next()
 			return
 		}
-		token := c.Query("token")
-		if token == "" {
-			// 获取 Authorization header
-			authHeader := c.GetHeader("Authorization")
-			if authHeader == "" {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "需要登录"})
-				c.Abort()
-				return
-			}
-
-			// 检查 Bearer token 格式
-			tokenParts := strings.SplitN(authHeader, " ", 2)
-			if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token格式"})
-				c.Abort()
-				return
-			}
-			token = tokenParts[1]
-		}
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "需要登录"})
-			c.Abort()
-			return
-		}
-		// 验证 token
-		claims, err := ValidateToken(token)
+		token, err := ExtractTokenFromRequest(c)
 		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": err.Error()})
+			c.Abort()
+			return
+		}
+
+		claims, err := ValidateFullAccessClaims(token)
+		if err != nil {
+			msg := err.Error()
 			if errors.Is(err, ErrTokenExpired) {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "token已过期"})
-			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token"})
+				msg = "token已过期"
+			} else if errors.Is(err, ErrInvalidToken) {
+				msg = "无效的token"
 			}
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": msg})
 			c.Abort()
 			return
 		}
 
-		// 检查是否为临时 token - 临时 token 不能访问受保护的资源
-		if claims.IsTempToken {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "需要完成二次验证"})
-			c.Abort()
-			return
-		}
-
-		// 验证 token 中的用户名和密码是否与配置的用户名密码匹配
-		if claims.Username != envCfg.USER_NAME {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token"})
-			c.Abort()
-			return
-		}
-
-		// 验证密码哈希，确保密码未被修改
-		currentPasswordHash := hashPassword(envCfg.USER_PASSWORD)
-		if claims.PasswordHash != currentPasswordHash {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "token已失效，请重新登录"})
-			c.Abort()
-			return
-		}
-
-		// 将用户信息存储到上下文中
 		c.Set("username", claims.Username)
+		c.Set("isTempToken", false)
 		c.Next()
 	}
 }
 
-// ValidateCredentials 验证用户凭据（时序安全比较，防止时序攻击）
 func ValidateCredentials(username, password string) bool {
 	envCfg := conf.EnvCfg
 	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(envCfg.USER_NAME)) == 1
@@ -240,49 +229,26 @@ func ValidateCredentials(username, password string) bool {
 	return usernameMatch && passwordMatch
 }
 
-// IsAuthEnabled 检查是否启用了身份验证
 func IsAuthEnabled() bool {
 	envCfg := conf.EnvCfg
 	return envCfg.USER_NAME != "" && envCfg.USER_PASSWORD != ""
 }
 
-// TempTokenMiddleware 临时 token 中间件（允许临时 token）
 func TempTokenMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 检查是否配置了用户名和密码，如果没有配置则跳过验证
 		envCfg := conf.EnvCfg
 		if envCfg.USER_NAME == "" || envCfg.USER_PASSWORD == "" {
 			c.Next()
 			return
 		}
 
-		token := c.Query("token")
-		if token == "" {
-			// 获取 Authorization header
-			authHeader := c.GetHeader("Authorization")
-			if authHeader == "" {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "需要登录"})
-				c.Abort()
-				return
-			}
-
-			// 检查 Bearer token 格式
-			tokenParts := strings.SplitN(authHeader, " ", 2)
-			if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token格式"})
-				c.Abort()
-				return
-			}
-			token = tokenParts[1]
-		}
-
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "需要登录"})
+		token, err := ExtractTokenFromRequest(c)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": err.Error()})
 			c.Abort()
 			return
 		}
 
-		// 验证 token（允许临时 token）
 		claims, err := ValidateToken(token)
 		if err != nil {
 			if errors.Is(err, ErrTokenExpired) {
@@ -294,14 +260,12 @@ func TempTokenMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// 验证 token 中的用户名和密码是否与配置的用户名密码匹配
 		if claims.Username != envCfg.USER_NAME {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效的token"})
 			c.Abort()
 			return
 		}
 
-		// 验证密码哈希，确保密码未被修改
 		currentPasswordHash := hashPassword(envCfg.USER_PASSWORD)
 		if claims.PasswordHash != currentPasswordHash {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "token已失效，请重新登录"})
@@ -309,9 +273,9 @@ func TempTokenMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// 将用户信息存储到上下文中
 		c.Set("username", claims.Username)
 		c.Set("isTempToken", claims.IsTempToken)
+		c.Set("rawToken", token)
 		c.Next()
 	}
 }

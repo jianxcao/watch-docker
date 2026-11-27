@@ -107,7 +107,7 @@ func (c *Client[T]) writeMessage(messageType int, message T) error {
 // 主要用于检测客户端断开连接和处理 Pong 响应
 func (c *Client[T]) ReadPump() {
 	defer func() {
-		c.hub.unregister <- c
+		c.hub.UnregisterClient(c)
 		c.conn.Close()
 		logger.Logger.Debug("客户端 readPump 退出", zap.String("clientId", c.id))
 	}()
