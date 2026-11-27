@@ -6,7 +6,7 @@
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITerminalOptions, type ITheme } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
@@ -15,7 +15,7 @@ import { useTheme as useTermTheme } from './config'
 import { useSettingStore } from '@/store/setting'
 import { isMobile, isTablet } from '@/common/utils'
 const settingStore = useSettingStore()
-const termTheme = useTermTheme(settingStore.setting.theme)
+const termTheme = computed(() => useTermTheme(settingStore.setting.theme))
 
 export interface TermConfig {
   theme?: ITheme
@@ -54,7 +54,7 @@ const isCleanedUp = ref(false)
 // 添加插件
 let fitAddon: FitAddon | undefined = new FitAddon()
 let webLinksAddon: WebLinksAddon | undefined = new WebLinksAddon()
-let webglAddon: WebglAddon | undefined = new WebglAddon()
+let webglAddon: WebglAddon | undefined
 let clipboardAddon: ClipboardAddon | undefined = new ClipboardAddon()
 let unicode11Addon: Unicode11Addon | undefined = new Unicode11Addon()
 // 初始化终端
@@ -65,7 +65,7 @@ const initTerminal = () => {
 
   const config: ITerminalOptions = Object.assign(
     {
-      theme: termTheme,
+      theme: termTheme.value,
       convertEol: true,
       fontSize: 13,
       fontFamily: 'Monaco, Consolas, "Courier New", monospace',
@@ -86,9 +86,9 @@ const initTerminal = () => {
 
   // 创建终端实例
   terminal.value = new Terminal(config)
-  watchEffect(() => {
+  watch(termTheme, (nextTheme) => {
     if (terminal.value) {
-      terminal.value.options.theme = termTheme
+      terminal.value.options.theme = nextTheme
     }
   })
 
@@ -98,17 +98,38 @@ const initTerminal = () => {
   terminal.value.loadAddon(webLinksAddon!)
   terminal.value.loadAddon(fitAddon!)
   terminal.value.loadAddon(unicode11Addon!)
-  terminal.value.loadAddon(webglAddon!)
+  try {
+    const addon = new WebglAddon()
+    addon.onContextLoss(() => {
+      addon.dispose()
+      if (webglAddon === addon) {
+        webglAddon = undefined
+      }
+    })
+    terminal.value.loadAddon(addon)
+    webglAddon = addon
+  } catch (err) {
+    console.warn('WebGL addon unavailable, using default renderer:', err)
+    webglAddon = undefined
+  }
   terminal.value.unicode.activeVersion = '11'
   terminal.value?.textarea?.setAttribute('enterkeyhint', 'send')
+  const safeFit = () => {
+    const el = terminalRef.value
+    if (!el || el.clientWidth === 0 || el.clientHeight === 0 || !fitAddon) {
+      return false
+    }
+    fitAddon.fit()
+    return true
+  }
+
   // 自适应大小
   if (props.autoFit) {
-    fitAddon?.fit()
+    safeFit()
 
     // 监听窗口大小变化
     resizeObserver.value = new ResizeObserver(() => {
-      fitAddon?.fit()
-      if (terminal.value) {
+      if (safeFit() && terminal.value) {
         emit('resize', {
           cols: terminal.value.cols,
           rows: terminal.value.rows,
@@ -136,7 +157,7 @@ const initTerminal = () => {
   }
 
   watchEffect(() => {
-    if (config.disableStdin) {
+    if (props.config?.disableStdin) {
       terminal.value?.textarea?.setAttribute('disabled', 'disabled')
     } else {
       terminal.value?.textarea?.removeAttribute('disabled')
@@ -169,6 +190,10 @@ const reset = () => {
 
 // 调整大小
 const fit = () => {
+  const el = terminalRef.value
+  if (!el || el.clientWidth === 0 || el.clientHeight === 0) {
+    return
+  }
   fitAddon?.fit()
 }
 
@@ -200,8 +225,6 @@ const cleanup = () => {
     // 2. 清理 terminal（会自动清理已加载的 addons）
     if (terminal.value) {
       try {
-        // Send Ctrl+C to the terminal
-        terminal.value?.write('\x03')
         if (fitAddon) {
           fitAddon.dispose()
         }
@@ -213,6 +236,9 @@ const cleanup = () => {
         }
         if (webglAddon) {
           webglAddon.dispose()
+        }
+        if (unicode11Addon) {
+          unicode11Addon.dispose()
         }
         terminal.value.dispose()
       } catch (e) {

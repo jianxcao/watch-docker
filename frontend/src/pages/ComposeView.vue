@@ -141,17 +141,16 @@ import {
   WarningOutline,
   AddCircleOutline,
 } from '@vicons/ionicons5'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { NIcon, type DropdownOption } from 'naive-ui'
-import { renderIcon, sleep } from '@/common/utils'
+import { renderIcon } from '@/common/utils'
 import type { ComposeProject } from '@/common/types'
 import {
   buildComposeListQuery,
   parseComposeListQuery,
-  type ComposeListState,
   type ComposeSortOrder,
-  type ComposeStatusFilter,
 } from './composeListQuery'
+import { useRouteListState } from './listQuery'
 
 const route = useRoute()
 const router = useRouter()
@@ -165,25 +164,12 @@ const composeStore = useComposeStore()
 const { handleRefresh } = useCompose()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
 
-const composeListState = computed(() => parseComposeListQuery(route.query))
-
-const updateComposeListState = (patch: Partial<ComposeListState>) => {
-  const state = { ...composeListState.value, ...patch }
-  void router.replace({ query: buildComposeListQuery(route.query, state) })
-}
-
-const searchKeyword = computed({
-  get: () => composeListState.value.search,
-  set: (search: string) => updateComposeListState({ search }),
+const { searchKeyword, statusFilter, sortBy, sortOrder } = useRouteListState({
+  route,
+  router,
+  parse: parseComposeListQuery,
+  build: buildComposeListQuery,
 })
-
-const statusFilter = computed({
-  get: () => composeListState.value.statusFilter,
-  set: (statusFilter: ComposeStatusFilter) => updateComposeListState({ statusFilter }),
-})
-
-const sortBy = computed(() => composeListState.value.sortBy)
-const sortOrder = computed(() => composeListState.value.sortOrder)
 
 const handleViewLogs = (project: ComposeProject) => {
   currentProject.value = project
@@ -257,7 +243,11 @@ const filteredProjects = computed(() => {
   // 搜索筛选
   if (searchKeyword.value) {
     const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter((project) => project.name.toLowerCase().includes(keyword))
+    result = result.filter(
+      (project) =>
+        project.name.toLowerCase().includes(keyword) ||
+        Boolean(project.composeFile && project.composeFile.toLowerCase().includes(keyword)),
+    )
   }
 
   // 排序
@@ -295,7 +285,8 @@ const handleSortSelect = (key: string | number) => {
   }
   const nextOrder: ComposeSortOrder =
     sortBy.value === key ? (sortOrder.value === 'asc' ? 'desc' : 'asc') : 'asc'
-  updateComposeListState({ sortBy: key, sortOrder: nextOrder })
+  sortBy.value = key
+  sortOrder.value = nextOrder
 }
 
 // 组件挂载后加载数据
@@ -320,12 +311,25 @@ watch(
   { immediate: true },
 )
 const visibility = useDocumentVisibility()
+let visibilityTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(visibility, (newVal) => {
+  if (visibilityTimer) {
+    clearTimeout(visibilityTimer)
+    visibilityTimer = null
+  }
   if (newVal === 'visible' && isComposeEnabled.value) {
-    sleep(1000).then(() => {
+    visibilityTimer = setTimeout(() => {
+      visibilityTimer = null
       composeStore.fetchProjects()
-    })
+    }, 1000)
+  }
+})
+
+onUnmounted(() => {
+  if (visibilityTimer) {
+    clearTimeout(visibilityTimer)
+    visibilityTimer = null
   }
 })
 </script>
@@ -362,19 +366,19 @@ watch(visibility, (newVal) => {
     gap: 16px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

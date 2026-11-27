@@ -3,12 +3,12 @@ package api
 import (
 	"fmt"
 	"net/http"
-	"path"
 	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/jianxcao/watch-docker/backend/internal/composecli"
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
 	"github.com/jianxcao/watch-docker/backend/internal/wsstream"
@@ -25,51 +25,55 @@ func (s *Server) handleComposeCreateAndUpWebSocket() gin.HandlerFunc {
 			return
 		}
 
-		// 使用自定义的 WebSocket 处理，先读取参数再创建 Source
 		s.handleComposeCreateAndUpWebSocketCustom(c, appPath)
 	}
 }
 
-// handleComposeCreateAndUpWebSocketCustom 自定义 WebSocket 处理（先读取参数）
 func (s *Server) handleComposeCreateAndUpWebSocketCustom(c *gin.Context, appPath string) {
-	// 升级为 WebSocket 连接
 	conn, err := s.streamManagerBytes.UpgradeWebSocket(c)
 	if err != nil {
 		logger.Logger.Error("WebSocket 升级失败", zap.Error(err))
 		return
 	}
 
-	// 读取客户端发送的请求参数
 	var req struct {
 		Name        string `json:"name"`
 		YamlContent string `json:"yamlContent"`
+		ComposeFile string `json:"composeFile"`
 		Force       bool   `json:"force"`
 	}
 
-	// 设置读取超时
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err := conn.ReadJSON(&req); err != nil {
 		logger.Logger.Error("Failed to read create request", zap.Error(err))
-		conn.WriteMessage(websocket.TextMessage, []byte("\x1b[31m读取请求失败: "+err.Error()+"\x1b[0m\r\n"))
-		conn.Close()
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("\x1b[31m读取请求失败: "+err.Error()+"\x1b[0m\r\n"))
+		_ = conn.Close()
+		return
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+
+	if err := composecli.ValidateProjectName(req.Name); err != nil {
+		logger.Logger.Warn("Invalid compose project name", zap.String("name", req.Name), zap.Error(err))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("\x1b[31m非法项目名称: "+err.Error()+"\x1b[0m\r\n"))
+		_ = conn.Close()
 		return
 	}
 
-	if req.Name == "" {
-		logger.Logger.Error("Invalid request: missing project name")
-		conn.WriteMessage(websocket.TextMessage, []byte("\x1b[31m缺少项目名称\x1b[0m\r\n"))
-		conn.Close()
+	composeDir, err := composecli.ValidateProjectDir(filepath.Join(appPath, req.Name))
+	if err != nil {
+		logger.Logger.Warn("Invalid compose project directory", zap.String("name", req.Name), zap.Error(err))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("\x1b[31m非法项目路径: "+err.Error()+"\x1b[0m\r\n"))
+		_ = conn.Close()
 		return
 	}
 
-	logger.Logger.Info("Compose create and up request", zap.String("name", req.Name))
-	composeDir := filepath.Join(appPath, req.Name)
-	// 获取或创建 Hub（使用二进制模式）
+	logger.Logger.Info("Compose create and up request", zap.String("name", req.Name), zap.String("composeFile", req.ComposeFile))
 	key := fmt.Sprintf("compose-up-%s", req.Name)
 	s.streamManagerBytes.StartHub(conn, key, func() wsstream.StreamSource[[]byte] {
 		return wsstream.NewComposeCreateUpSource(wsstream.ComposeCreateUpSourceOptions{
 			ProjectName:   req.Name,
 			YamlContent:   req.YamlContent,
+			ComposeFile:   req.ComposeFile,
 			Force:         req.Force,
 			ComposeDir:    composeDir,
 			ComposeClient: s.composeClient,
@@ -82,93 +86,97 @@ func (s *Server) handleComposeCreateAndUpWebSocketCustom(c *gin.Context, appPath
 	})
 }
 
-// handleComposeLogsWebSocketV2 处理 Compose 项目日志的 WebSocket 连接（使用新的流管理器）
+func (s *Server) sendComposeWSError(c *gin.Context, errMsg string) {
+	conn, err := s.streamManagerBytes.UpgradeWebSocket(c)
+	if err != nil {
+		logger.Logger.Error("WebSocket 升级失败", zap.Error(err))
+		return
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.WriteMessage(websocket.TextMessage, []byte("\x1b[31m"+errMsg+"\x1b[0m\r\n"))
+	_ = conn.Close()
+}
+
 func (s *Server) handleComposeLogsWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 从路径参数获取项目名称
 		projectName := c.Param("projectName")
-		// 从查询参数获取 composeFile（兼容旧逻辑）
 		composeFile := c.Query("composeFile")
 
-		if projectName == "" {
-			logger.Logger.Error("Missing projectName parameter")
-			c.JSON(http.StatusBadRequest, gin.H{"error": "missing projectName parameter"})
+		if err := composecli.ValidateProjectName(projectName); err != nil {
+			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
 			return
 		}
-
-		if composeFile == "" {
-			logger.Logger.Error("Missing composeFile parameter")
-			c.JSON(http.StatusBadRequest, gin.H{"error": "missing composeFile parameter"})
+		projectPath, argsPrefix, err := s.composeClient.ResolveComposeTarget(c.Request.Context(), projectName, composeFile)
+		if err != nil {
+			s.sendComposeWSError(c, "无法读取项目日志: "+err.Error())
 			return
 		}
 
 		logger.Logger.Info("Compose logs WebSocket connection request",
 			zap.String("projectName", projectName),
-			zap.String("composeFile", composeFile))
+			zap.String("projectPath", projectPath),
+			zap.Strings("argsPrefix", argsPrefix))
 
-		// 获取项目路径
-		projectPath := path.Dir(composeFile)
-
-		// 使用 StreamManager 处理 WebSocket 连接
-		// 相同 projectName 的客户端会共享同一个日志流
 		s.streamManagerBytes.HandleWebSocket(c, projectName, func() wsstream.StreamSource[[]byte] {
-			return wsstream.NewComposeLogsSource(projectPath, projectName)
+			return wsstream.NewComposeLogsSource(projectPath, projectName, argsPrefix...)
 		})
 	}
 }
 
-// handleComposeUpExistingWebSocket 处理已有 Compose 项目的 up 操作 WebSocket（含 pull 进度）
 func (s *Server) handleComposeUpExistingWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectName := c.Param("projectName")
 		composeFile := c.Query("composeFile")
 
-		if projectName == "" || composeFile == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "missing projectName or composeFile"})
+		if err := composecli.ValidateProjectName(projectName); err != nil {
+			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
+			return
+		}
+		plan, err := s.composeClient.ResolveManagedCardPlan(c.Request.Context(), projectName, composeFile)
+		if err != nil {
+			s.sendComposeWSError(c, "无法部署项目: "+err.Error())
 			return
 		}
 
-		projectPath := path.Dir(composeFile)
-		key := fmt.Sprintf("compose-up-existing-%s", projectName)
+		logger.Logger.Info("Compose up existing WebSocket connection request",
+			zap.String("projectName", projectName),
+			zap.String("projectPath", plan.ProjectDir),
+			zap.String("runtimeProjectName", plan.RuntimeProjectName),
+			zap.Strings("deployFiles", plan.DeployFiles))
 
+		key := fmt.Sprintf("compose-up-existing-%s", projectName)
+		argsPrefix := plan.ComposeArgsPrefix()
 		s.streamManagerBytes.HandleWebSocket(c, key, func() wsstream.StreamSource[[]byte] {
-			return wsstream.NewComposeUpExistingSource(projectPath, projectName)
+			return wsstream.NewComposeUpExistingSource(plan.ProjectDir, projectName, argsPrefix...)
 		})
 	}
 }
 
-// handleComposePullWebSocket 处理 Compose 项目拉取镜像的 WebSocket 连接
 func (s *Server) handleComposePullWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 从路径参数获取项目名称
 		projectName := c.Param("projectName")
-		// 从查询参数获取 composeFile
 		composeFile := c.Query("composeFile")
 
-		if projectName == "" {
-			logger.Logger.Error("Missing projectName parameter")
-			c.JSON(http.StatusBadRequest, gin.H{"error": "missing projectName parameter"})
+		if err := composecli.ValidateProjectName(projectName); err != nil {
+			s.sendComposeWSError(c, "非法项目名称: "+err.Error())
 			return
 		}
-
-		if composeFile == "" {
-			logger.Logger.Error("Missing composeFile parameter")
-			c.JSON(http.StatusBadRequest, gin.H{"error": "missing composeFile parameter"})
+		plan, err := s.composeClient.ResolveManagedCardPlan(c.Request.Context(), projectName, composeFile)
+		if err != nil {
+			s.sendComposeWSError(c, "无法拉取镜像: "+err.Error())
 			return
 		}
 
 		logger.Logger.Info("Compose pull WebSocket connection request",
 			zap.String("projectName", projectName),
-			zap.String("composeFile", composeFile))
+			zap.String("projectPath", plan.ProjectDir),
+			zap.String("runtimeProjectName", plan.RuntimeProjectName),
+			zap.Strings("deployFiles", plan.DeployFiles))
 
-		// 获取项目路径
-		projectPath := path.Dir(composeFile)
-
-		// 使用 StreamManager 处理 WebSocket 连接
-		// 使用唯一的 key 来标识 pull 操作，避免与日志流冲突
 		key := fmt.Sprintf("compose-pull-%s", projectName)
+		argsPrefix := plan.ComposeArgsPrefix()
 		s.streamManagerBytes.HandleWebSocket(c, key, func() wsstream.StreamSource[[]byte] {
-			return wsstream.NewComposePullSource(projectPath, projectName)
+			return wsstream.NewComposePullSource(plan.ProjectDir, projectName, argsPrefix...)
 		})
 	}
 }

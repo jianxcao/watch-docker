@@ -1,6 +1,7 @@
 package dockercli
 
 import (
+	"net"
 	"net/url"
 	"strings"
 
@@ -8,23 +9,137 @@ import (
 	"github.com/jianxcao/watch-docker/backend/internal/config"
 )
 
-// EnabledMirrorHosts 返回当前启用的 Docker Hub mirror 主机列表（已规范化、按数组顺序）。
-// 仅返回 enabled=true 且 url 非空的条目。
-func EnabledMirrorHosts() []string {
+// MirrorEndpoint 表示规范化后的 mirror 服务端点（保留 http/https 协议与可选路径前缀）。
+type MirrorEndpoint struct {
+	Scheme     string
+	Host       string
+	PathPrefix string
+}
+
+func (e MirrorEndpoint) BaseURL() string {
+	return e.Scheme + "://" + e.Host
+}
+
+func (e MirrorEndpoint) HostWithPrefix() string {
+	if e.PathPrefix != "" {
+		return e.Host + "/" + e.PathPrefix
+	}
+	return e.Host
+}
+
+// EngineHostWithPrefix 返回适合传给 Docker Engine 镜像引用的 mirror host(+prefix)。
+// 当主机名为不含点号且非 localhost 的单段名称（如 "registry"）且未显式带端口时，
+// 按端点协议补齐默认端口（https->443, http->80），避免被 reference 解析为 docker.io 命名空间。
+func (e MirrorEndpoint) EngineHostWithPrefix() (string, bool) {
+	u, err := url.Parse(e.BaseURL())
+	if err != nil || u == nil || u.User != nil || u.Hostname() == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(strings.TrimSpace(e.Scheme))
+	var defaultPort string
+	switch scheme {
+	case "https":
+		defaultPort = "443"
+	case "http":
+		defaultPort = "80"
+	default:
+		return "", false
+	}
+
+	hostname := strings.ToLower(u.Hostname())
+	rawPort := u.Port()
+	var authority string
+	switch {
+	case rawPort != "":
+		authority = net.JoinHostPort(hostname, rawPort)
+	case strings.Contains(hostname, ":"):
+		authority = "[" + hostname + "]"
+	case hostname == "localhost" || strings.Contains(hostname, "."):
+		authority = hostname
+	default:
+		authority = net.JoinHostPort(hostname, defaultPort)
+	}
+
+	prefix := strings.Trim(e.PathPrefix, "/")
+	if prefix != "" {
+		return authority + "/" + prefix, true
+	}
+	return authority, true
+}
+
+// RewriteRefToMirrorEndpoint 将 Docker Hub 引用改写为指向特定 MirrorEndpoint 的 Engine 镜像引用。
+func RewriteRefToMirrorEndpoint(ref string, ep MirrorEndpoint) (string, bool) {
+	engineHost, ok := ep.EngineHostWithPrefix()
+	if !ok {
+		return "", false
+	}
+	rewritten := RewriteRefToMirror(ref, engineHost)
+	if rewritten == ref || strings.TrimSpace(rewritten) == "" {
+		return "", false
+	}
+	return rewritten, true
+}
+
+func (e MirrorEndpoint) RepoPath(repo string) string {
+	trimmed := strings.TrimPrefix(repo, "/")
+	if e.PathPrefix != "" {
+		return e.PathPrefix + "/" + trimmed
+	}
+	return trimmed
+}
+
+// ParseMirrorEndpoint 解析 mirror URL，保留 http/https 协议与路径前缀。
+func ParseMirrorEndpoint(rawURL string) (MirrorEndpoint, bool) {
+	s := strings.TrimSpace(rawURL)
+	if s == "" {
+		return MirrorEndpoint{}, false
+	}
+	scheme := "https"
+	if strings.HasPrefix(strings.ToLower(s), "http://") {
+		scheme = "http"
+	}
+	if !strings.Contains(s, "://") {
+		s = scheme + "://" + strings.TrimPrefix(s, "//")
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return MirrorEndpoint{}, false
+	}
+	if u.Scheme != "" {
+		scheme = strings.ToLower(u.Scheme)
+	}
+	return MirrorEndpoint{
+		Scheme:     scheme,
+		Host:       u.Host,
+		PathPrefix: strings.Trim(u.Path, "/"),
+	}, true
+}
+
+// EnabledMirrorEndpoints 返回当前启用的 Docker Hub mirror 端点列表（按配置顺序）。
+func EnabledMirrorEndpoints() []MirrorEndpoint {
 	cfg := config.Get()
 	if cfg == nil {
 		return nil
 	}
-	hosts := make([]string, 0, len(cfg.Registry.Mirrors))
+	endpoints := make([]MirrorEndpoint, 0, len(cfg.Registry.Mirrors))
 	for _, m := range cfg.Registry.Mirrors {
 		if !m.Enabled {
 			continue
 		}
-		host := NormalizeMirrorURL(m.URL)
-		if host == "" {
-			continue
+		if ep, ok := ParseMirrorEndpoint(m.URL); ok {
+			endpoints = append(endpoints, ep)
 		}
-		hosts = append(hosts, host)
+	}
+	return endpoints
+}
+
+// EnabledMirrorHosts 返回当前启用的 Docker Hub mirror 主机列表（已规范化、按数组顺序）。
+// 仅返回 enabled=true 且 url 非空的条目。
+func EnabledMirrorHosts() []string {
+	endpoints := EnabledMirrorEndpoints()
+	hosts := make([]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		hosts = append(hosts, ep.HostWithPrefix())
 	}
 	return hosts
 }
@@ -35,12 +150,16 @@ func EnabledMirrorHosts() []string {
 //   - "docker.io/nginx" / "index.docker.io/library/nginx" → true
 //   - "ghcr.io/foo/bar" / "registry.example.com/foo" / "localhost:5000/foo" → false
 func IsDockerHubImage(ref string) bool {
-	named, err := reference.ParseNormalizedNamed(ref)
+	trimmed := strings.TrimSpace(ref)
+	if trimmed == "" {
+		return false
+	}
+	named, err := reference.ParseNormalizedNamed(trimmed)
 	if err != nil {
 		return false
 	}
-	domain := reference.Domain(named)
-	return domain == "docker.io"
+	domain := strings.ToLower(reference.Domain(named))
+	return domain == "docker.io" || domain == "index.docker.io" || domain == "registry-1.docker.io"
 }
 
 // NormalizeMirrorURL 规范化 mirror URL，返回不含协议、去掉尾部斜杠的 host(+path) 部分。
@@ -80,14 +199,15 @@ func NormalizeMirrorURL(rawURL string) string {
 //   - "nginx@sha256:abc..."         → "docker.m.daocloud.io/library/nginx@sha256:abc..."
 //   - "ghcr.io/foo/bar:tag"         → 原样返回
 func RewriteRefToMirror(ref string, mirrorHost string) string {
-	if mirrorHost == "" {
+	trimmed := strings.TrimSpace(ref)
+	if mirrorHost == "" || trimmed == "" {
 		return ref
 	}
-	if !IsDockerHubImage(ref) {
+	if !IsDockerHubImage(trimmed) {
 		return ref
 	}
 
-	named, err := reference.ParseNormalizedNamed(ref)
+	named, err := reference.ParseNormalizedNamed(trimmed)
 	if err != nil {
 		return ref
 	}
@@ -117,7 +237,7 @@ func RewriteRefToMirror(ref string, mirrorHost string) string {
 //   - "nginx:1.25"       → "docker.io/library/nginx:1.25"
 //   - "ghcr.io/foo:tag"  → "ghcr.io/foo:tag"
 func NormalizeRef(ref string) string {
-	named, err := reference.ParseNormalizedNamed(ref)
+	named, err := reference.ParseNormalizedNamed(strings.TrimSpace(ref))
 	if err != nil {
 		return ref
 	}

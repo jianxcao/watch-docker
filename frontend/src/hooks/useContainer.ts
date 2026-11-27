@@ -39,87 +39,109 @@ export function useContainer() {
     }
   }
 
-  // 更新容器
-  const handleUpdate = async (container: ContainerStatus, image?: string) => {
+  // 更新容器（返回新容器 ID，以便详情页跳转到重建后的新容器）
+  const handleUpdate = async (
+    container: ContainerStatus,
+    image?: string,
+  ): Promise<string | undefined> => {
     try {
-      await store.updateContainer(container.id, image)
+      const newContainerId = await store.updateContainer(container.id, image)
       message.success(`容器 ${container.name} 更新成功`)
+      return newContainerId
     } catch (error: any) {
       message.error(`更新容器失败: ${error.message}`)
+      return undefined
     }
   }
 
-  // 删除容器（带确认）
-  const handleDelete = (container: ContainerStatus) => {
-    // 根据容器运行状态设置默认的强制删除值
-    const forceDefault = container.running
-    const forceValue = ref(forceDefault)
-    const removeVolumesValue = ref(false)
-    const removeNetworksValue = ref(false)
+  // 删除容器（带确认，返回 Promise<boolean> 表示是否已执行删除）
+  const handleDelete = (container: ContainerStatus): Promise<boolean> => {
+    return new Promise((resolve) => {
+      // 根据容器运行状态设置默认的强制删除值
+      const forceDefault = container.running
+      const forceValue = ref(forceDefault)
+      const removeVolumesValue = ref(false)
+      const removeNetworksValue = ref(false)
+      let settled = false
 
-    const d = dialog.warning({
-      title: '确认删除容器',
-      content: () =>
-        h(NSpace, { vertical: true }, () => [
-          h('div', {}, `确定要删除容器 "${container.name}" 吗？此操作不可撤销。`),
-          container.running
-            ? h('div', { class: 'text-orange-500 text-sm' }, '注意：容器正在运行中')
-            : h('div', { class: 'text-gray-500 text-sm' }, '容器已停止'),
-          h(
-            NCheckbox,
-            {
-              checked: forceValue.value,
-              'onUpdate:checked': (value: boolean) => {
-                forceValue.value = value
+      const d = dialog.warning({
+        title: '确认删除容器',
+        content: () =>
+          h(NSpace, { vertical: true }, () => [
+            h('div', {}, `确定要删除容器 "${container.name}" 吗？此操作不可撤销。`),
+            container.running
+              ? h('div', { class: 'text-orange-500 text-sm' }, '注意：容器正在运行中')
+              : h('div', { class: 'text-gray-500 text-sm' }, '容器已停止'),
+            h(
+              NCheckbox,
+              {
+                checked: forceValue.value,
+                'onUpdate:checked': (value: boolean) => {
+                  forceValue.value = value
+                },
               },
-            },
-            {
-              default: () => (container.running ? '强制删除 (停止并删除运行中的容器)' : '强制删除'),
-            },
-          ),
-          h(
-            NCheckbox,
-            {
-              checked: removeVolumesValue.value,
-              'onUpdate:checked': (value: boolean) => {
-                removeVolumesValue.value = value
+              {
+                default: () =>
+                  container.running ? '强制删除 (停止并删除运行中的容器)' : '强制删除',
               },
-            },
-            {
-              default: () => '删除关联的卷 (Volume)',
-            },
-          ),
-          h(
-            NCheckbox,
-            {
-              checked: removeNetworksValue.value,
-              'onUpdate:checked': (value: boolean) => {
-                removeNetworksValue.value = value
+            ),
+            h(
+              NCheckbox,
+              {
+                checked: removeVolumesValue.value,
+                'onUpdate:checked': (value: boolean) => {
+                  removeVolumesValue.value = value
+                },
               },
-            },
-            {
-              default: () => '删除关联的网络 (Network)',
-            },
-          ),
-        ]),
-      positiveText: '确认删除',
-      negativeText: '取消',
-      onPositiveClick: async () => {
-        try {
-          d.loading = true
-          await store.deleteContainer(
-            container.id,
-            forceValue.value,
-            removeVolumesValue.value,
-            removeNetworksValue.value,
-          )
-          message.success(`容器 ${container.name} 删除成功`)
-        } catch (error: any) {
-          message.error(`删除容器失败: ${error.message}`)
-        } finally {
-          d.loading = false
-        }
-      },
+              {
+                default: () => '删除关联的卷 (Volume)',
+              },
+            ),
+            h(
+              NCheckbox,
+              {
+                checked: removeNetworksValue.value,
+                'onUpdate:checked': (value: boolean) => {
+                  removeNetworksValue.value = value
+                },
+              },
+              {
+                default: () => '删除关联的网络 (Network)',
+              },
+            ),
+          ]),
+        positiveText: '确认删除',
+        negativeText: '取消',
+        onPositiveClick: async () => {
+          try {
+            d.loading = true
+            await store.deleteContainer(
+              container.id,
+              forceValue.value,
+              removeVolumesValue.value,
+              removeNetworksValue.value,
+            )
+            message.success(`容器 ${container.name} 删除成功`)
+            settled = true
+            resolve(true)
+          } catch (error: any) {
+            message.error(`删除容器失败: ${error.message}`)
+            settled = true
+            resolve(false)
+          } finally {
+            d.loading = false
+          }
+        },
+        onNegativeClick: () => {
+          settled = true
+          resolve(false)
+        },
+        onAfterLeave: () => {
+          if (!settled) {
+            resolve(false)
+          }
+        },
+      })
     })
   }
 

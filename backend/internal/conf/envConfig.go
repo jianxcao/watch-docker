@@ -24,6 +24,7 @@ type EnvConfig struct {
 	APP_PATH                  string `default:"" mapstructure:"app_path"`
 	IS_SECONDARY_VERIFICATION bool   `default:"false" mapstructure:"enable_2fa"`
 	TWOFA_ALLOWED_DOMAINS     string `default:"" mapstructure:"twofa_allowed_domains"` // 逗号分隔的域名白名单，空值表示允许所有域名
+	TRUSTED_PROXIES           string `default:"" mapstructure:"trusted_proxies"`       // 逗号分隔的反向代理受信任 CIDR/IP
 }
 
 // expandPath 扩展路径中的 ~ 为用户主目录
@@ -81,7 +82,9 @@ func NewEnvConfig() *EnvConfig {
 				cfg.TWOFA_ALLOWED_DOMAINS = v.GetString("twofa_allowed_domains")
 			}
 			if v.IsSet("static_dir") {
-				cfg.STATIC_DIR = v.GetString("static_dir")
+				if staticDir := strings.TrimSpace(v.GetString("static_dir")); staticDir != "" {
+					cfg.STATIC_DIR = staticDir
+				}
 			}
 			if v.IsSet("enable_docker_shell") {
 				cfg.IS_OPEN_DOCKER_SHELL = v.GetBool("enable_docker_shell")
@@ -91,6 +94,9 @@ func NewEnvConfig() *EnvConfig {
 			}
 			if v.IsSet("app_path") {
 				cfg.APP_PATH = v.GetString("app_path")
+			}
+			if v.IsSet("trusted_proxies") {
+				cfg.TRUSTED_PROXIES = v.GetString("trusted_proxies")
 			}
 
 			fmt.Printf("✅ 已从应用配置文件加载: %s\n", envFile)
@@ -163,9 +169,8 @@ twofa_allowed_domains: ""
 # =============================================================================
 
 # 静态资源目录
-# 空字符串表示使用嵌入在二进制中的资源（推荐）
-# 如需自定义前端，设置为前端构建产物目录
-static_dir: ""
+# 默认不设置；如需自定义前端，取消注释并设置为前端构建产物目录
+# static_dir: ""
 
 # =============================================================================
 # 功能开关

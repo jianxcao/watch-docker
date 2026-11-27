@@ -84,8 +84,10 @@ func (s *ContainerStatsSource) pushStats(ctx context.Context, messageChan chan s
 			return
 		case <-ticker.C:
 			if err := s.sendStats(ctx, messageChan); err != nil {
-				logger.Logger.Error("发送容器统计数据失败", zap.Error(err))
-				return
+				if ctx.Err() != nil {
+					return
+				}
+				logger.Logger.Debug("本轮容器统计跳过推送，等待下一轮", zap.Error(err))
 			}
 		}
 	}
@@ -96,10 +98,14 @@ func (s *ContainerStatsSource) sendStats(ctx context.Context, messageChan chan s
 	// 获取配置
 	cfg := config.Get()
 
-	// 使用scanner获取完整的容器状态信息
-	containerStatuses, err := s.scanner.ScanOnce(ctx, cfg.Docker.IncludeStopped, cfg.Scan.Concurrency, true, false)
-	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		logger.Logger.Error("获取容器状态失败", zap.Error(err))
+	// 使用scanner获取完整的容器状态信息 (始终包含已停止容器，避免前端列表闪烁/丢失已停止容器)
+	containerStatuses, err := s.scanner.ScanOnce(ctx, true, cfg.Scan.Concurrency, true, false)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			logger.Logger.Debug("获取容器状态被取消或超时，跳过推送", zap.Error(err))
+		} else {
+			logger.Logger.Error("获取容器状态失败", zap.Error(err))
+		}
 		return err
 	}
 

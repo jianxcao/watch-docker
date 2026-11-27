@@ -53,9 +53,9 @@ func (s *Server) handleStartComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.StartProject(ctx, project.ComposeFile); err != nil {
+		if err := s.composeClient.StartProject(ctx, project.Name, project.ComposeFile); err != nil {
 			s.logger.Error("start compose project failed",
-				zap.String("project", project.ComposeFile), zap.Error(err))
+				zap.String("name", project.Name), zap.String("project", project.ComposeFile), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return
 		}
@@ -76,9 +76,9 @@ func (s *Server) handleStopComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.StopProject(ctx, project.ComposeFile); err != nil {
+		if err := s.composeClient.StopProject(ctx, project.Name, project.ComposeFile); err != nil {
 			s.logger.Error("stop compose project failed",
-				zap.String("project", project.ComposeFile), zap.Error(err))
+				zap.String("name", project.Name), zap.String("project", project.ComposeFile), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return
 		}
@@ -99,9 +99,9 @@ func (s *Server) handleRestartComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.RestartProject(ctx, project.ComposeFile); err != nil {
+		if err := s.composeClient.RestartProject(ctx, project.Name, project.ComposeFile); err != nil {
 			s.logger.Error("restart compose project failed",
-				zap.String("project", project.ComposeFile), zap.Error(err))
+				zap.String("name", project.Name), zap.String("project", project.ComposeFile), zap.Error(err))
 			c.JSON(http.StatusOK, NewErrorResCode(CodeDockerError, err.Error()))
 			return
 		}
@@ -122,8 +122,9 @@ func (s *Server) handleDeleteComposeProject() gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 
-		if err := s.composeClient.DeleteProject(ctx, project.ComposeFile, project.Status); err != nil {
+		if err := s.composeClient.DeleteProject(ctx, project.Name, project.ComposeFile, project.Status); err != nil {
 			s.logger.Error("delete compose project failed",
+				zap.String("name", project.Name),
 				zap.String("project", project.ComposeFile),
 				zap.String("status", string(project.Status)),
 				zap.Error(err))

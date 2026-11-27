@@ -27,6 +27,14 @@ type Manager struct {
 	mu            sync.RWMutex
 	batchTimer    *time.Timer
 	batchDelay    time.Duration // 批量延迟时间，用于合并通知
+	timerGen      uint64
+	closed        bool
+	flushWG       sync.WaitGroup
+}
+
+func isNotificationEnabled() bool {
+	cfg := config.Get()
+	return cfg != nil && cfg.Notify.IsEnable && strings.TrimSpace(cfg.Notify.URL) != ""
 }
 
 // New 创建新的通知管理器
@@ -55,18 +63,27 @@ func (m *Manager) SetBatchDelay(delay time.Duration) {
 
 // NotifyUpdateAvailable 通知有更新可用
 func (m *Manager) NotifyUpdateAvailable(ctx context.Context, containers []scanner.ContainerStatus) error {
-	if len(containers) == 0 {
+	if !isNotificationEnabled() || len(containers) == 0 {
 		return nil
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return nil
+	}
+
+	today := m.ensureTodayLocked()
 	var validContainers []ContainerNotification
+	markedAny := false
 	for _, cs := range containers {
 		if cs.Status != "UpdateAvailable" {
 			continue
 		}
 
-		// 检查去重
-		if m.shouldSkipNotification(cs.Name, cs.Image, cs.RemoteDigest, EventUpdateAvailable) {
+		key := fmt.Sprintf("%s|%s|%s|%s", cs.Name, cs.Image, cs.RemoteDigest, today)
+		if m.history.SentToday[key] {
 			logger.Logger.Debug("跳过重复通知",
 				zap.String("container", cs.Name),
 				zap.String("image", cs.Image),
@@ -78,8 +95,12 @@ func (m *Manager) NotifyUpdateAvailable(ctx context.Context, containers []scanne
 		cn.FromContainerStatus(cs, EventUpdateAvailable)
 		validContainers = append(validContainers, cn)
 
-		// 标记为已通知
-		m.markAsNotified(cs.Name, cs.Image, cs.RemoteDigest, EventUpdateAvailable)
+		m.history.SentToday[key] = true
+		markedAny = true
+	}
+
+	if markedAny {
+		m.saveHistory()
 	}
 
 	if len(validContainers) == 0 {
@@ -87,16 +108,18 @@ func (m *Manager) NotifyUpdateAvailable(ctx context.Context, containers []scanne
 	}
 
 	// 添加到待处理事件队列
-	m.mu.Lock()
 	m.pendingEvents = append(m.pendingEvents, validContainers...)
 	m.scheduleFlush()
-	m.mu.Unlock()
 
 	return nil
 }
 
 // NotifyUpdateSuccess 通知更新成功
 func (m *Manager) NotifyUpdateSuccess(ctx context.Context, containerName, image string) error {
+	if !isNotificationEnabled() {
+		return nil
+	}
+
 	cn := ContainerNotification{
 		Type:          EventUpdateSuccess,
 		ContainerName: containerName,
@@ -105,8 +128,10 @@ func (m *Manager) NotifyUpdateSuccess(ctx context.Context, containerName, image 
 	}
 
 	m.mu.Lock()
-	m.pendingEvents = append(m.pendingEvents, cn)
-	m.scheduleFlush()
+	if !m.closed {
+		m.pendingEvents = append(m.pendingEvents, cn)
+		m.scheduleFlush()
+	}
 	m.mu.Unlock()
 
 	return nil
@@ -114,6 +139,10 @@ func (m *Manager) NotifyUpdateSuccess(ctx context.Context, containerName, image 
 
 // NotifyUpdateFailed 通知更新失败
 func (m *Manager) NotifyUpdateFailed(ctx context.Context, containerName, image, errorMsg string) error {
+	if !isNotificationEnabled() {
+		return nil
+	}
+
 	cn := ContainerNotification{
 		Type:          EventUpdateFailed,
 		ContainerName: containerName,
@@ -123,8 +152,10 @@ func (m *Manager) NotifyUpdateFailed(ctx context.Context, containerName, image, 
 	}
 
 	m.mu.Lock()
-	m.pendingEvents = append(m.pendingEvents, cn)
-	m.scheduleFlush()
+	if !m.closed {
+		m.pendingEvents = append(m.pendingEvents, cn)
+		m.scheduleFlush()
+	}
 	m.mu.Unlock()
 
 	return nil
@@ -135,8 +166,18 @@ func (m *Manager) scheduleFlush() {
 	if m.batchTimer != nil {
 		m.batchTimer.Stop()
 	}
+	m.timerGen++
+	gen := m.timerGen
 
 	m.batchTimer = time.AfterFunc(m.batchDelay, func() {
+		m.mu.Lock()
+		if m.closed || m.timerGen != gen {
+			m.mu.Unlock()
+			return
+		}
+		m.flushWG.Add(1)
+		m.mu.Unlock()
+		defer m.flushWG.Done()
 		m.flushPendingEvents()
 	})
 }
@@ -144,8 +185,8 @@ func (m *Manager) scheduleFlush() {
 // flushPendingEvents 立即发送所有待处理的事件
 func (m *Manager) flushPendingEvents() {
 	m.mu.Lock()
-	cfg := config.Get()
-	if !cfg.Notify.IsEnable {
+	if !isNotificationEnabled() {
+		m.pendingEvents = m.pendingEvents[:0]
 		m.mu.Unlock()
 		return
 	}
@@ -288,54 +329,25 @@ func (m *Manager) sendUpdateFailedNotification(ctx context.Context, events []Con
 	return m.notifier.Send(ctx, title, contentBuilder.String(), "", "")
 }
 
-// shouldSkipNotification 检查是否应该跳过通知（去重逻辑）
-func (m *Manager) shouldSkipNotification(containerName, image, digest string, eventType NotificationEventType) bool {
-	// 只对 UpdateAvailable 事件进行去重
-	if eventType != EventUpdateAvailable {
-		return false
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
+func (m *Manager) ensureTodayLocked() string {
 	today := time.Now().Format("2006-01-02")
-	if m.history.Date != today {
-		// 日期变了，重置历史记录
-		return false
-	}
-
-	key := fmt.Sprintf("%s|%s|%s|%s", containerName, image, digest, today)
-	return m.history.SentToday[key]
-}
-
-// markAsNotified 标记为已通知
-func (m *Manager) markAsNotified(containerName, image, digest string, eventType NotificationEventType) {
-	// 只对 UpdateAvailable 事件进行标记
-	if eventType != EventUpdateAvailable {
-		return
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	today := time.Now().Format("2006-01-02")
-
-	// 检查日期是否变化，如果变化了就清理过期记录
-	if m.history.Date != today {
+	if m.history == nil || m.history.Date != today {
+		oldDate := ""
+		if m.history != nil {
+			oldDate = m.history.Date
+		}
 		logger.Logger.Debug("日期变更，清理过期通知历史",
-			zap.String("old_date", m.history.Date),
+			zap.String("old_date", oldDate),
 			zap.String("today", today))
 		m.history = &NotificationHistory{
 			SentToday: make(map[string]bool),
 			Date:      today,
 		}
 	}
-
-	key := fmt.Sprintf("%s|%s|%s|%s", containerName, image, digest, today)
-	m.history.SentToday[key] = true
-
-	// 保存历史记录
-	m.saveHistory()
+	if m.history.SentToday == nil {
+		m.history.SentToday = make(map[string]bool)
+	}
+	return today
 }
 
 // loadHistory 加载通知历史
@@ -360,6 +372,10 @@ func (m *Manager) loadHistory() {
 			Date:      today,
 		}
 		return
+	}
+
+	if history.SentToday == nil {
+		history.SentToday = make(map[string]bool)
 	}
 
 	// 只保留当天的历史记录，过期的直接丢弃
@@ -400,19 +416,29 @@ func (m *Manager) saveHistory() {
 
 // Flush 立即发送所有待处理的通知
 func (m *Manager) Flush() {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.flushWG.Add(1)
+	m.mu.Unlock()
+	defer m.flushWG.Done()
 	m.flushPendingEvents()
 }
 
-// Close 关闭通知管理器，发送所有待处理的通知
+// Close 关闭通知管理器，等待进行中的批量发送完成后再发送剩余待处理通知
 func (m *Manager) Close() {
 	m.mu.Lock()
+	m.closed = true
+	m.timerGen++
 	if m.batchTimer != nil {
 		m.batchTimer.Stop()
 		m.batchTimer = nil
 	}
 	m.mu.Unlock()
 
-	// 发送所有待处理的通知
+	m.flushWG.Wait()
 	m.flushPendingEvents()
 }
 

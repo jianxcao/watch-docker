@@ -74,6 +74,7 @@ func (s *Server) handleBatchUpdateWebSocket() gin.HandlerFunc {
 				logger.Logger.Error("marshal batch update message failed", zap.Error(err))
 				return
 			}
+			_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				logger.Logger.Error("write batch update message failed", zap.Error(err))
 			}
@@ -113,7 +114,7 @@ func (s *Server) handleBatchUpdateWebSocket() gin.HandlerFunc {
 
 		var targets []updateTarget
 		for _, st := range statuses {
-			if st.Skipped || st.Status != "UpdateAvailable" {
+			if st.Skipped || st.SkippedUpdate || st.Status != "UpdateAvailable" {
 				continue
 			}
 			if !st.Running && !cfg.Docker.IncludeStopped {
@@ -161,7 +162,7 @@ func (s *Server) handleBatchUpdateWebSocket() gin.HandlerFunc {
 			})
 
 			updateCtx, updateCancel := context.WithTimeout(ctx, 5*time.Minute)
-			updateErr := s.updater.UpdateContainerWithProgress(updateCtx, target.ID, target.Image, &updater.UpdateProgressCallback{
+			_, updateErr := s.updater.UpdateContainerWithProgress(updateCtx, target.ID, target.Image, &updater.UpdateProgressCallback{
 				OnStep: func(step, message string) {
 					sendMsg(batchUpdateMessage{
 						Type:          "step",

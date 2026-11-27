@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	Logger      *zap.Logger
-	atomicLevel zap.AtomicLevel
+	Logger      *zap.Logger = zap.NewNop()
+	atomicLevel             = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 )
 
 // customTimeEncoder 自定义时间编码器，格式为 YYYY-MM-DD HH:mm:ss
@@ -25,15 +25,8 @@ func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 func NewLogger(level string, file string) (*zap.Logger, error) {
 	// Parse log level
 	logLevel := zapcore.InfoLevel
-	switch level {
-	case "debug":
-		logLevel = zapcore.DebugLevel
-	case "info":
-		logLevel = zapcore.InfoLevel
-	case "warn":
-		logLevel = zapcore.WarnLevel
-	case "error":
-		logLevel = zapcore.ErrorLevel
+	if parsed, err := ParseLevel(level); err == nil {
+		logLevel = parsed
 	}
 
 	// 配置 Encoder
@@ -97,26 +90,33 @@ func NewLogger(level string, file string) (*zap.Logger, error) {
 	return logger, nil
 }
 
+// ParseLevel 解析日志级别字符串（支持 debug/info/warn/warning/error/dpanic/panic/fatal，忽略大小写与前后空白）
+func ParseLevel(level string) (zapcore.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return zapcore.DebugLevel, nil
+	case "info":
+		return zapcore.InfoLevel, nil
+	case "warn", "warning":
+		return zapcore.WarnLevel, nil
+	case "error":
+		return zapcore.ErrorLevel, nil
+	case "dpanic":
+		return zapcore.DPanicLevel, nil
+	case "panic":
+		return zapcore.PanicLevel, nil
+	case "fatal":
+		return zapcore.FatalLevel, nil
+	default:
+		return zapcore.InfoLevel, fmt.Errorf("invalid log level: %s", level)
+	}
+}
+
 // SetLogLevel 动态设置日志级别
 func SetLogLevel(level string) error {
-	var zapLevel zapcore.Level
-	switch strings.ToLower(level) {
-	case "debug":
-		zapLevel = zapcore.DebugLevel
-	case "info":
-		zapLevel = zapcore.InfoLevel
-	case "warn", "warning":
-		zapLevel = zapcore.WarnLevel
-	case "error":
-		zapLevel = zapcore.ErrorLevel
-	case "dpanic":
-		zapLevel = zapcore.DPanicLevel
-	case "panic":
-		zapLevel = zapcore.PanicLevel
-	case "fatal":
-		zapLevel = zapcore.FatalLevel
-	default:
-		return fmt.Errorf("invalid log level: %s", level)
+	zapLevel, err := ParseLevel(level)
+	if err != nil {
+		return err
 	}
 
 	atomicLevel.SetLevel(zapLevel)

@@ -2,14 +2,14 @@
   <n-modal
     v-model:show="modalVisible"
     title="创建日志"
-    size="huge"
+    size="small"
     display-directive="if"
-    preset="dialog"
-    class="compose-create-progress-modal"
+    preset="card"
     :mask-closable="false"
     :closable="canClose"
     :close-on-esc="canClose"
-    style="width: 90vw; max-width: 1000px; padding: 12px"
+    :content-style="{ padding: 0, overflow: 'hidden' }"
+    style="width: 90vw; max-width: 1000px"
     :on-after-leave="handleModalClose"
   >
     <template #header-extra>
@@ -43,7 +43,7 @@
 
     <!-- Terminal 日志显示 -->
     <div class="terminal-container">
-      <TermView ref="termRef" height="500px" :config="termConfig" />
+      <TermView ref="termRef" height="500px" :config="termConfig" @ready="handleTermReady" />
     </div>
 
     <template #footer>
@@ -73,10 +73,12 @@ import {
 import { useSettingStore } from '@/store/setting'
 import TermView from '@/components/Term/TermView.vue'
 import type { TermConfig } from '@/components/Term/TermView.vue'
+import { buildComposeCreateUpPayload, type ComposeCreateUpPayloadInput } from './composeCreateUpPayload'
 
 interface Props {
   projectName?: string
   yamlContent?: string
+  composeFile?: string
   force?: boolean // 是否强制覆盖已存在的项目
 }
 
@@ -125,64 +127,99 @@ const wsUrl = computed(() => {
   return url
 })
 
-// 使用 VueUse 的 useWebSocket
-const { send, open, close } = useWebSocket(wsUrl.value, {
-  immediate: false,
-  autoReconnect: false,
-  heartbeat: {
-    message: 'ping',
-    interval: 30000,
-  },
-  onMessage: (_ws, event) => {
-    if (event.data) {
-      // 处理二进制消息
-      if (event.data instanceof ArrayBuffer) {
-        const data = new Uint8Array(event.data)
-        // 检查是否是状态消息（以 \x00JSON: 开头）
-        if (
-          data.length > 6 &&
-          data[0] === 0 &&
-          String.fromCharCode(...data.slice(1, 6)) === 'JSON:'
-        ) {
-          // 解析状态消息
-          try {
-            const jsonStr = new TextDecoder().decode(data.slice(6))
-            const statusMsg = JSON.parse(jsonStr)
-            console.debug('收到状态消息:', statusMsg)
+// 终端就绪与消息缓冲（避免 @ready 前日志丢失）
+const isTermReady = ref(false)
+const pendingChunks: Array<string | Uint8Array> = []
+const pendingRequest = ref<ComposeCreateUpPayloadInput | null>(null)
 
-            if (statusMsg.status === 'success') {
-              status.value = 'success'
-              emit('success', statusMsg.message)
-              emit('complete')
-            } else if (statusMsg.status === 'error') {
-              status.value = 'error'
-              emit('error', statusMsg.message)
-            }
-          } catch (e) {
-            console.error('Failed to parse status message:', e)
-          }
-        } else {
-          // 普通日志消息，写入终端
-          termRef.value?.write(data)
-        }
+const appendTermChunk = (chunk: string | Uint8Array) => {
+  if (!isTermReady.value || !termRef.value) {
+    pendingChunks.push(chunk)
+    return
+  }
+  termRef.value.write(chunk)
+  termRef.value.scrollToBottom()
+}
+
+const handleTermReady = () => {
+  isTermReady.value = true
+  while (pendingChunks.length > 0 && termRef.value) {
+    const chunk = pendingChunks.shift()
+    if (chunk !== undefined) {
+      termRef.value.write(chunk)
+    }
+  }
+  termRef.value?.scrollToBottom()
+}
+
+const handleBinaryFrame = (data: Uint8Array) => {
+  // 检查是否是状态消息（以 \x00JSON: 开头）
+  if (
+    data.length > 6 &&
+    data[0] === 0 &&
+    String.fromCharCode(...data.slice(1, 6)) === 'JSON:'
+  ) {
+    try {
+      const jsonStr = new TextDecoder().decode(data.slice(6))
+      const statusMsg = JSON.parse(jsonStr)
+      console.debug('收到状态消息:', statusMsg)
+
+      if (statusMsg.status === 'success') {
+        status.value = 'success'
+        emit('success', statusMsg.message)
+        emit('complete')
+      } else if (statusMsg.status === 'error') {
+        status.value = 'error'
+        emit('error', statusMsg.message)
       }
+    } catch (e) {
+      console.error('Failed to parse status message:', e)
+    }
+  } else {
+    appendTermChunk(data)
+  }
+}
+
+// 使用 VueUse 的 useWebSocket（保持响应式 wsUrl，禁用自动连接与无响应应用层心跳）
+const { send, open, close } = useWebSocket(wsUrl, {
+  immediate: false,
+  autoConnect: false,
+  autoReconnect: false,
+  heartbeat: false,
+  onMessage: (_ws, event) => {
+    if (!event.data) {
+      return
+    }
+    if (event.data instanceof ArrayBuffer) {
+      handleBinaryFrame(new Uint8Array(event.data))
+    } else if (event.data instanceof Blob) {
+      event.data.arrayBuffer().then((buffer) => {
+        handleBinaryFrame(new Uint8Array(buffer))
+      })
+    } else if (typeof event.data === 'string') {
+      appendTermChunk(event.data)
     }
   },
   onConnected: (_ws) => {
+    if (status.value !== 'connecting') {
+      return
+    }
     status.value = 'creating'
     writeLine('\x1b[32m=== 连接成功，开始创建项目 ===\x1b[0m\r\n')
     if (_ws) {
       _ws.binaryType = 'arraybuffer'
     }
-    // 发送创建请求
-    if (props.projectName && props.yamlContent) {
-      send(
-        JSON.stringify({
-          name: props.projectName,
+    // 发送创建请求（优先使用 start() 时快照的请求参数，避免异步建连期间属性漂移）
+    const req = pendingRequest.value ?? (props.projectName && props.yamlContent
+      ? {
+          projectName: props.projectName,
           yamlContent: props.yamlContent,
-          force: props.force || false, // 默认不强制覆盖，由调用方控制
-        }),
-      )
+          composeFile: props.composeFile,
+          force: props.force || false,
+        }
+      : null)
+    if (req?.projectName && req?.yamlContent) {
+      send(JSON.stringify(buildComposeCreateUpPayload(req)))
     }
   },
   onError: () => {
@@ -203,8 +240,7 @@ const { send, open, close } = useWebSocket(wsUrl.value, {
 // 写入日志到 Terminal
 const writeLine = (text: string | Uint8Array) => {
   nextTick(() => {
-    termRef.value?.write(text)
-    termRef.value?.scrollToBottom()
+    appendTermChunk(text)
   })
 }
 
@@ -215,6 +251,13 @@ const start = () => {
     return
   }
 
+  pendingRequest.value = {
+    projectName: props.projectName,
+    yamlContent: props.yamlContent,
+    composeFile: props.composeFile,
+    force: props.force || false,
+  }
+  pendingChunks.length = 0
   status.value = 'connecting'
   modalVisible.value = true
   termRef.value?.clear()
@@ -225,6 +268,9 @@ const start = () => {
 // 重置
 const reset = () => {
   status.value = 'idle'
+  isTermReady.value = false
+  pendingRequest.value = null
+  pendingChunks.length = 0
   modalVisible.value = false
   termRef.value?.clear()
   close()
@@ -237,6 +283,7 @@ const handleClose = () => {
 
 // 弹窗关闭后的回调
 const handleModalClose = () => {
+  isTermReady.value = false
   // 弹窗关闭后清理
   if (status.value === 'success' || status.value === 'error') {
     reset()
@@ -256,12 +303,5 @@ defineExpose({
   padding: 0;
   overflow: hidden;
   border-radius: 4px;
-}
-
-.compose-create-progress-modal {
-  :deep(.n-card__content) {
-    padding: 0;
-    overflow: hidden;
-  }
 }
 </style>

@@ -161,10 +161,11 @@ const subnetDisplay = computed(() => {
 
 // 格式化创建时间
 const formatCreatedTime = (created: string): string => {
-  if (!created) {
+  if (!created || created.startsWith('0001-01-01')) {
     return '-'
   }
-  return dayjs(created).format('YYYY-MM-DD HH:mm')
+  const d = dayjs(created)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : '-'
 }
 
 // 获取驱动类型标签类型

@@ -24,7 +24,6 @@ declare module 'vue' {
     ImageCard: typeof import('./src/components/ImageCard.vue')['default']
     ImageImportModal: typeof import('./src/components/ImageImportModal.vue')['default']
     LayoutView: typeof import('./src/components/LayoutView.vue')['default']
-    LoadingView: typeof import('./src/components/LoadingView.vue')['default']
     LogsStreamView: typeof import('./src/components/LogsStreamView.vue')['default']
     MobileDrawer: typeof import('./src/components/MobileDrawer.vue')['default']
     MobileKeyboard: typeof import('./src/components/Term/MobileKeyboard.vue')['default']

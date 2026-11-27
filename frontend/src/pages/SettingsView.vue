@@ -39,7 +39,11 @@
         <n-card title="Docker 设置" embedded>
           <n-form :model="configForm" label-placement="left" label-width="120px">
             <n-form-item label="Docker 主机">
-              <n-input v-model:value="configForm.docker.host" placeholder="留空使用默认设置" />
+              <n-input
+                v-model:value="configForm.docker.host"
+                disabled
+                placeholder="留空使用默认设置（需通过服务端配置文件或环境变量修改）"
+              />
             </n-form-item>
             <n-form-item label="包含已停止容器">
               <n-switch v-model:value="configForm.docker.includeStopped" />
@@ -256,8 +260,49 @@
             </n-form-item>
           </n-form>
         </n-card>
+
+        <!-- 二次验证 (2FA) 设置 -->
+        <n-card v-if="isSecondaryVerificationEnabled" title="二次验证 (2FA)" embedded>
+          <n-space vertical size="medium">
+            <n-space align="center" justify="space-between">
+              <n-space align="center">
+                <n-text>当前状态：</n-text>
+                <n-tag :type="twoFAStatus.isSetup ? 'success' : 'warning'" size="small">
+                  {{ twoFAStatus.isSetup ? '已配置' : '未配置' }}
+                </n-tag>
+                <n-tag v-if="twoFAStatus.isSetup && twoFAStatus.method" type="info" size="small">
+                  {{ twoFAStatus.method === 'otp' ? 'OTP 动态口令' : 'WebAuthn 生物验证' }}
+                </n-tag>
+              </n-space>
+              <n-space>
+                <n-button size="small" type="primary" @click="showTwoFAModal = true">
+                  {{ twoFAStatus.isSetup ? '重新绑定' : '立即配置' }}
+                </n-button>
+                <n-button
+                  v-if="twoFAStatus.isSetup"
+                  size="small"
+                  type="error"
+                  ghost
+                  :loading="twoFALoading"
+                  @click="handleDisableTwoFA"
+                >
+                  禁用 2FA
+                </n-button>
+              </n-space>
+            </n-space>
+          </n-space>
+        </n-card>
       </n-space>
     </div>
+
+    <n-modal
+      v-model:show="showTwoFAModal"
+      preset="card"
+      title="配置二次验证"
+      style="width: 480px; max-width: 92vw"
+    >
+      <TwoFASetup @success="handleTwoFASetupSuccess" />
+    </n-modal>
 
     <Teleport to="#header" defer>
       <div class="welcome-card">
@@ -273,7 +318,13 @@
     <!-- 底部保存按钮 -->
     <Teleport to="#footer" defer>
       <div class="save-button-container">
-        <n-button type="primary" size="large" @click="handleSave" :loading="saving">
+        <n-button
+          type="primary"
+          size="large"
+          @click="handleSave"
+          :loading="saving"
+          :disabled="!configLoaded || loadingConfig"
+        >
           <template #icon>
             <SaveOutline />
           </template>
@@ -285,15 +336,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useMessage, useDialog } from 'naive-ui'
 import type { Config, RegistryMirror } from '@/common/types'
 import { AddOutline, ArrowUpOutline, ArrowDownOutline, SaveOutline } from '@vicons/ionicons5'
-import { configApi } from '@/common/api'
+import { configApi, twoFAApi } from '@/common/api'
+import { useSettingStore } from '@/store/setting'
+import { useAuthStore } from '@/store/auth'
+import TwoFASetup from '@/components/TwoFASetup.vue'
 
 const message = useMessage()
+const dialog = useDialog()
+const settingStore = useSettingStore()
+const authStore = useAuthStore()
 
-// 保存状态
+// 二次验证管理状态
+const showTwoFAModal = ref(false)
+const twoFALoading = ref(false)
+const twoFAStatus = reactive({
+  enabled: false,
+  isSetup: false,
+  method: '',
+})
+const isSecondaryVerificationEnabled = computed(
+  () => authStore.authEnabled && Boolean(settingStore.systemInfo?.isSecondaryVerificationEnabled),
+)
+
+// 加载与保存状态
+const loadingConfig = ref(false)
+const configLoaded = ref(false)
 const saving = ref(false)
 
 const notifyUrlPlaceholder = computed(() => {
@@ -338,8 +409,16 @@ const configForm = reactive<Config>({
     auth: [],
     mirrors: [],
   },
+  proxy: {
+    url: '',
+  },
   logging: {
     level: 'info',
+  },
+  compose: {
+    enabled: false,
+    scanInterval: 30,
+    logLines: 100,
   },
 })
 
@@ -450,12 +529,26 @@ const handleSave = async () => {
   if (saving.value) {
     return
   }
+  if (!configLoaded.value || loadingConfig.value) {
+    message.warning('配置尚未加载完成，请稍后重试')
+    return
+  }
+  if (!Number.isFinite(configForm.scan.concurrency) || configForm.scan.concurrency < 1) {
+    message.error('扫描并发数不能小于 1')
+    return
+  }
+  if (!Number.isFinite(configForm.scan.cacheTTL) || configForm.scan.cacheTTL < 1) {
+    message.error('缓存时间（TTL）不能小于 1 分钟')
+    return
+  }
 
   saving.value = true
   try {
     const response = await configApi.saveConfig(configForm)
     if (response.code === 0) {
       message.success('配置保存成功')
+      await loadConfig(true)
+      void settingStore.fetchSystemInfo(true)
     } else {
       throw new Error(response.msg || '保存失败')
     }
@@ -467,14 +560,34 @@ const handleSave = async () => {
 }
 
 // 加载配置
-const loadConfig = async () => {
+const loadConfig = async (silent = false) => {
+  loadingConfig.value = true
   try {
     const response = await configApi.getConfig()
 
     if (response.code === 0 && response.data?.config) {
-      // 将服务器返回的配置合并到表单中
-      Object.assign(configForm, response.data.config)
-      // 兼容旧配置：mirrors 字段可能不存在
+      const serverCfg = response.data.config
+      // 将服务器返回的配置合并到表单中，并规范化可能为 null 的数组/嵌套字段
+      Object.assign(configForm, serverCfg)
+      if (!configForm.policy) {
+        configForm.policy = {
+          skipLabels: [],
+          onlyLabels: [],
+          skipLocalBuild: true,
+          skipPinnedDigest: true,
+          skipSemverPinned: true,
+          floatingTags: [],
+        }
+      }
+      if (!Array.isArray(configForm.policy.skipLabels)) {
+        configForm.policy.skipLabels = []
+      }
+      if (!Array.isArray(configForm.policy.onlyLabels)) {
+        configForm.policy.onlyLabels = []
+      }
+      if (!Array.isArray(configForm.policy.floatingTags)) {
+        configForm.policy.floatingTags = []
+      }
       if (!configForm.registry) {
         configForm.registry = { auth: [], mirrors: [] }
       }
@@ -484,18 +597,97 @@ const loadConfig = async () => {
       if (!Array.isArray(configForm.registry.auth)) {
         configForm.registry.auth = []
       }
-      message.success('配置加载成功')
+      if (!configForm.proxy) {
+        configForm.proxy = { url: '' }
+      }
+      if (!configForm.compose) {
+        configForm.compose = { enabled: false, scanInterval: 30, logLines: 100 }
+      }
+      configLoaded.value = true
+      if (!silent) {
+        message.success('配置加载成功')
+      }
     } else {
       throw new Error(response.msg || '获取配置失败')
     }
   } catch (error: any) {
     message.error(`加载配置失败: ${error.message || '未知错误'}`)
+  } finally {
+    loadingConfig.value = false
   }
 }
+
+// 加载 2FA 状态
+const loadTwoFAStatus = async () => {
+  if (!isSecondaryVerificationEnabled.value) {
+    return
+  }
+  twoFALoading.value = true
+  try {
+    const res = await twoFAApi.getStatus()
+    if (res.code === 0 && res.data) {
+      twoFAStatus.enabled = Boolean(res.data.enabled)
+      twoFAStatus.isSetup = Boolean(res.data.isSetup)
+      twoFAStatus.method = res.data.method || ''
+    }
+  } catch (error: any) {
+    console.error('Failed to load 2FA status:', error)
+  } finally {
+    twoFALoading.value = false
+  }
+}
+
+// 2FA 设置成功
+const handleTwoFASetupSuccess = async (token: string) => {
+  if (token) {
+    settingStore.setToken(token)
+  }
+  showTwoFAModal.value = false
+  await loadTwoFAStatus()
+}
+
+// 禁用 2FA
+const handleDisableTwoFA = () => {
+  dialog.warning({
+    title: '确认禁用二次验证',
+    content: '禁用后下次登录将需要重新设置二次验证，确认继续吗？',
+    positiveText: '确认禁用',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      twoFALoading.value = true
+      try {
+        const res = await twoFAApi.disable()
+        if (res.code === 0) {
+          message.success('已禁用二次验证')
+          await loadTwoFAStatus()
+        } else {
+          message.error(res.msg || '禁用失败')
+        }
+      } catch (error: any) {
+        message.error(error.message || '禁用失败')
+      } finally {
+        twoFALoading.value = false
+      }
+    },
+  })
+}
+
+watch(
+  isSecondaryVerificationEnabled,
+  (enabled) => {
+    if (enabled) {
+      void loadTwoFAStatus()
+    }
+  },
+)
 
 // 页面初始化
 onMounted(async () => {
   await loadConfig()
+  if (!settingStore.systemInfo || (authStore.authEnabled && !settingStore.systemInfo.dockerVersion)) {
+    await settingStore.fetchSystemInfo()
+  }
+  await loadTwoFAStatus()
 })
 </script>
 

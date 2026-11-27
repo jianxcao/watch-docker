@@ -13,7 +13,8 @@ export function buildTerminalSocketUrl(
   token: string,
 ): string {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${location.host}/api/v1/shell?shell=${encodeURIComponent(shell)}&token=${encodeURIComponent(token)}`
+  const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : ''
+  return `${protocol}//${location.host}/api/v1/shell?shell=${encodeURIComponent(shell)}${tokenQuery}`
 }
 
 export function terminalShellStorageKey(target: TerminalTarget): string {

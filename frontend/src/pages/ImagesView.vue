@@ -105,6 +105,7 @@
 <script setup lang="ts">
 import type { ImageInfo } from '@/common/types'
 import { renderIcon } from '@/common/utils'
+import { loadImagesViewOnMount } from './imagesViewMount'
 import ImageCard from '@/components/ImageCard.vue'
 import ImageImportModal from '@/components/ImageImportModal.vue'
 import { useImage } from '@/hooks/useImage'
@@ -236,8 +237,8 @@ const filteredImages = computed(() => {
     })
   }
 
-  // 排序
-  const sortedImages = images.sort((a, b) => {
+  // 排序（使用副本避免修改 store 原数组）
+  const sortedImages = [...images].sort((a, b) => {
     let result = 0
     switch (sortBy.value) {
       case 'name':
@@ -289,13 +290,12 @@ const handleImportSuccess = async () => {
 
 // 页面初始化
 onMounted(async () => {
-  if (imageStore.images.length === 0) {
-    await imageStore.fetchImages()
-  }
-  // 加载容器数据以便检查镜像使用情况
-  if (containerStore.containers.length === 0) {
-    await containerStore.fetchContainers()
-  }
+  await loadImagesViewOnMount({
+    fetchImages: () => imageStore.fetchImages(),
+    fetchContainers: () => containerStore.fetchContainers(),
+    hasContainerWork: () => !containerStore.loading && containerStore.containers.length === 0,
+    onImagesError: (errMsg) => message.error(`获取镜像列表失败：${errMsg}`),
+  })
 })
 </script>
 
@@ -324,19 +324,19 @@ onMounted(async () => {
     gap: 16px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

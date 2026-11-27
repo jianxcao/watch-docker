@@ -35,9 +35,6 @@ const request = axios
 export const healthApi = {
   // 健康检查
   health: () => axios.get<any>(API_ENDPOINTS.HEALTH),
-
-  // 就绪检查
-  ready: () => axios.get<any>(API_ENDPOINTS.READY),
 }
 
 // 身份验证相关API
@@ -49,6 +46,7 @@ export const authApi = {
       username?: string
       needTwoFA?: boolean
       isSetup?: boolean
+      isAccountSetup?: boolean
       method?: string
       tempToken?: string
     }>(API_ENDPOINTS.LOGIN, {
@@ -76,22 +74,32 @@ export const containerApi = {
   getContainers: (isUserCache = true, isHaveUpdate = true) =>
     axios.get<{ containers: ContainerStatus[] }>(API_ENDPOINTS.CONTAINERS, {
       params: { isUserCache, isHaveUpdate },
+      timeout: isHaveUpdate ? 10 * 60 * 1000 : 30 * 1000,
     }),
 
   // 获取容器详情
   getContainerDetail: (id: string) =>
     axios.get<{ container: any }>(API_ENDPOINTS.CONTAINER_DETAIL(id)),
 
-  // 创建容器
+  // 创建容器（可能触发拉取镜像，允许更长超时）
   createContainer: (data: ContainerCreateRequest) =>
-    axios.post<ContainerCreateResponse>(API_ENDPOINTS.CONTAINER_CREATE, data),
+    axios.post<ContainerCreateResponse>(API_ENDPOINTS.CONTAINER_CREATE, data, {
+      timeout: 10 * 60 * 1000,
+    }),
 
   // 更新单个容器
   updateContainer: (id: string, image?: string) =>
-    axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_UPDATE(id), { image }),
+    axios.post<{ ok: boolean; newContainerId?: string }>(
+      API_ENDPOINTS.CONTAINER_UPDATE(id),
+      { image },
+      { timeout: 10 * 60 * 1000 },
+    ),
 
   // 批量更新容器
-  batchUpdate: () => axios.post<BatchUpdateResult>(API_ENDPOINTS.BATCH_UPDATE),
+  batchUpdate: () =>
+    axios.post<BatchUpdateResult>(API_ENDPOINTS.BATCH_UPDATE, undefined, {
+      timeout: 10 * 60 * 1000,
+    }),
 
   // 启动容器
   startContainer: (id: string) => axios.post<{ ok: boolean }>(API_ENDPOINTS.CONTAINER_START(id)),
@@ -115,7 +123,10 @@ export const containerApi = {
     }),
 
   // 系统清理
-  pruneSystem: () => axios.post<{ ok: boolean; message: string }>(API_ENDPOINTS.PRUNE_SYSTEM),
+  pruneSystem: () =>
+    axios.post<{ ok: boolean; message: string }>(API_ENDPOINTS.PRUNE_SYSTEM, undefined, {
+      timeout: 10 * 60 * 1000,
+    }),
 
   // 导入容器
   importContainer: (formData: FormData) =>
@@ -123,6 +134,7 @@ export const containerApi = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 0,
     }),
 }
 
@@ -145,6 +157,7 @@ export const imageApi = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 0,
     })
   },
 }
@@ -164,26 +177,26 @@ export const composeApi = {
   getProjects: () => axios.get<{ projects: ComposeProject[] }>('/compose'),
 
   // 启动项目
-  startProject: (project: ComposeProject) => axios.post<{ ok: boolean }>(`/compose/start`, project),
+  startProject: (project: ComposeProject) =>
+    axios.post<{ ok: boolean }>(`/compose/start`, project, { timeout: 3 * 60 * 1000 }),
 
   // 停止项目
-  stopProject: (project: ComposeProject) => axios.post<{ ok: boolean }>(`/compose/stop`, project),
+  stopProject: (project: ComposeProject) =>
+    axios.post<{ ok: boolean }>(`/compose/stop`, project, { timeout: 3 * 60 * 1000 }),
 
   createProject: (project: ComposeProject) =>
-    axios.post<{ ok: boolean }>(`/compose/create`, project),
+    axios.post<{ ok: boolean }>(`/compose/create`, project, { timeout: 5 * 60 * 1000 }),
+
   // 重新创建项目
   restartProject: (project: ComposeProject) =>
-    axios.post<{ ok: boolean }>(`/compose/restart`, project),
+    axios.post<{ ok: boolean }>(`/compose/restart`, project, { timeout: 5 * 60 * 1000 }),
 
   // 删除项目
   deleteProject: (project: ComposeProject) =>
     axios.delete<{ ok: boolean }>(`/compose/delete`, {
       data: project,
+      timeout: 3 * 60 * 1000,
     }),
-
-  // 获取项目日志
-  getProjectLogs: (name: string, lines = 100) =>
-    axios.get<{ logs: string }>(`/compose/${name}/logs`, { params: { lines } }),
 
   // 创建新项目（保存 YAML 文件）
   saveNewProject: (name: string, yamlContent: string) =>
@@ -191,7 +204,7 @@ export const composeApi = {
 
   // 获取项目的 YAML 内容
   getProjectYaml: (projectName: string, composeFile: string) =>
-    axios.get<{ yamlContent: string }>(`/compose/${projectName}/yaml`, {
+    axios.get<{ yamlContent: string }>(`/compose/${encodeURIComponent(projectName)}/yaml`, {
       params: { composeFile },
     }),
 }
@@ -218,14 +231,15 @@ export const volumeApi = {
   getVolumes: () => axios.get<VolumeListResponse>('/volumes'),
 
   // 获取Volume详情
-  getVolume: (name: string) => axios.get<VolumeDetailResponse>(`/volumes/${name}`),
+  getVolume: (name: string) =>
+    axios.get<VolumeDetailResponse>(`/volumes/${encodeURIComponent(name)}`),
 
   // 创建Volume
   createVolume: (data: VolumeCreateRequest) => axios.post<{ volume: any }>('/volumes', data),
 
   // 删除Volume
   deleteVolume: (name: string, force: boolean = false) =>
-    axios.delete<{ ok: boolean }>(`/volumes/${name}`, { params: { force } }),
+    axios.delete<{ ok: boolean }>(`/volumes/${encodeURIComponent(name)}`, { params: { force } }),
 
   // 清理未使用的Volume
   pruneVolumes: () => axios.post<VolumePruneResponse>('/volumes/prune'),
@@ -277,22 +291,25 @@ export default api
 
 // 列出文件
 export const listContainerFiles = (containerId: string, path: string = '/') => {
-  return request.get<FileListResult>(`/containers/${containerId}/files`, {
+  return request.get<FileListResult>(`/containers/${encodeURIComponent(containerId)}/files`, {
     params: { path },
   })
 }
 
 // 获取文件内容
 export const getContainerFileContent = (containerId: string, path: string) => {
-  return request.get<FileContent>(`/containers/${containerId}/files/content`, {
-    params: { path },
-  })
+  return request.get<FileContent>(
+    `/containers/${encodeURIComponent(containerId)}/files/content`,
+    {
+      params: { path },
+    },
+  )
 }
 
 // 更新文件内容
 export const updateContainerFileContent = (containerId: string, path: string, content: string) => {
   return request.put<{ success: boolean; path: string }>(
-    `/containers/${containerId}/files/content`,
+    `/containers/${encodeURIComponent(containerId)}/files/content`,
     { content },
     { params: { path } },
   )
@@ -305,58 +322,72 @@ export const uploadContainerFiles = (containerId: string, path: string, files: F
     formData.append('files', file)
   })
 
-  return request.post<UploadResult>(`/containers/${containerId}/files/upload`, formData, {
-    params: { path },
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
+  return request.post<UploadResult>(
+    `/containers/${encodeURIComponent(containerId)}/files/upload`,
+    formData,
+    {
+      params: { path },
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    },
+  )
 }
 
 // 生成下载令牌
 export const generateDownloadToken = (containerId: string, path: string) => {
   return request.post<{ token: string; expiresIn: number }>(
-    `/containers/${containerId}/files/download-token`,
+    `/containers/${encodeURIComponent(containerId)}/files/download-token`,
     { path },
   )
 }
 
 // 构造下载 URL（使用临时 token）
 export const getDownloadUrl = (containerId: string, path: string, downloadToken: string) => {
-  return `/api/v1/containers/${containerId}/files/download?path=${encodeURIComponent(path)}&download_token=${downloadToken}`
+  return `/api/v1/containers/${encodeURIComponent(containerId)}/files/download?path=${encodeURIComponent(path)}&download_token=${encodeURIComponent(downloadToken)}`
 }
 
 // 构造下载 URL（使用用户 token，备用方案）
 export const getDownloadUrlWithToken = (containerId: string, path: string, token: string) => {
-  return `/api/v1/containers/${containerId}/files/download?path=${encodeURIComponent(path)}&token=${token}`
+  return `/api/v1/containers/${encodeURIComponent(containerId)}/files/download?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`
 }
 
 // @deprecated 使用 generateDownloadToken + getDownloadUrl 代替
 export const getContainerFileDownloadUrl = (containerId: string, path: string) => {
-  return `/api/v1/containers/${containerId}/files/download?path=${encodeURIComponent(path)}`
+  return `/api/v1/containers/${encodeURIComponent(containerId)}/files/download?path=${encodeURIComponent(path)}`
 }
 
 // 创建文件或目录
 export const createContainerPath = (containerId: string, data: CreatePathRequest) => {
   return request.post<{ success: boolean; path: string; type: string }>(
-    `/containers/${containerId}/files/create`,
+    `/containers/${encodeURIComponent(containerId)}/files/create`,
     data,
   )
 }
 
 // 删除文件或目录
 export const deleteContainerPath = (containerId: string, path: string) => {
-  return request.delete<{ success: boolean }>(`/containers/${containerId}/files/delete`, {
-    params: { path },
-  })
+  return request.delete<{ success: boolean }>(
+    `/containers/${encodeURIComponent(containerId)}/files/delete`,
+    {
+      params: { path },
+    },
+  )
 }
 
 // 重命名文件或目录
 export const renameContainerPath = (containerId: string, data: RenamePathRequest) => {
-  return request.post<{ success: boolean }>(`/containers/${containerId}/files/rename`, data)
+  return request.post<{ success: boolean }>(
+    `/containers/${encodeURIComponent(containerId)}/files/rename`,
+    data,
+  )
 }
 
 // 修改文件权限
 export const chmodContainerPath = (containerId: string, data: ChmodRequest) => {
-  return request.post<{ success: boolean }>(`/containers/${containerId}/files/chmod`, data)
+  return request.post<{ success: boolean }>(
+    `/containers/${encodeURIComponent(containerId)}/files/chmod`,
+    data,
+  )
 }
 
 // 单独导出常用的API函数，方便直接导入

@@ -119,13 +119,20 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useNetworkStore } from '@/store/network'
 import { useResponsive } from '@/hooks/useResponsive'
 import { renderIcon } from '@/common/utils'
 import NetworkCard from '@/components/NetworkCard.vue'
 import NetworkCreateModal from '@/components/NetworkCreateModal.vue'
 import type { NetworkInfo } from '@/common/types'
+import {
+  buildNetworkListQuery,
+  parseNetworkListQuery,
+  useRouteListState,
+  type NetworkSortBy,
+  type NetworkStatusFilter,
+} from './listQuery'
 import {
   SearchOutline,
   RefreshOutline,
@@ -145,22 +152,25 @@ import { useDialog, useMessage } from 'naive-ui'
 
 const networkStore = useNetworkStore()
 const { isMobile, isTablet, isLaptop, isDesktop, isDesktopLarge } = useResponsive()
+const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
 const message = useMessage()
 
-// 搜索和过滤状态
-const searchKeyword = ref('')
-const statusFilter = ref<string | null>(null)
-const sortBy = ref<string>('name') // 默认按名称排序
-const sortOrder = ref<'asc' | 'desc'>('asc') // 排序方向，默认升序
+// 搜索和过滤状态（与浏览器地址栏 query 双向同步）
+const { searchKeyword, statusFilter, sortBy, sortOrder } = useRouteListState({
+  route,
+  router,
+  parse: parseNetworkListQuery,
+  build: buildNetworkListQuery,
+})
 const showCreateModal = ref(false)
 
 // 过滤菜单选项
 const statusFilterMenuOptions = computed(() => [
   {
     label: '全部',
-    key: null,
+    key: '',
     icon: renderIcon(AppsOutline),
   },
   {
@@ -225,7 +235,7 @@ const sortMenuOptions = computed(() => [
 
 // 处理过滤器菜单选择
 const handleFilterSelect = (key: string | null) => {
-  statusFilter.value = key
+  statusFilter.value = (key || '') as NetworkStatusFilter
 }
 
 // 判断排序按钮是否应该显示为主色（激活状态）
@@ -240,7 +250,7 @@ const handleSortSelect = (key: string) => {
     sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
   } else {
     // 如果选择的是不同字段，设置新字段并默认为升序
-    sortBy.value = key
+    sortBy.value = key as NetworkSortBy
     sortOrder.value = 'asc'
   }
 }
@@ -296,8 +306,8 @@ const filteredNetworks = computed(() => {
     })
   }
 
-  // 3. 排序
-  return networks.sort((a, b) => {
+  // 3. 排序（使用副本避免修改 store 原数组）
+  return [...networks].sort((a, b) => {
     let result = 0
 
     switch (sortBy.value) {
@@ -355,7 +365,7 @@ const handleDelete = async (network: NetworkInfo) => {
 
 // 处理查看详情
 const handleDetail = (network: NetworkInfo) => {
-  router.push(`/networks/${network.id}`)
+  router.push({ name: 'network-detail', params: { id: network.id }, query: route.query })
 }
 
 // 处理刷新
@@ -447,19 +457,19 @@ onMounted(async () => {
     gap: 16px;
 
     &.grid-cols-1 {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     &.grid-cols-2 {
-      grid-template-columns: repeat(2, minmax(1fr, 50%));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     &.grid-cols-3 {
-      grid-template-columns: repeat(3, minmax(1fr, 33.33%));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     &.grid-cols-4 {
-      grid-template-columns: repeat(4, minmax(1fr, 25%));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 }

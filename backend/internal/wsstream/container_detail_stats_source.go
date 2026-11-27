@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"sync"
 
 	"github.com/jianxcao/watch-docker/backend/internal/dockercli"
 	logger "github.com/jianxcao/watch-docker/backend/internal/logging"
@@ -15,6 +16,7 @@ type ContainerDetailStatsSource struct {
 	containerID  string
 	dockerClient *dockercli.Client
 	key          string
+	mu           sync.Mutex
 	reader       *ChannelStreamReader[string]
 	cancel       context.CancelFunc
 }
@@ -41,7 +43,9 @@ func (s *ContainerDetailStatsSource) Start(ctx context.Context) (StreamReader[st
 
 	// 创建可取消的上下文
 	streamCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
 	s.cancel = cancel
+	s.mu.Unlock()
 
 	// 获取容器统计流（stream=true 表示持续获取）
 	statsReader, err := s.dockerClient.ContainerStats(streamCtx, s.containerID, true)
@@ -57,12 +61,15 @@ func (s *ContainerDetailStatsSource) Start(ctx context.Context) (StreamReader[st
 	messageChan := make(chan string, 10)
 
 	// 创建 ChannelStreamReader
-	s.reader = NewChannelStreamReader(messageChan)
+	reader := NewChannelStreamReader(messageChan)
+	s.mu.Lock()
+	s.reader = reader
+	s.mu.Unlock()
 
 	// 在后台goroutine中读取和解析统计数据
 	go s.readStatsStream(streamCtx, statsReader.Body, messageChan)
 
-	return s.reader, nil
+	return reader, nil
 }
 
 // readStatsStream 读取并解析统计数据流
@@ -114,15 +121,21 @@ func (s *ContainerDetailStatsSource) readStatsStream(ctx context.Context, reader
 func (s *ContainerDetailStatsSource) Stop() error {
 	logger.Logger.Info("停止容器详细统计流", zap.String("containerID", s.containerID))
 
+	s.mu.Lock()
+	cancel := s.cancel
+	s.cancel = nil
+	reader := s.reader
+	s.reader = nil
+	s.mu.Unlock()
+
 	// 取消上下文
-	if s.cancel != nil {
-		s.cancel()
+	if cancel != nil {
+		cancel()
 	}
 
 	// 关闭 reader
-	if s.reader != nil {
-		s.reader.Close()
-		s.reader = nil
+	if reader != nil {
+		reader.Close()
 	}
 
 	return nil

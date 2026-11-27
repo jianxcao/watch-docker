@@ -91,7 +91,7 @@
               <n-icon size="16">
                 <CreateTimeIcon />
               </n-icon>
-              创建时间
+              启动时间
             </div>
             <div class="detail-label">
               <n-icon size="16">
@@ -310,10 +310,11 @@ const errorTooltipText = computed(() => {
 
 // 格式化创建时间
 const formatCreatedTime = (createdAt: string): string => {
-  if (!createdAt) {
+  if (!createdAt || createdAt.startsWith('0001-01-01')) {
     return '-'
   }
-  return dayjs(createdAt).format('YYYY-MM-DD HH:mm')
+  const d = dayjs(createdAt)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : '-'
 }
 
 // 格式化端口映射
