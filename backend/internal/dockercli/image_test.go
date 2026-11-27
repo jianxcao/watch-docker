@@ -7,12 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/jianxcao/watch-docker/backend/internal/conf"
 	"github.com/jianxcao/watch-docker/backend/internal/config"
+	"github.com/moby/moby/api/pkg/authconfig"
+	registrytypes "github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 func TestRegistryAuthAndMirrorPullTrimWhitespace(t *testing.T) {
@@ -94,4 +98,384 @@ func TestRegistryAuthAndMirrorPullTrimWhitespace(t *testing.T) {
 	if gotRepo != "docker.io/library/nginx" || gotTag != "1.25" {
 		t.Fatalf("expected trimmed retag repo=docker.io/library/nginx tag=1.25, got repo=%q tag=%q", gotRepo, gotTag)
 	}
+}
+
+type recordedEnginePull struct {
+	fromImage string
+	tag       string
+	rawAuth   string
+	auth      registrytypes.AuthConfig
+}
+
+func isAnonymousEngineAuth(cfg registrytypes.AuthConfig) bool {
+	return cfg.Username == "" &&
+		cfg.Password == "" &&
+		cfg.Auth == "" &&
+		cfg.IdentityToken == "" &&
+		cfg.RegistryToken == ""
+}
+
+func TestImagePullMirrorCredentialOrigin(t *testing.T) {
+	origEnv := conf.EnvCfg
+	origCfg := config.Get()
+	testEnv := *origEnv
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() {
+		if origCfg != nil {
+			config.SetGlobal(origCfg)
+		}
+		conf.EnvCfg = origEnv
+	})
+
+	loadPullCfg := func(t *testing.T, yamlCfg string) {
+		t.Helper()
+		dir := t.TempDir()
+		conf.EnvCfg.CONFIG_PATH = dir
+		conf.EnvCfg.CONFIG_FILE = "config.yaml"
+		cfgPath := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(cfgPath, []byte(yamlCfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.Load(cfgPath); err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+	}
+
+	setupFakeEngine := func(t *testing.T, failFrom func(string) bool) (*Client, func() []recordedEnginePull, func()) {
+		t.Helper()
+		var mu sync.Mutex
+		var pulls []recordedEnginePull
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/images/create"):
+				fromImage := r.URL.Query().Get("fromImage")
+				tag := r.URL.Query().Get("tag")
+				rawAuth := r.Header.Get("X-Registry-Auth")
+				var decoded registrytypes.AuthConfig
+				if rawAuth != "" {
+					cfgPtr, err := authconfig.Decode(rawAuth)
+					if err != nil {
+						t.Errorf("decode X-Registry-Auth failed (%q): %v", rawAuth, err)
+					} else if cfgPtr != nil {
+						decoded = *cfgPtr
+					}
+				}
+				mu.Lock()
+				pulls = append(pulls, recordedEnginePull{
+					fromImage: fromImage,
+					tag:       tag,
+					rawAuth:   rawAuth,
+					auth:      decoded,
+				})
+				mu.Unlock()
+
+				w.Header().Set("Content-Type", "application/json")
+				if failFrom != nil && failFrom(fromImage) {
+					_, _ = w.Write([]byte(`{"error":"mirror down","errorDetail":{"message":"mirror down"}}` + "\n"))
+					return
+				}
+				_, _ = w.Write([]byte(`{"status":"Pull complete"}` + "\n"))
+			case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/tag"):
+				w.WriteHeader(http.StatusCreated)
+			case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/images/"):
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`[]`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(srv.Close)
+
+		dockerCli, err := client.New(client.WithHost("tcp://" + srv.Listener.Addr().String()))
+		if err != nil {
+			t.Fatalf("create docker client: %v", err)
+		}
+		t.Cleanup(func() { _ = dockerCli.Close() })
+
+		snapshot := func() []recordedEnginePull {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]recordedEnginePull(nil), pulls...)
+		}
+		reset := func() {
+			mu.Lock()
+			pulls = nil
+			mu.Unlock()
+		}
+		return &Client{docker: dockerCli}, snapshot, reset
+	}
+
+	platform := &ocispec.Platform{OS: "linux", Architecture: "amd64"}
+	ctx := context.Background()
+
+	// 1. 同地址匿名 HTTP mirror 与带账号 HTTPS（两种顺序），HTTP mirror 均为匿名
+	anonOrders := []struct {
+		name string
+		cfg  string
+	}{
+		{
+			name: "anon_http_then_https_cred",
+			cfg: `registry:
+  auth:
+    - host: http://registry.example:5000
+      username: ""
+      token: ""
+    - host: https://registry.example:5000
+      username: https-user
+      token: https-secret
+  mirrors:
+    - name: m-http
+      url: http://registry.example:5000
+      enabled: true
+`,
+		},
+		{
+			name: "https_cred_then_anon_http",
+			cfg: `registry:
+  auth:
+    - host: https://registry.example:5000
+      username: https-user
+      token: https-secret
+    - host: http://registry.example:5000
+      username: ""
+      token: ""
+  mirrors:
+    - name: m-http
+      url: http://registry.example:5000
+      enabled: true
+`,
+		},
+	}
+
+	for _, tc := range anonOrders {
+		t.Run("anon http mirror plus credentialed https/"+tc.name, func(t *testing.T) {
+			loadPullCfg(t, tc.cfg)
+			cli, snapshot, _ := setupFakeEngine(t, nil)
+			if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+				t.Fatalf("ImagePullWithPlatform failed: %v", err)
+			}
+			pulls := snapshot()
+			if len(pulls) != 1 {
+				t.Fatalf("expected 1 pull call, got %#v", pulls)
+			}
+			if pulls[0].fromImage != "registry.example:5000/library/busybox" || pulls[0].tag != "latest" {
+				t.Fatalf("unexpected mirror pull target: %#v", pulls[0])
+			}
+			if !isAnonymousEngineAuth(pulls[0].auth) {
+				t.Fatalf("expected anonymous auth for http mirror, got %#v", pulls[0].auth)
+			}
+		})
+	}
+
+	// 2. 同地址的 HTTP、HTTPS 使用不同账号（两种顺序），每种 mirror 只取同协议账号
+	dualOrders := []struct {
+		name     string
+		authYAML string
+	}{
+		{
+			name: "http_then_https",
+			authYAML: `    - host: http://registry.example:5000
+      username: http-user
+      token: http-secret
+    - host: https://registry.example:5000
+      username: https-user
+      token: https-secret`,
+		},
+		{
+			name: "https_then_http",
+			authYAML: `    - host: https://registry.example:5000
+      username: https-user
+      token: https-secret
+    - host: http://registry.example:5000
+      username: http-user
+      token: http-secret`,
+		},
+	}
+	for _, ord := range dualOrders {
+		for _, mirrorScheme := range []string{"http", "https"} {
+			wantUser, wantPass := "http-user", "http-secret"
+			if mirrorScheme == "https" {
+				wantUser, wantPass = "https-user", "https-secret"
+			}
+			t.Run("dual credentials/"+ord.name+"/mirror_"+mirrorScheme, func(t *testing.T) {
+				cfg := "registry:\n  auth:\n" + ord.authYAML + "\n  mirrors:\n    - name: m\n      url: " + mirrorScheme + "://registry.example:5000\n      enabled: true\n"
+				loadPullCfg(t, cfg)
+				cli, snapshot, _ := setupFakeEngine(t, nil)
+				if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+					t.Fatalf("ImagePullWithPlatform failed: %v", err)
+				}
+				pulls := snapshot()
+				if len(pulls) != 1 || pulls[0].fromImage != "registry.example:5000/library/busybox" {
+					t.Fatalf("unexpected pull calls: %#v", pulls)
+				}
+				if pulls[0].auth.Username != wantUser || pulls[0].auth.Password != wantPass {
+					t.Fatalf("mirror=%s:// expected (%s, %s), got %#v", mirrorScheme, wantUser, wantPass, pulls[0].auth)
+				}
+			})
+		}
+	}
+
+	// 3. 同一主机不同端口独立匹配，且保留 mirror 路径前缀；默认端口互认
+	t.Run("port isolation, mirror path prefix, and default port equivalence", func(t *testing.T) {
+		loadPullCfg(t, `registry:
+  auth:
+    - host: https://registry.example:8443
+      username: user-8443
+      token: pass-8443
+    - host: https://registry.example:9443
+      username: user-9443
+      token: pass-9443
+    - host: https://registry.example
+      username: user-default
+      token: pass-default
+  mirrors:
+    - name: prefixed-8443
+      url: https://registry.example:8443/dockerhub/
+      enabled: true
+`)
+		cli, snapshot, reset := setupFakeEngine(t, nil)
+		if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+			t.Fatalf("pull prefixed 8443 mirror failed: %v", err)
+		}
+		pulls := snapshot()
+		if len(pulls) != 1 || pulls[0].fromImage != "registry.example:8443/dockerhub/library/busybox" || pulls[0].tag != "latest" {
+			t.Fatalf("expected path-prefixed mirror ref, got %#v", pulls)
+		}
+		if pulls[0].auth.Username != "user-8443" || pulls[0].auth.Password != "pass-8443" {
+			t.Fatalf("expected user-8443, got %#v", pulls[0].auth)
+		}
+
+		// 未配置账号的 :7443 端口保持匿名
+		reset()
+		loadPullCfg(t, `registry:
+  auth:
+    - host: https://registry.example:8443
+      username: user-8443
+      token: pass-8443
+  mirrors:
+    - name: unconfigured-7443
+      url: https://registry.example:7443/dockerhub
+      enabled: true
+`)
+		if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+			t.Fatalf("pull unconfigured 7443 mirror failed: %v", err)
+		}
+		pulls = snapshot()
+		if len(pulls) != 1 || pulls[0].fromImage != "registry.example:7443/dockerhub/library/busybox" || !isAnonymousEngineAuth(pulls[0].auth) {
+			t.Fatalf("expected anonymous auth for unconfigured port 7443, got %#v", pulls)
+		}
+
+		// 默认 443 端口互认（auth 无显式端口，mirror 写 :443；反之亦然）
+		reset()
+		loadPullCfg(t, `registry:
+  auth:
+    - host: https://registry.example
+      username: user-default
+      token: pass-default
+  mirrors:
+    - name: explicit-443
+      url: https://registry.example:443/hub-proxy/
+      enabled: true
+`)
+		if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+			t.Fatalf("pull explicit-443 mirror failed: %v", err)
+		}
+		pulls = snapshot()
+		if len(pulls) != 1 || pulls[0].fromImage != "registry.example:443/hub-proxy/library/busybox" || pulls[0].auth.Username != "user-default" {
+			t.Fatalf("expected user-default matched on :443 mirror, got %#v", pulls)
+		}
+
+		// http 与 https 在同主机默认端口也不混用
+		reset()
+		loadPullCfg(t, `registry:
+  auth:
+    - host: https://registry.example
+      username: user-https
+      token: pass-https
+  mirrors:
+    - name: plain-http
+      url: http://registry.example/hub-proxy
+      enabled: true
+`)
+		if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+			t.Fatalf("pull http mirror with https-only default auth failed: %v", err)
+		}
+		pulls = snapshot()
+		if len(pulls) != 1 || !isAnonymousEngineAuth(pulls[0].auth) {
+			t.Fatalf("expected anonymous auth for http default-port mirror, got %#v", pulls)
+		}
+	})
+
+	// 4. mirror 拉取失败回退 Docker Hub 时，第一次用 mirror 账号，第二次回退使用 Docker Hub 自身认证配置
+	t.Run("mirror failure falls back to docker hub credentials", func(t *testing.T) {
+		loadPullCfg(t, `registry:
+  auth:
+    - host: https://registry.example:5000
+      username: mirror-user
+      token: mirror-secret
+    - host: registry-1.docker.io
+      username: hub-user
+      token: hub-secret
+  mirrors:
+    - name: m1
+      url: https://registry.example:5000
+      enabled: true
+`)
+		cli, snapshot, _ := setupFakeEngine(t, func(fromImage string) bool {
+			return strings.HasPrefix(fromImage, "registry.example:5000/")
+		})
+		if err := cli.ImagePullWithPlatform(ctx, "busybox:latest", platform, nil); err != nil {
+			t.Fatalf("expected fallback to docker hub to succeed, got %v", err)
+		}
+		pulls := snapshot()
+		if len(pulls) != 2 {
+			t.Fatalf("expected 2 pull attempts (mirror + hub fallback), got %#v", pulls)
+		}
+		if pulls[0].fromImage != "registry.example:5000/library/busybox" || pulls[0].auth.Username != "mirror-user" || pulls[0].auth.Password != "mirror-secret" {
+			t.Fatalf("first attempt mismatch: %#v", pulls[0])
+		}
+		if !strings.Contains(pulls[1].fromImage, "busybox") || strings.HasPrefix(pulls[1].fromImage, "registry.example:5000/") {
+			t.Fatalf("second attempt should target docker hub, got %#v", pulls[1])
+		}
+		if pulls[1].auth.Username != "hub-user" || pulls[1].auth.Password != "hub-secret" || pulls[1].auth.ServerAddress != "https://index.docker.io/v1/" {
+			t.Fatalf("second attempt expected hub credentials + ServerAddress, got %#v", pulls[1].auth)
+		}
+	})
+
+	// 5. 无 mirror 时直拉私有 HTTPS 仓库正常使用对应账号；双协议配置含匿名 HTTP 时直拉保持匿名
+	t.Run("no mirrors direct private https pull and direct dual-origin isolation", func(t *testing.T) {
+		loadPullCfg(t, `registry:
+  auth:
+    - host: https://priv.example:8443
+      username: priv-user
+      token: priv-secret
+    - host: http://dual.example:5000
+      username: ""
+      token: ""
+    - host: https://dual.example:5000
+      username: dual-https-user
+      token: dual-https-secret
+`)
+		cli, snapshot, reset := setupFakeEngine(t, nil)
+		if err := cli.ImagePullWithPlatform(ctx, "priv.example:8443/team/app:v1", platform, nil); err != nil {
+			t.Fatalf("direct private HTTPS pull failed: %v", err)
+		}
+		pulls := snapshot()
+		if len(pulls) != 1 || pulls[0].fromImage != "priv.example:8443/team/app" || pulls[0].tag != "v1" {
+			t.Fatalf("unexpected direct pull target: %#v", pulls)
+		}
+		if pulls[0].auth.Username != "priv-user" || pulls[0].auth.Password != "priv-secret" {
+			t.Fatalf("expected priv-user on direct private HTTPS pull, got %#v", pulls[0].auth)
+		}
+
+		reset()
+		if err := cli.ImagePullWithPlatform(ctx, "dual.example:5000/team/app:v2", platform, nil); err != nil {
+			t.Fatalf("direct dual-origin pull failed: %v", err)
+		}
+		pulls = snapshot()
+		if len(pulls) != 1 || !isAnonymousEngineAuth(pulls[0].auth) {
+			t.Fatalf("expected anonymous auth when explicit http:// entry clears/owns direct origin, got %#v", pulls)
+		}
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/distribution/reference"
@@ -61,22 +62,125 @@ func (c *Client) ImagePullWithPlatform(ctx context.Context, ref string, platform
 	return c.pullWithMirrorFallback(ctx, ref, platform, onProgress)
 }
 
-func canonicalRegistryHost(host string) string {
-	h := strings.ToLower(strings.TrimSpace(host))
-	h = strings.TrimPrefix(h, "https://")
-	h = strings.TrimPrefix(h, "http://")
-	if idx := strings.IndexByte(h, '/'); idx >= 0 {
-		h = h[:idx]
+type endpointOrigin struct {
+	scheme string
+	host   string
+	port   string
+}
+
+func effectiveEndpointPort(scheme, port string) string {
+	if port != "" {
+		return port
 	}
-	switch h {
-	case "docker.io", "dockerhub", "index.docker.io", "registry-1.docker.io":
-		return "docker.io"
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
 	default:
-		return h
+		return ""
 	}
 }
 
-// registryAuthForRef 根据镜像引用匹配全局配置中的仓库认证并编码为 X-Registry-Auth。
+func directCanonicalHubHostname(hostname string) string {
+	switch strings.ToLower(strings.TrimSpace(hostname)) {
+	case "docker.io", "dockerhub", "index.docker.io", "registry-1.docker.io":
+		return "docker.io"
+	default:
+		return strings.ToLower(strings.TrimSpace(hostname))
+	}
+}
+
+func parseAuthEndpointOrigin(rawHost string, canonicalizeHub bool) (endpointOrigin, bool) {
+	trimmed := strings.TrimSpace(rawHost)
+	if trimmed == "" {
+		return endpointOrigin{}, false
+	}
+	lower := strings.ToLower(trimmed)
+	scheme := "https"
+	rest := trimmed
+	if strings.HasPrefix(lower, "http://") {
+		scheme = "http"
+		rest = trimmed[len("http://"):]
+	} else if strings.HasPrefix(lower, "https://") {
+		scheme = "https"
+		rest = trimmed[len("https://"):]
+	} else if strings.Contains(trimmed, "://") {
+		return endpointOrigin{}, false
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return endpointOrigin{}, false
+	}
+	u, err := url.Parse(scheme + "://" + rest)
+	if err != nil || u == nil || u.User != nil || u.Hostname() == "" {
+		return endpointOrigin{}, false
+	}
+	host := strings.ToLower(u.Hostname())
+	port := effectiveEndpointPort(scheme, u.Port())
+	if port == "" {
+		return endpointOrigin{}, false
+	}
+	if canonicalizeHub && ((scheme == "https" && port == "443") || (scheme == "http" && port == "80")) {
+		host = directCanonicalHubHostname(host)
+	}
+	return endpointOrigin{
+		scheme: scheme,
+		host:   host,
+		port:   port,
+	}, true
+}
+
+func encodeRegistryAuth(auth config.RegistryAuth, isDockerHub bool) string {
+	serverAddr := strings.TrimSpace(auth.Host)
+	if isDockerHub {
+		serverAddr = "https://index.docker.io/v1/"
+	}
+	encoded, err := authconfig.Encode(registrytypes.AuthConfig{
+		Username:      auth.Username,
+		Password:      auth.Token,
+		ServerAddress: serverAddr,
+	})
+	if err != nil {
+		return ""
+	}
+	return encoded
+}
+
+// registryAuthForMirrorEndpoint 根据已启用 mirror 的协议、主机与有效端口匹配 X-Registry-Auth。
+func registryAuthForMirrorEndpoint(ep MirrorEndpoint) string {
+	cfg := config.Get()
+	if cfg == nil || len(cfg.Registry.Auth) == 0 {
+		return ""
+	}
+	epOrigin, ok := parseAuthEndpointOrigin(ep.BaseURL(), false)
+	if !ok {
+		return ""
+	}
+	if directCanonicalHubHostname(epOrigin.host) == "docker.io" || epOrigin.host == "auth.docker.io" {
+		return ""
+	}
+
+	var matched *config.RegistryAuth
+	for i := range cfg.Registry.Auth {
+		auth := cfg.Registry.Auth[i]
+		authOrigin, aok := parseAuthEndpointOrigin(auth.Host, false)
+		if !aok || authOrigin != epOrigin {
+			continue
+		}
+		if strings.TrimSpace(auth.Username) == "" && strings.TrimSpace(auth.Token) == "" {
+			matched = nil
+			continue
+		}
+		matched = &auth
+	}
+	if matched == nil {
+		return ""
+	}
+	return encodeRegistryAuth(*matched, false)
+}
+
+// registryAuthForRef 根据镜像引用的目标协议、主机与有效端口匹配直连仓库认证并编码为 X-Registry-Auth。
 func registryAuthForRef(ref string) string {
 	ref = strings.TrimSpace(ref)
 	cfg := config.Get()
@@ -84,35 +188,57 @@ func registryAuthForRef(ref string) string {
 		return ""
 	}
 
-	targetHost := ""
-	if named, err := reference.ParseNormalizedNamed(ref); err == nil {
-		targetHost = canonicalRegistryHost(reference.Domain(named))
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil {
+		return ""
 	}
-	if targetHost == "" {
+	domain := strings.TrimSpace(reference.Domain(named))
+	if domain == "" {
+		return ""
+	}
+	httpOrigin, okHTTP := parseAuthEndpointOrigin("http://"+domain, true)
+	httpsOrigin, okHTTPS := parseAuthEndpointOrigin("https://"+domain, true)
+	if !okHTTP || !okHTTPS {
 		return ""
 	}
 
-	for _, auth := range cfg.Registry.Auth {
-		if strings.TrimSpace(auth.Username) == "" && strings.TrimSpace(auth.Token) == "" {
+	explicitHTTP := false
+	var httpMatch, httpsMatch *config.RegistryAuth
+	for i := range cfg.Registry.Auth {
+		auth := cfg.Registry.Auth[i]
+		authOrigin, aok := parseAuthEndpointOrigin(auth.Host, true)
+		if !aok {
 			continue
 		}
-		if canonicalRegistryHost(auth.Host) != targetHost {
-			continue
-		}
-		serverAddr := strings.TrimSpace(auth.Host)
-		if targetHost == "docker.io" {
-			serverAddr = "https://index.docker.io/v1/"
-		}
-		encoded, err := authconfig.Encode(registrytypes.AuthConfig{
-			Username:      auth.Username,
-			Password:      auth.Token,
-			ServerAddress: serverAddr,
-		})
-		if err == nil {
-			return encoded
+		hasCred := strings.TrimSpace(auth.Username) != "" || strings.TrimSpace(auth.Token) != ""
+		switch authOrigin {
+		case httpOrigin:
+			explicitHTTP = true
+			if hasCred {
+				httpMatch = &auth
+			} else {
+				httpMatch = nil
+			}
+		case httpsOrigin:
+			if hasCred {
+				httpsMatch = &auth
+			} else {
+				httpsMatch = nil
+			}
 		}
 	}
-	return ""
+
+	var selected *config.RegistryAuth
+	if explicitHTTP {
+		selected = httpMatch
+	} else {
+		selected = httpsMatch
+	}
+	if selected == nil {
+		return ""
+	}
+	isDockerHub := !explicitHTTP && httpsOrigin.host == "docker.io" && httpsOrigin.port == "443"
+	return encodeRegistryAuth(*selected, isDockerHub)
 }
 
 func isDigestedImageRef(ref string) bool {
@@ -127,28 +253,30 @@ func isDigestedImageRef(ref string) bool {
 // pullWithMirrorFallback 核心拉取逻辑：mirror 顺序尝试 + 官方 fallback + 自动 retag。
 func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
 	ref = strings.TrimSpace(ref)
-	mirrors := EnabledMirrorHosts()
+	mirrors := EnabledMirrorEndpoints()
 	canUseMirror := IsDockerHubImage(ref) && !isDigestedImageRef(ref) && len(mirrors) > 0
 
 	if !canUseMirror {
-		return c.pullSingleAttempt(ctx, ref, platform, onProgress)
+		return c.pullSingleAttempt(ctx, ref, registryAuthForRef(ref), platform, onProgress)
 	}
 
 	var lastErr error
-	for _, host := range mirrors {
+	for _, ep := range mirrors {
+		host := ep.HostWithPrefix()
 		mirrorRef := RewriteRefToMirror(ref, host)
 		if mirrorRef == ref {
 			continue
 		}
+		mirrorAuth := registryAuthForMirrorEndpoint(ep)
 		logger.Logger.Info("尝试通过 mirror 拉取镜像",
 			zap.String("originalRef", ref),
-			zap.String("mirror", host),
+			zap.String("mirror", ep.BaseURL()),
 			zap.String("mirrorRef", mirrorRef))
 
-		if err := c.pullSingleAttempt(ctx, mirrorRef, platform, onProgress); err != nil {
+		if err := c.pullSingleAttempt(ctx, mirrorRef, mirrorAuth, platform, onProgress); err != nil {
 			lastErr = err
 			logger.Logger.Warn("mirror 拉取失败，尝试下一个",
-				zap.String("mirror", host),
+				zap.String("mirror", ep.BaseURL()),
 				zap.Error(err))
 			continue
 		}
@@ -192,14 +320,14 @@ func (c *Client) pullWithMirrorFallback(ctx context.Context, ref string, platfor
 	logger.Logger.Warn("所有 mirror 拉取失败，回退到官方 registry",
 		zap.String("ref", ref),
 		zap.NamedError("lastMirrorError", lastErr))
-	return c.pullSingleAttempt(ctx, ref, platform, onProgress)
+	return c.pullSingleAttempt(ctx, ref, registryAuthForRef(ref), platform, onProgress)
 }
 
 // pullSingleAttempt 执行单次 pull，并解析流中的 errorDetail。
-func (c *Client) pullSingleAttempt(ctx context.Context, ref string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
+func (c *Client) pullSingleAttempt(ctx context.Context, ref, registryAuth string, platform *ocispec.Platform, onProgress func(PullProgress)) error {
 	ref = strings.TrimSpace(ref)
 	opts := client.ImagePullOptions{
-		RegistryAuth: registryAuthForRef(ref),
+		RegistryAuth: registryAuth,
 	}
 	if platform != nil && platform.OS != "" && platform.Architecture != "" {
 		opts.Platforms = []ocispec.Platform{*platform}
