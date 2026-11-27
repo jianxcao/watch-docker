@@ -1168,7 +1168,7 @@ func resolveDraftEnvComposeFiles(projectPath, projectName string) ([]string, boo
 	}
 
 	sep, hasSepEnv := os.LookupEnv("COMPOSE_PATH_SEPARATOR")
-	if !hasSepEnv || sep == "" {
+	if !hasSepEnv {
 		sep = dotEnv["COMPOSE_PATH_SEPARATOR"]
 	}
 	if sep == "" {

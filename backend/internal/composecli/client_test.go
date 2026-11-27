@@ -1861,3 +1861,125 @@ func TestManagedCardAfterDraftDeployment(t *testing.T) {
 		t.Fatal("expected failure when directory has multiple scanned primary compose files")
 	}
 }
+
+func TestDraftComposePathSeparatorPrecedence(t *testing.T) {
+	clearDotEnvTestProcessVars(t)
+	ctx := context.Background()
+
+	tmpRoot := t.TempDir()
+	appDir := filepath.Join(tmpRoot, "apps")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAppDir, err := filepath.EvalSymlinks(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origEnv := conf.EnvCfg
+	testEnv := *origEnv
+	testEnv.APP_PATH = resolvedAppDir
+	conf.EnvCfg = &testEnv
+	t.Cleanup(func() { conf.EnvCfg = origEnv })
+
+	siteDir := filepath.Join(resolvedAppDir, "site")
+	if err := os.MkdirAll(siteDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composeFile := filepath.Join(siteDir, "compose.yaml")
+	prodFile := filepath.Join(siteDir, "prod.yaml")
+	envFile := filepath.Join(siteDir, ".env")
+
+	if err := os.WriteFile(composeFile, []byte("services:\n  web:\n    image: nginx:1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prodFile, []byte("services:\n  worker:\n    image: alpine:3.20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defaultSep := string(os.PathListSeparator)
+	dotEnvSep := ";"
+	if defaultSep == dotEnvSep {
+		dotEnvSep = ","
+	}
+	procSep := "|"
+
+	cli := &Client{
+		RuntimeProjectsLister: func(ctx context.Context) ([]ListOutput, error) {
+			return nil, nil
+		},
+	}
+
+	cases := []struct {
+		name           string
+		setProcSep     bool
+		procSep        string
+		composeFileVal string
+		wantErr        bool
+	}{
+		{
+			name:           "process empty overrides dotenv separator and uses OS default",
+			setProcSep:     true,
+			procSep:        "",
+			composeFileVal: "compose.yaml" + defaultSep + "prod.yaml",
+			wantErr:        false,
+		},
+		{
+			name:           "process unset falls back to dotenv separator",
+			setProcSep:     false,
+			composeFileVal: "compose.yaml" + dotEnvSep + "prod.yaml",
+			wantErr:        false,
+		},
+		{
+			name:           "process explicit non-empty overrides dotenv separator",
+			setProcSep:     true,
+			procSep:        procSep,
+			composeFileVal: "compose.yaml" + procSep + "prod.yaml",
+			wantErr:        false,
+		},
+		{
+			name:           "process empty uses OS default so dotenv-separated value fails as single missing file",
+			setProcSep:     true,
+			procSep:        "",
+			composeFileVal: "compose.yaml" + dotEnvSep + "prod.yaml",
+			wantErr:        true,
+		},
+	}
+
+	wantFiles := []string{composeFile, prodFile}
+	wantPrefix := []string{"-f", composeFile, "-f", prodFile}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setProcSep {
+				t.Setenv("COMPOSE_PATH_SEPARATOR", tc.procSep)
+			} else {
+				_ = os.Unsetenv("COMPOSE_PATH_SEPARATOR")
+			}
+			dotEnvContent := "COMPOSE_PATH_SEPARATOR=" + dotEnvSep + "\nCOMPOSE_FILE=" + tc.composeFileVal + "\n"
+			if err := os.WriteFile(envFile, []byte(dotEnvContent), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			plan, err := cli.ResolveManagedCardPlan(ctx, "site", composeFile)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got plan=%#v", tc.composeFileVal, plan)
+				}
+				if !strings.Contains(err.Error(), "不存在") || !strings.Contains(err.Error(), tc.composeFileVal) {
+					t.Fatalf("expected missing combined file error mentioning %q, got %v", tc.composeFileVal, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveManagedCardPlan failed: %v", err)
+			}
+			if !slices.Equal(plan.DeployFiles, wantFiles) {
+				t.Fatalf("DeployFiles = %#v, want %#v", plan.DeployFiles, wantFiles)
+			}
+			if gotPrefix := plan.ComposeArgsPrefix(); !slices.Equal(gotPrefix, wantPrefix) {
+				t.Fatalf("ComposeArgsPrefix() = %#v, want %#v", gotPrefix, wantPrefix)
+			}
+		})
+	}
+}
