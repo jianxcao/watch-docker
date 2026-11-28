@@ -215,7 +215,11 @@ const handleCreate = async () => {
       showErrorWithNewlines(message, response.msg || '容器创建失败')
       return
     }
-    message.success(response.msg || '容器创建成功')
+    const successMsg =
+      response.msg && response.msg.trim().toLowerCase() !== 'success'
+        ? response.msg
+        : '容器创建成功'
+    message.success(successMsg)
     await containerStore.fetchContainers(true, false)
     router.push(`/containers`)
   } catch (error: any) {

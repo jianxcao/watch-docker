@@ -1,10 +1,31 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildImageDownloadUrl, triggerBrowserDownload } from './download'
+import {
+  buildContainerExportUrl,
+  buildImageDownloadUrl,
+  triggerBrowserDownload,
+} from './download'
 
 describe('buildImageDownloadUrl', () => {
   it('encodes the complete image id and authentication token', () => {
     expect(buildImageDownloadUrl('sha256:abc/def', 'token with spaces&scope=all', 1234)).toBe(
       '/api/v1/images/sha256%3Aabc%2Fdef/download?token=token%20with%20spaces%26scope%3Dall&_t=1234',
+    )
+  })
+
+  it('omits token query parameter when authentication token is empty', () => {
+    expect(buildImageDownloadUrl('sha256:abc', '', 5678)).toBe(
+      '/api/v1/images/sha256%3Aabc/download?_t=5678',
+    )
+  })
+})
+
+describe('buildContainerExportUrl', () => {
+  it('encodes container id and optional token cleanly', () => {
+    expect(buildContainerExportUrl('ctr/123', 'tok=1&a=2', 42)).toBe(
+      '/api/v1/containers/ctr%2F123/export?token=tok%3D1%26a%3D2&_t=42',
+    )
+    expect(buildContainerExportUrl('ctr123', '', 42)).toBe(
+      '/api/v1/containers/ctr123/export?_t=42',
     )
   })
 })

@@ -325,19 +325,12 @@ export const useContainerStore = defineStore('container', () => {
   // 方法：导出容器
   const exportContainer = async (id: string): Promise<boolean> => {
     try {
-      const { getToken } = await import('@/common/axiosConfig')
+      const [{ getToken }, { buildContainerExportUrl, triggerBrowserDownload }] = await Promise.all([
+        import('@/common/axiosConfig'),
+        import('@/utils/download'),
+      ])
       const token = getToken()
-
-      const baseUrl = '/api/v1'
-      const tokenQuery = token ? `token=${encodeURIComponent(token)}&` : ''
-      const downloadUrl = `${baseUrl}/containers/${encodeURIComponent(id)}/export?${tokenQuery}_t=${Date.now()}`
-
-      const downloadWindow = window.open(downloadUrl, '_blank')
-
-      if (!downloadWindow) {
-        throw new Error('浏览器阻止了弹窗，请允许弹窗后重试')
-      }
-
+      triggerBrowserDownload(buildContainerExportUrl(id, token))
       return true
     } catch (error: any) {
       console.error('导出容器失败:', error)
